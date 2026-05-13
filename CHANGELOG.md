@@ -1,0 +1,136 @@
+# CardTrader Scanner Stack — Changelog
+
+Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
+Não está sob git — este CHANGELOG é o único registro de auditoria.
+
+## 2026-05-12 (noite) — Scanner v2.3 — Alinhamento Hub fee
+
+Auditoria pós v2.2 detectou que o scanner ainda calculava `real_*_margin_pct`
+sem aplicar Hub fee, enquanto o postprocess aplicava 6% via `live × 0.06`.
+Resultado: scanner stdout/XLSX bruto era ~6pp otimista, só o relatório
+consolidado refletia o custo real. Operator clarificou modelo:
+**custo real = preço do site × 1,06** (média operacional de Hub fee +
+marketplace fee + payment processing que aparecem em algumas listagens e
+em outras não).
+
+### Scanner (`cardtrader_scanner.py`)
+
+- **HUB_FEE_RATE = 0.06** promovido a constante (linha ~146-152)
+- **CLI `--hub-fee X`** (default 0.06; paridade com `postprocess --hub-fee`).
+  Auto-conversão `> 1.0` (`6` → `0.06`) como `--threshold` / `--min-net-margin`.
+- **`Scanner.__init__`** aceita `hub_fee_rate` parametrizado.
+- **`validate_per_blueprint`** linhas ~1037-1046:
+  ```python
+  hub_fee_brl = live_brl * self.hub_fee_rate
+  custo_real  = live_brl + hub_fee_brl
+  o.real_margin_pct      = (tcg_brl - custo_real) / tcg_brl
+  o.real_net_margin_pct  = (tcg_brl - custo_real - shipping) / tcg_brl
+  o.real_lucro_brl       = tcg_brl - custo_real - shipping
+  ```
+- **Stats sheet** do XLSX inclui `hub_fee_rate`.
+- **Log**: linha "Hub fee aplicado no recalc REAL: 6% (custo = site_price × 1.06)" emitida após o scan.
+
+### Impacto observado (scan 2026-05-12 21:28 v2.2 → re-run v2.3)
+
+| Carta | v2.2 (sem Hub) | v2.3 (com Hub 6%) | Lucro v2.2 | Lucro v2.3 |
+|---|---|---|---|---|
+| Dachsbun ex (scr 169) | 30.1% net REAL | 25.9% net REAL | R$114.80 | R$98.83 |
+| Milcery (scr 152, DMB) | 26.0% net REAL | 21.6% net REAL | R$20.66 | R$17.14 |
+
+Margens caem ~4-5pp em deals típicos. Alguns deals borderline 20-22% caem
+abaixo do `--min-net-margin 0.20` (esperado e desejado — eram falsos
+positivos da v2.2).
+
+### Modelo final unificado (scanner + postprocess)
+- `live_brl` = preço per-blueprint (página do site no idioma do operador)
+- `custo_real = live_brl × (1 + hub_fee)` (hub_fee = 0.06 default)
+- `frete` = 0 (Hub depot consolida); override via `--shipping-brl`
+- `lucro = tcg_market_brl - custo_real - frete`
+- `margem_revenue` = `lucro / tcg_market_brl` (scanner convention)
+- `margem_cost` = `lucro / custo_real` (postprocess convention — não confundir)
+
+## 2026-05-12 — Scanner v2.2 / Postprocess v1.4
+
+Sessão de auditoria completa: 9 bugs encontrados no scanner via revisão
+C/H/M (Critical/High/Medium), 9 bugs encontrados no postprocess via mesma
+metodologia. Modelo operacional unificado: consolidação no Hub depot,
+custo = preço CT × 1.06, frete não modelado.
+
+### Scanner (`cardtrader_scanner.py`)
+
+**Críticos**
+- **C1**: tier markup 30-45% reclassificado como `Alto markup` /
+  `VALIDATED_MARKUP`. Antes vinha como `Anômalo (+30%)` /
+  `PRICE_CHANGED` e era filtrado como erro de preço. Validação ao vivo
+  com Horsea TheDragonsVault confirmou tier legítimo. Linhas ~885-905.
+- **C2**: `clean_collector_number()` aplicado no fallback `bp.version`
+  no `_parse_listing`. Antes, quando `props.collector_number` e
+  `bp.collector_number` vazios, a string suja "Rare | 169/142" ia
+  direto pro pricing. Linha ~680.
+
+**Altos**
+- **H1**: `--threshold > 1.0` e `--min-net-margin > 1.0` auto-convertem
+  com warning. Resolve trap UX (`--threshold 25` interpretado como 2500%
+  filtro impossível, zerava scans silenciosamente). Linhas ~1090-1106.
+- **H2**: `market_price_usd()` agora aceita `foil=` e prioriza variante
+  correta no pokemontcg.io. Antes priority fixa `holofoil > normal > RH`
+  ignorava o foil flag do listing, gerando falso negativo em commons
+  reverse holo. Linhas ~437, 512, 569, 583, 769. Cache key inclui foil.
+
+**Médios**
+- **M1**: filtro de `validation_status` sempre roda quando
+  `validate_top > 0`, independente de `min_net_margin`. Antes, com
+  `min_net_margin = 0` deixava `STALE`, `API_ERROR`, `PRICE_CHANGED`
+  vazarem pro XLSX. Linhas ~1155-1183.
+- **M2**: opps sempre re-ordenados por `real_net_margin_pct` desc após
+  validação per-blueprint, não só quando `min_net_margin > 0`.
+- **M3**: `SHIPPING_EUR_HUB/PROFESSIONAL/PRIVATE` promovidas a
+  constantes top-level. Flag `--shipping-brl X` adicionada para override.
+  `_estimate_shipping_brl(units=N)` amortiza por unidades.
+- **M4**: `log.debug` + stat counter `skipped_exotic_currency` quando
+  listing vem em moeda não BRL/EUR/USD (GBP/JPY/etc). Antes silenciava.
+- **M5**: log de supranumerário quando `card.number > set.printedTotal`
+  no resultado pokemontcg.io. Sinaliza SIR/SAR/HR pra revisão manual
+  (padrão idêntico ao bug rarity="Comum" do scanner MYP).
+
+**Modelo de consolidação (Hub depot)**
+Confirmado por Matheus: cartas compradas acumulam no depósito CT na
+Europa, ~100 unidades, então consolidadas e enviadas pro Brasil em
+envio único. Frete daquele envio dilui per-card a ~R$0.30 → desprezível.
+
+Consequências no scanner:
+- `--shipping-brl` default = `0.0`
+- `_estimate_shipping_brl` retorna o override (0 default)
+- `_legacy_shipping_eur_estimate_unused` preservada como referência
+- XLSX column "Net Margin % REAL c/ frete" → **"Net Margin % REAL"**
+- TOP 5 console: sufixo " c/ frete (R$X)" só aparece quando override > 0
+- Header docstring inclui seção "Modelo operacional"
+
+### Postprocess (`cardtrader_postprocess.py`)
+
+- **P-C1**: `gross_margin` agora usa convenção de MARGEM (lucro/TCG),
+  não markup (lucro/CT). Antes filtros tipo `min_gross_margin: 0.30`
+  significavam "30% markup" (~23% margem real) e a coluna exibia
+  "Margem TCG %" com valor de markup → operador confundido.
+- **P-C2**: custo efetivo = `live_brl * (1 + hub_fee_rate)`. Default
+  6%. Frete não modelado (consolidação Hub depot — explicado acima).
+  Antes ignorava frete real (R$29/listing) sem dizer.
+- **P-H1**: `markup_tier` match usa substring (`"hub" in tier`) em vez
+  de exato. Antes scanner produzia `"Hub (+6%)"` mas postprocess
+  testava `== "hub"` → todo row caía no else.
+- **P-H2**: status `"price_changed"` reconhecido como anomalous.
+  Antes testava `"anomalo"` que scanner nunca produzia.
+- **P-M1**: `PRODUCTIVE_SETS` inclui `asc`, `meg`, `pfl` (sets 2026).
+
+### Sync vault ↔ Scripts
+
+Cópias de `cardtrader_postprocess.py` em vault e `C:\Users\mathe\Scripts\`
+sincronizadas (`diff -q` retorna idênticas). Antes divergentes em 13
+linhas (vault tinha fix v1.3 que Scripts não tinha).
+
+---
+
+## 2026-04-29 — Scanner v2.1 / Postprocess v1.3
+
+Histórico capturado em CLAUDE.md do vault e memórias de Claude. Não
+detalhado aqui — esta entrada é o ponto de partida do diff acima.

@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════════
+# CardTrader Scanner — Configuração
+# ═══════════════════════════════════════════════════════════════════
+# Este arquivo define QUAIS sets escanear por default.
+# Pode ser sobrescrito por CLI: --sets sv1 sv2 sv3
+#
+# Como descobrir códigos de set? Na primeira execução o scanner
+# lista TODAS as expansões e seus códigos no log. Use os códigos
+# dos sets que quer escanear periodicamente.
+# ═══════════════════════════════════════════════════════════════════
+
+# Sets Scarlet & Violet (era atual, mais líquida/volume)
+# Remova comentário dos que quer monitorar.
+sets:
+  - sv1      # Scarlet & Violet Base
+  - sv2      # Paldea Evolved
+  - sv3      # Obsidian Flames
+  - sv3pt5   # 151
+  - sv4      # Paradox Rift
+  - sv4pt5   # Paldean Fates
+  - sv5      # Temporal Forces
+  - sv6      # Twilight Masquerade
+  - sv6pt5   # Shrouded Fable
+  - sv7      # Stellar Crown
+  - sv8      # Surging Sparks
+  - sv8pt5   # Prismatic Evolutions
+  - sv9      # Journey Together
+  - sv10     # Destined Rivals
+  - zsv10pt5 # Black Bolt / White Flare
+
+# Filtros de seller (experimentais — comentar para desativar)
+# sellers:
+#   min_positive_feedback_pct: 95
+#   only_hub_shippers: false        # true = só sellers do hub central CT
+#   exclude_user_types: []          # ex: ["private"] se quiser só pro

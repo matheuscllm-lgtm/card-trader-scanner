@@ -1,0 +1,55 @@
+# Credentials — NEVER commit
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Build / cache
+cache.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Scanner outputs (data, not code)
+cardtrader_scan_*.xlsx
+cardtrader_core_*.xlsx
+cardtrader_hype_*.xlsx
+cardtrader_dead_*.xlsx
+cardtrader_relatorio_*.xlsx
+cardtrader_scanner.log
+scan_*.log
+*.log
+
+# MYP / merge tool outputs (sibling tools)
+merge_*.xlsx
+myp_scan_*.xlsx
+validated_opps.json
+graphify-out/
+debug_*.html
+
+# Firecrawl scrapes (validation cache)
+.firecrawl/
+
+# Office lock files
+.~lock.*
+
+# OS / sync artifacts
+.fuse_hidden*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
