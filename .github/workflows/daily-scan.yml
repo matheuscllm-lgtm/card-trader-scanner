@@ -1,0 +1,91 @@
+name: Daily CT Scan
+
+on:
+  schedule:
+    # Cron em UTC. 11:00 UTC = 08:00 America/Sao_Paulo (BRT, UTC-3).
+    # Se mudar pro horário de verão um dia, ajustar manualmente.
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+    inputs:
+      sets:
+        description: 'Sets a escanear (códigos CT separados por espaço)'
+        required: false
+        default: 'sfa scr par paf tef twm ssp dri blk jtg'
+      threshold:
+        description: 'Margem bruta mínima (fração, ex 0.30)'
+        required: false
+        default: '0.30'
+      min_net_margin:
+        description: 'Margem líquida REAL mínima após Hub fee (ex 0.20)'
+        required: false
+        default: '0.20'
+      validate_top:
+        description: 'Quantos candidatos validar per-blueprint'
+        required: false
+        default: '30'
+
+concurrency:
+  group: ct-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scanner
+        env:
+          CT_JWT: ${{ secrets.CT_JWT }}
+          POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          SETS="${{ github.event.inputs.sets || 'sfa scr par paf tef twm ssp dri blk jtg' }}"
+          THRESHOLD="${{ github.event.inputs.threshold || '0.30' }}"
+          MIN_NET="${{ github.event.inputs.min_net_margin || '0.20' }}"
+          VAL_TOP="${{ github.event.inputs.validate_top || '30' }}"
+          python cardtrader_scanner.py \
+            --sets $SETS \
+            --threshold $THRESHOLD \
+            --validate-top $VAL_TOP \
+            --min-net-margin $MIN_NET \
+            --output "cardtrader_scan_$(date +%Y%m%d_%H%M).xlsx"
+
+      - name: Run postprocess
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          XLSX=$(ls -t cardtrader_scan_*.xlsx 2>/dev/null | head -1)
+          if [ -z "$XLSX" ]; then
+            echo "Nenhum XLSX gerado pelo scanner — pulando postprocess"
+            exit 0
+          fi
+          python cardtrader_postprocess.py \
+            --core "$XLSX" --hype "$XLSX" --dead "$XLSX" \
+            --output "cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
+
+      - name: Upload scan outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-${{ github.run_id }}
+          path: |
+            cardtrader_scan_*.xlsx
+            cardtrader_relatorio_*.xlsx
+            cardtrader_scanner.log
+          retention-days: 30
+          if-no-files-found: warn
