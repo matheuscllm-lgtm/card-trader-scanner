@@ -53,6 +53,32 @@ frete  = 0                                ← modelo Hub depot consolida ~100 ca
 
 **Diferença vs MYP scanner:** MYP usa `(tcg − custo) / custo` (ROI sobre capital). CT usa `(tcg − custo) / tcg` (gross margin sobre receita). Margens não são diretamente comparáveis: CT 15% gross ↔ MYP 17.6% ROI; CT 30% gross ↔ MYP 42.9% ROI. Equivalência: `roi = gross / (1 − gross)`.
 
+## ⚠️ Vício conhecido da CT API (e como mitigamos)
+
+A CT API tem **2 endpoints que retornam preços DIFERENTES pra mesma carta**:
+
+| Endpoint | O que retorna | Pra que serve |
+|---|---|---|
+| `/marketplace/products?expansion_id=X` (per-expansion) | **Preço RAW do seller**, moeda original, **sem markup CT** | Scan rápido (1 chamada/set inteiro) |
+| `/marketplace/products?blueprint_id=X` (per-blueprint) | **Preço FINAL com markup embutido** (+6% Hub / +20% non-VAT), na moeda da conta | É o que o navegador mostra ao comprador |
+
+**Sintoma se ignorado:** scanner v1.6 (sem validação per-blueprint) reportava margens 5-20% otimistas. Em scan 2026-04-29: 21 oportunidades reportadas → **só 4 sobreviveram** pós-markup. Taxa de falso positivo: **76%**.
+
+**Markup tiers observados:**
+- **+6% (tier Hub / EU normal):** BlackFlameGreece, BTcards, CardsHive, -Retro-Empire-Gaming, UniverseTCG, The Dragoncard
+- **+20% (tier non-VAT export / extra-EU):** TheDragonsVault, A2Z TCG, Artkillary, Nostalgium, Fun Gs collections, Gabrielkatsaros95
+- **Sellers ausentes no per-blueprint:** alguns não shipam pro BR ou são filtrados server-side. Aparecem como STALE/unreachable.
+
+**Mitigação (v2.0+, integrada no scanner desde 2026-04):**
+1. Scan inicial via per-expansion → candidatos com margem bruta ≥ `--threshold`
+2. **Validação per-blueprint nos top-30** → pega `live_brl` real do checkout
+3. Recalc margem com `× 1.06` em cima do live_brl
+4. Filtro final `--min-net-margin`
+
+Função: `validate_per_blueprint()` em `cardtrader_scanner.py` linhas ~973-1080. Stats da sheet "Stats" do XLSX incluem `validated_real` vs `validated_markup` vs `stale`.
+
+**Por que ainda usar a API CT apesar disso:** alternativa seria scraping HTML de milhões de listings em milhares de sellers. Inviável + bloqueado por anti-bot. A API entrega JSON em segundos — o vício do markup é mitigado por chamar BOTH endpoints (per-expansion pra eficiência, per-blueprint pra validar top candidatos).
+
 ## Diferença vs Scanner MYP
 
 | Aspecto | MYP Scanner | CardTrader Scanner |
