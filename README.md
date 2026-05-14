@@ -20,6 +20,39 @@ Identificar oportunidades de arbitragem entre **CardTrader** (marketplace europe
 
 **Tese:** CardTrader agrega sellers da UE inteira (Itália, Espanha, França, Alemanha…), muitos com precificação desatualizada ou em recuperação cambial. Cartas valorizadas rapidamente no mercado US frequentemente levam semanas para reprecificar na UE → janela de arbitragem.
 
+## 📐 Fórmula canônica da margem (padrão único)
+
+**Decisão operacional 2026-05-12 (reafirmada 2026-05-14):** o cálculo de margem é simples e inequívoco. Sem variações condicionais, sem caso-a-caso por seller.
+
+```
+custo  = preço_da_página × 1.06          ← 6% Hub fee médio (constante)
+lucro  = TCG_market − custo
+margem = lucro ÷ TCG_market              ← divide por preço de venda (revenue basis)
+frete  = 0                                ← modelo Hub depot consolida ~100 cards
+```
+
+**Variáveis:**
+- **preço_da_página** = exatamente o que aparece na ficha do produto no CardTrader (validado per-blueprint, não per-expansion RAW). É o que o comprador paga no checkout, sem deduções.
+- **6% Hub fee** = constante assumida como média de fees variáveis CT (Hub fee + marketplace + payment processing). Alguns sellers cobram, outros não. Em vez de modelar caso a caso (instável), assume-se 6% flat.
+- **TCG_market** = preço Market do TCGPlayer (em USD, convertido pra BRL via câmbio Frankfurter do dia).
+- **frete = 0** porque o modelo operacional é consolidar ~100 cards no Hub depot CT antes do envio único pro Brasil; o frete dilui a ~R$0,30/card e é tratado como custo afundado fora deste cálculo.
+
+**Aplicação no código (paridade alinhada em v2.3):**
+- Constante: `HUB_FEE_RATE = 0.06` em `cardtrader_scanner.py`
+- Função: `validate_per_blueprint()` linhas ~1067-1071 — `custo_real = live_brl × 1.06`; `real_margin_pct = (tcg_brl − custo_real) / tcg_brl`
+- Override (raro, debug): `--hub-fee 0` desativa o ajuste; produz margens ~6pp otimistas vs realidade.
+- Postprocess: `cardtrader_postprocess.py` aplica o mesmo `× 1.06` antes da classificação BUY NOW/REJECT (BucketConfig).
+- GH Actions: workflow herda default `HUB_FEE_RATE = 0.06` sem precisar passar flag.
+
+**O que NÃO entra no cálculo:**
+- ❌ Fee CT específica por seller (assumida no 6% médio)
+- ❌ Frete CT→Brasil (modelo Hub depot, custo afundado)
+- ❌ Taxas eBay/Amazon de revenda (são da etapa de venda no TCGPlayer, não do scanner de compra)
+- ❌ Câmbio variável (já capturado em `usd_brl` do dia via Frankfurter)
+- ❌ Markup tier do seller (REAL/Hub+6%/non-VAT+20%) — esse é diagnóstico interno do scanner, não afeta a fórmula; serve só pra garantir que `preço_da_página` é o que o navegador mostra.
+
+**Diferença vs MYP scanner:** MYP usa `(tcg − custo) / custo` (ROI sobre capital). CT usa `(tcg − custo) / tcg` (gross margin sobre receita). Margens não são diretamente comparáveis: CT 15% gross ↔ MYP 17.6% ROI; CT 30% gross ↔ MYP 42.9% ROI. Equivalência: `roi = gross / (1 − gross)`.
+
 ## Diferença vs Scanner MYP
 
 | Aspecto | MYP Scanner | CardTrader Scanner |
