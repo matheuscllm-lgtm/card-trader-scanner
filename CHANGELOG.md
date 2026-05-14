@@ -1,7 +1,30 @@
 # CardTrader Scanner Stack — Changelog
 
 Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
-Não está sob git — este CHANGELOG é o único registro de auditoria.
+Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
+mantido como narrativa adicional além dos commits.
+
+## 2026-05-14 — Scanner v2.3.1 — Progress logging no pricing loop
+
+CT run no GH Actions (run 25838570927) ficou silenciosa por 24m53s
+processando `asc` (Ascended Heroes) após o filter step, sem nenhum log
+de progresso. Cancelada manualmente. Causa provável: pokemontcg.io tem
+cobertura ruim para sets muito recentes (asc é maio/2026), gerando
+muitas queries lentas/falhadas sem feedback.
+
+### Scanner
+
+- Loop de pricing (`Scanner.scan_expansion`, ~linha 920) agora emite
+  `INFO: Pricing progress: i/total listings consultados` a cada 50
+  listings + no fim. Permite detectar hangs em tempo real (cron + UI
+  do GH Actions ou tail do log local).
+- Sem mudança de comportamento ou performance — só observabilidade.
+
+### Pendência v2.4 (NÃO APLICADA AINDA — requer design)
+
+- Timeout per-set (kill após X min sem progresso)
+- Cap de 404s consecutivos do pokemontcg.io antes de bailout
+- Skip-list automática pra sets sem cobertura conhecida (asc, me*, etc)
 
 ## 2026-05-12 (noite) — Scanner v2.3 — Alinhamento Hub fee
 

@@ -917,7 +917,10 @@ class Scanner:
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, EN, não-graded, ≥${self.min_price_usd})")
 
         # Para cada listing filtrado, busca preço TCG e calcula margem
-        for l in best_by_uid.values():
+        total_listings = len(best_by_uid)
+        for i, l in enumerate(best_by_uid.values(), 1):
+            if i % 50 == 0 or i == total_listings:
+                log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
