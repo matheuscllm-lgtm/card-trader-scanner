@@ -64,3 +64,22 @@ Quando run `25898522951` completar:
 - **Run novo: `25900649576`** (dispatch 04:42 UTC). Estimativa: ~50min de execução + fila.
 - Pricing rate medido: 2-10 listings/s. 10 sets × ~280 listings = ~2800 listings total.
 - Sets já validados nesse escopo (run cancelled): sfa scr par paf tef. Pendentes no novo run: todos 10 do scratch.
+
+## Update 04:48 UTC — GH Actions quota exhausted, switched to LOCAL run
+
+- Runs `25900649576` + `25900778686` falharam imediatamente (3s) sem alocar runner. `runner_name: ""`. Diagnóstico: cota mensal GH Actions free tier (2000min em repo privado) bateu hoje. Detalhes em memória `gh_actions_quota_exhausted.md`.
+- **Reset esperado: 01/06/2026.** Cron disable é cosmético até lá; dispatch também falha.
+- **Mitigação aplicada: scan LOCAL** rodando agora.
+  - Comando: `.venv/Scripts/python.exe cardtrader_scanner.py --sets sfa scr par paf tef twm ssp dri blk jtg --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --output cardtrader_scan_local_<TS>.xlsx`
+  - `.env` carregado (CT_JWT + POKEMONTCG_API_KEY)
+  - Started 01:47:55 BRT (04:47:55 UTC) — 2 Python processes vivos
+  - Log: `scan_local_20260515_0147.log`
+  - ETA: ~50min (mesma rate observada GH Actions)
+- Poll bg `ba1zfg3o3` monitorando exit dos processos Python.
+
+**Se contexto colapsar agora, retomar com:**
+1. `cd "Meu Drive/OBSIDIAN/01 - Projetos/TCG & Exportação/CardTrader Scanner"`
+2. `tail -30 scan_local_*.log` — ver onde parou
+3. Se processo Python morreu sem XLSX → checar log pra causa
+4. Se XLSX existe → rodar postprocess: `.venv/Scripts/python.exe cardtrader_postprocess.py --core <xlsx> --hype <xlsx> --dead <xlsx> --output cardtrader_relatorio_2026-05-15.xlsx`
+5. Auditoria conforme checklist na seção "Próximo passo claro"
