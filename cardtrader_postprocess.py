@@ -31,13 +31,19 @@ LIMITACOES (TODO futuro - requer integracoes externas):
 - Meta competitivo dinamico (snapshot expira ~jul/26)
 """
 from __future__ import annotations
-import argparse, sys
+import argparse, re, sys
 from dataclasses import dataclass, field
 from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+# Trainer Gallery: card numbers prefixados TG (ex TG01, TG12). pokemontcg.io
+# inflavel infla preco 5-10x nessas cartas (historico documentado em memoria
+# `cardtrader_trainer_gallery_bug`). Flag pra MANUAL REVIEW antes de qualquer
+# outro check, mesmo se margem aparenta passar — quase certamente FP.
+TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
 
 @dataclass
 class BucketConfig:
@@ -275,8 +281,15 @@ def classify_row(row, bucket):
     lang = str(row.get("language","")).lower()
     variant = str(row.get("variant","")).lower()
     markup_tier = str(row.get("markup_tier","")).lower()
+    card_num = str(row.get("card_number","")).strip()
     if pd.isna(gm) or pd.isna(nm) or pd.isna(profit):
         return ("REJECT","insufficient_data","Dados ausentes",0)
+    # TG## auto-filter: Trainer Gallery cards inflam pokemontcg.io reference
+    # 5-10x. Antes era responsabilidade do operador peneirar manual; agora
+    # vira MANUAL REVIEW automatico com nota explicita.
+    if card_num and TRAINER_GALLERY_RE.match(card_num):
+        return ("MANUAL REVIEW","trainer_gallery_potential_fp",
+                f"TG## ({card_num}): pokemontcg.io pode inflar 5-10x. Validar per-blueprint no CT antes.",35)
     if gm < bucket.min_gross_margin:
         return ("REJECT","low_gross_margin",f"gross={gm:.1%} < {bucket.min_gross_margin:.0%}",5)
     if nm < bucket.min_net_margin:
