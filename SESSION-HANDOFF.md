@@ -56,3 +56,11 @@ Quando run `25898522951` completar:
 ## Background tasks vivos
 
 - Bash background `be5489xm7`: poll de status do run `25898522951` até `completed`. Output em `tasks/be5489xm7.output`.
+
+## Update 04:42 UTC — first run cancelled, re-dispatched
+
+- Run `25898522951` cancelado em 30:09 pelo `timeout-minutes: 30` (subdimensionado p/ escopo de 10 sets). 5/10 sets processados.
+- Fix aplicado: `timeout-minutes` 30 → 60 (commit `2a9a413`). Calibração documentada em memória `ct_scan_timeout_calibration.md`.
+- **Run novo: `25900649576`** (dispatch 04:42 UTC). Estimativa: ~50min de execução + fila.
+- Pricing rate medido: 2-10 listings/s. 10 sets × ~280 listings = ~2800 listings total.
+- Sets já validados nesse escopo (run cancelled): sfa scr par paf tef. Pendentes no novo run: todos 10 do scratch.
