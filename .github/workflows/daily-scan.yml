@@ -28,6 +28,10 @@ concurrency:
   group: ct-scan
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -88,4 +92,13 @@ jobs:
             cardtrader_relatorio_*.xlsx
             cardtrader_scanner.log
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Daily CT scan failed: run ${{ github.run_id }}" \
+            --body "Scheduled scan failed at $(date -u +'%Y-%m-%d %H:%M UTC'). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
