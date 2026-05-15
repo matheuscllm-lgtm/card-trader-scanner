@@ -65,6 +65,48 @@ Quando run `25898522951` completar:
 - Pricing rate medido: 2-10 listings/s. 10 sets × ~280 listings = ~2800 listings total.
 - Sets já validados nesse escopo (run cancelled): sfa scr par paf tef. Pendentes no novo run: todos 10 do scratch.
 
+## ENTREGA — 2026-05-15 (CT scan completo, audit OK)
+
+**XLSX gerados (no scanner dir = sync Drive automático):**
+- Raw: `cardtrader_scan_local_20260515_0147.xlsx` (7.6 KB)
+- Relatório formatado: `cardtrader_relatorio_2026-05-15.xlsx` (21 KB) — ABRIR ESTE
+- Log execução: `scan_local_20260515_0147.log`
+
+**Resultado: 1 BUY NOW no CORE**
+
+| Carta | Set | Nº | Idioma | CT R$ | TCG R$ | Margem Líq | Lucro Líq | Seller | Tier |
+|---|---|---|---|---|---|---|---|---|---|
+| Milcery | Stellar Crown (scr) | 152 | EN | 58.31 | 88.05 | 29.8% | **R$26.24** | DMB Direct | non-VAT (+20%) |
+
+Link CT: https://www.cardtrader.com/cards/299015
+
+**Outros 4 candidatos rejeitados (low_gross_margin no CORE) — pra contexto, não pra ação:**
+- Milcery (scr 152) outro seller — gross 28.1% < 30% threshold
+- Charmander (paf 109) — gross 24.6% < 30%
+- Plusle (par 193) — gross 24.3% < 30%
+- Okidogi (sfa 74) — gross 20.2% < 30%
+
+HYPE e DEAD vazios (0 candidatos sequer passaram primeiro filtro).
+
+**Auditoria checklist:**
+- ✅ TG## leak: 0 rows
+- ✅ Margens >100% (SIR/HR misread): 0 rows
+- ✅ Hub fee paridade 6%: math confirmada — 58.31×1.06=61.81; 88.05−61.81=26.24=Lucro Líq
+- ✅ Cobertura 10 sets canônicos OK (sfa scr par paf tef twm ssp dri blk jtg)
+- ✅ Estrutura XLSX completa (10 sheets incl. Decisao Rapida + Exec Summary + Final Action List)
+
+**Comparação vs baseline 13/05:**
+- 13/05: 2 BUY NOW (Aipom par + Drampa tef = R$92 lucro total)
+- 15/05: 1 BUY NOW (Milcery scr = R$26 lucro)
+- Mercado mais magro hoje — comportamento esperado, scanner saudável.
+
+**Próximo daily scan:**
+- Cron GH Actions desabilitado + quota free tier exhausted até 01/06/2026
+- Pra rodar manual local: ver bloco "Próximo passo claro" no início deste handoff
+- Decisão pendente longer-term: upgrade GH plan / repo public / self-hosted runner
+
+---
+
 ## Update 04:48 UTC — GH Actions quota exhausted, switched to LOCAL run
 
 - Runs `25900649576` + `25900778686` falharam imediatamente (3s) sem alocar runner. `runner_name: ""`. Diagnóstico: cota mensal GH Actions free tier (2000min em repo privado) bateu hoje. Detalhes em memória `gh_actions_quota_exhausted.md`.
