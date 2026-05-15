@@ -4,6 +4,64 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-05-15 — Postprocess v1.5 + ops (timeout, quota, hyperlinks, TG##)
+
+Noite de hardening. Operador trabalhando overnight + Excel MCP adicionado
+ao toolkit pra audit XLSX sem cair em `venv+pandas` toda vez.
+
+### Postprocess (v1.4 → v1.5)
+
+- **Card Name hyperlink** (commit `62fba69`): coluna `Carta` em todas as
+  sheets que listam cartas (Decisao Rapida, CORE/HYPE/DEAD buckets, Top
+  Approved, Final Action List) vira hyperlink azul sublinhado apontando
+  pra URL CardTrader. Operador-pedido: 1-clique abre produto em vez de
+  copy/paste. 32 hyperlinks gerados no relatorio 2026-05-15.
+- **TG## auto-filter** (commit `09929f5`): cartas Trainer Gallery (`^TG\d+`
+  no card_number) viram automaticamente `MANUAL REVIEW` com motivo
+  `trainer_gallery_potential_fp` antes de qualquer check de margem.
+  pokemontcg.io reference price infla 5-10x nessas cartas (~76% historic
+  FP rate). Antes era operator-side, agora automatizado.
+- **Bonus alias fixes**: `COLUMN_ALIASES['card_number']` ganhou `Nº`/`No.`
+  e `COLUMN_ALIASES['link_ct']` ganhou `Link CardTrader`/`CardTrader URL`/
+  `CardTrader Link`. Antes scanner emitia esses nomes display e o
+  postprocess não normalizava → Decisao Rapida mostrava `No`/`Link CT`
+  vazios em algumas sheets.
+
+### Ops / infra
+
+- **Cron daily-scan desabilitado** temporariamente (commit `67b3cb9`):
+  cron `0 11 * * *` (08:00 BRT) comentado in-file. Instrucoes de reativação
+  preservadas no YAML.
+- **Workflow `timeout-minutes` 30 → 60** (commit `2a9a413`): run
+  25898522951 cancelado em 30:09 com 5/10 sets processados (~1480 listings
+  priced). Pricing rate medido 2-10 listings/s; total realista 45-55min.
+  Calibração documentada em memória `ct_scan_timeout_calibration`.
+- **GH Actions quota exhausted** (memória `gh_actions_quota_exhausted`):
+  free tier 2000min/mês bateu 2026-05-15. Cross-scanner — bloqueia também
+  `myp-arbitrage-scanner` (mesma conta `matheuscllm-lgtm`). Reset
+  esperado 2026-06-01. Mitigação tática: scans LOCAIS via venv com
+  `.env`. Decisões longer-term pendentes (upgrade plan / public repo /
+  self-hosted runner).
+
+### Delivery
+
+Scan local 01:47-02:16 BRT (29min, 10 sets canônicos):
+- 1 BUY NOW (CORE): **Milcery scr 152** EN, seller DMB Direct (non-VAT
+  +20%), CT R$58.31 → TCG R$88.05, margem líq 29.8%, lucro R$26.24
+- Audit 100%: TG## 0 leaks, margens >100% 0, Hub fee 6% paridade
+  confirmada, 10 sets cobertos
+- `cardtrader_relatorio_2026-05-15.xlsx` com hyperlinks (commit `992895e`
+  delivery + re-gerado pós-hyperlink em `62fba69`)
+
+### Pendência v2.4 ainda aberta
+
+- Per-set timeout dinâmico (kill após X min sem progresso em UM set)
+- Auto skip-list pra sets sem cobertura pokemontcg.io conhecida
+- Cap de 404s consecutivos antes de bailout
+
+Timeout global 60min é workaround tático, não solução estrutural — um
+único set hanging ainda pode queimar todo o budget.
+
 ## 2026-05-14 — Scanner v2.3.1 — Progress logging no pricing loop
 
 CT run no GH Actions (run 25838570927) ficou silenciosa por 24m53s

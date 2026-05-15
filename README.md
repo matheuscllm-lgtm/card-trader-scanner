@@ -185,6 +185,28 @@ python cardtrader_scanner.py --include-graded
 python cardtrader_scanner.py -o scan_semanal_abril.xlsx
 ```
 
+**Rodar scan canônico local (10-set rotina diária) quando GH Actions
+indisponível** (ex: cota free tier exhausted, ver memória
+`gh_actions_quota_exhausted`):
+
+```bash
+# Bash (Git Bash / WSL / Linux):
+set -a; source .env; set +a
+export PYTHONIOENCODING=utf-8
+.venv/Scripts/python.exe cardtrader_scanner.py \
+  --sets sfa scr par paf tef twm ssp dri blk jtg \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --output "cardtrader_scan_local_$(date +%Y%m%d_%H%M).xlsx"
+
+# Depois postprocess:
+.venv/Scripts/python.exe cardtrader_postprocess.py \
+  --core <scan.xlsx> --hype <scan.xlsx> --dead <scan.xlsx> \
+  --output cardtrader_relatorio_$(date +%Y-%m-%d).xlsx
+```
+
+ETA local ≈ 30min (medido 2026-05-15 em 10-set scope canônico, ~2800
+listings priced a 2-10/s).
+
 ### 4. Saída
 
 - **Planilha `.xlsx`** — duas abas:
@@ -235,6 +257,12 @@ python cardtrader_scanner.py -o scan_semanal_abril.xlsx
 | Link CardTrader | URL direta da carta | 1 click e tá lá |
 
 ## Agendamento (cron/Task Scheduler)
+
+> **Status 2026-05-15:** cron GH Actions `daily-scan.yml` está **desabilitado**
+> temporariamente (cota free tier 2000min/mês exhausted; reset 01/06).
+> Reativar descomentando `schedule:` no YAML quando cota voltar OU resolver
+> via upgrade plano / repo público / self-hosted runner. Detalhes em memória
+> `gh_actions_quota_exhausted`. Scans ad-hoc rodam LOCAL via venv com `.env`.
 
 **Recomendação:** rodar 2x/dia, manhã e tarde. CardTrader refresca com frequência, mas 2x/dia pega as melhores janelas antes dos concorrentes.
 
