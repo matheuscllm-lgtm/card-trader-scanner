@@ -65,6 +65,38 @@ Quando run `25898522951` completar:
 - Pricing rate medido: 2-10 listings/s. 10 sets × ~280 listings = ~2800 listings total.
 - Sets já validados nesse escopo (run cancelled): sfa scr par paf tef. Pendentes no novo run: todos 10 do scratch.
 
+## OVERNIGHT — 2026-05-15 → 2026-05-16 — 4 features shipped
+
+Sessão noturna (operator overnight). 4 tasks completas, 4 commits + entregas:
+
+**Commit `62fba69` — XLSX Card Name hyperlink (operator request)**
+- Coluna `Carta` em todas sheets vira hyperlink azul → URL CardTrader
+- 32 hyperlinks no relatório 2026-05-15
+- Bonus: alias fixes `Nº`/`Link CardTrader` (preenchia colunas que vinham vazias)
+- Memória: `feedback_xlsx_card_name_hyperlink` (operator-requested)
+
+**Commit `09929f5` — TG## auto-filter no postprocess**
+- Cartas Trainer Gallery (`^TG\d+` em card_number) viram automaticamente `MANUAL REVIEW` com motivo `trainer_gallery_potential_fp` antes de checar margem
+- ~76% FP historic eliminado automatic
+- Memória atualizada: `cardtrader_trainer_gallery_bug` (era pendência v1.5, agora resolvida)
+
+**Commit `0815c1c` — CHANGELOG + README polish**
+- CHANGELOG section "2026-05-15 — Postprocess v1.5 + ops" consolidando noite
+- README banner em "Agendamento" sinalizando cron desabilitado + receita local
+
+**Commit `233087f` — Scanner v2.4 (per-set timeout + auto skip-list)**
+- Fix ESTRUTURAL pro hang `asc`/mega-evo: wall-clock timeout per-set no pricing loop
+- `--per-set-timeout MIN` (default 8min). Excedido → aborta + persiste em `scanner_skip_list.json` com motivo + UTC timestamp
+- `--ignore-skip-list` força retry; `--clear-skip-list` reseta
+- Stats: `expansions_skipped_by_list` + `expansions_timed_out`
+- 5/5 unit tests + 4 smoke paths validados (trigger real, runtime skip, force-retry, clear)
+- Pendência v2.4 anteriormente aberta na memória → fechada
+- Memória: `ct_scan_timeout_calibration` atualizada com resolução
+
+**Excel MCP adicionado** (não-CT mas útil): `@negokaz/excel-mcp-server` no `~/.claude.json` user-scope. Tools `mcp__excel__*` disponíveis a partir da próxima sessão.
+
+---
+
 ## ENTREGA — 2026-05-15 (CT scan completo, audit OK)
 
 **XLSX gerados (no scanner dir = sync Drive automático):**
