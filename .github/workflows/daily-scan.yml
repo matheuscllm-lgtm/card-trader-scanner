@@ -1,10 +1,12 @@
 name: Daily CT Scan
 
 on:
-  schedule:
-    # Cron em UTC. 11:00 UTC = 08:00 America/Sao_Paulo (BRT, UTC-3).
-    # Se mudar pro horário de verão um dia, ajustar manualmente.
-    - cron: '0 11 * * *'
+  # SCHEDULE TEMPORARIAMENTE DESABILITADO (2026-05-15 operador).
+  # Pra reativar cron diário 08:00 BRT, descomentar as 4 linhas abaixo:
+  # schedule:
+  #   # Cron em UTC. 11:00 UTC = 08:00 America/Sao_Paulo (BRT, UTC-3).
+  #   # Se mudar pro horário de verão um dia, ajustar manualmente.
+  #   - cron: '0 11 * * *'
   workflow_dispatch:
     inputs:
       sets:
