@@ -36,6 +36,10 @@ validated_opps.json
 graphify-out/
 debug_*.html
 
+# v2.4 operational state — local skip-list (sets que estouraram timeout).
+# NOT committed: cada máquina pode ter cobertura/conexão diferente.
+scanner_skip_list.json
+
 # Firecrawl scrapes (validation cache)
 .firecrawl/
 

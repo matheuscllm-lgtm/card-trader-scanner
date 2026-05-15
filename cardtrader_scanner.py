@@ -166,6 +166,14 @@ CACHE_DB = SCRIPT_DIR / "cache.db"
 ENV_FILE = SCRIPT_DIR / ".env"
 CONFIG_FILE = SCRIPT_DIR / "config.yaml"
 
+# v2.4: per-set timeout + auto skip-list.
+# Run 25898522951 (2026-05-15) cancelou em 30:09 com 5/10 sets processados
+# pq o timeout-minutes do GH Actions matou o job, mas o problema mais antigo
+# (run 25838570927 de 2026-05-14) foi um set unico travado 24m53s sem progresso.
+# Solucao: wall-clock timeout per-set + persistir sets travados em skip-list.
+SKIP_LIST_FILE = SCRIPT_DIR / "scanner_skip_list.json"
+DEFAULT_PER_SET_TIMEOUT_MIN = 8  # conservador: pior caso medido foi 7min/set
+
 # TTL do cache. Blueprints praticamente não mudam (cartas impressas uma vez).
 # Preços mudam diário → refresh.
 BLUEPRINT_TTL = timedelta(days=30)
@@ -709,13 +717,52 @@ PROVIDERS = {
 #   6. Calcular margem bruta e líquida (default frete=0 modelo consolidação Hub)
 #   7. Dedup: mantém só melhor oferta por (carta + condição)
 # ══════════════════════════════════════════════════════════════════════
+# --- v2.4 skip-list helpers (module-level) ---
+
+def load_skip_list() -> dict:
+    """Le scanner_skip_list.json. Retorna dict com chaves 'skipped' (list[str])
+    e 'updated_at'/'reasons'. Vazio se arquivo nao existe."""
+    if not SKIP_LIST_FILE.exists():
+        return {"skipped": [], "reasons": {}, "updated_at": None}
+    try:
+        return json.loads(SKIP_LIST_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning(f"Skip-list inválida ({SKIP_LIST_FILE}): {e}. Tratando como vazia.")
+        return {"skipped": [], "reasons": {}, "updated_at": None}
+
+
+def add_to_skip_list(exp_code: str, reason: str) -> None:
+    """Adiciona um exp_code à skip-list com motivo + timestamp. Idempotente."""
+    data = load_skip_list()
+    skipped = set(data.get("skipped", []))
+    skipped.add(exp_code)
+    reasons = data.get("reasons") or {}
+    reasons[exp_code] = reason
+    payload = {
+        "skipped": sorted(skipped),
+        "reasons": reasons,
+        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    SKIP_LIST_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.warning(f"  Adicionado à skip-list: {exp_code} (motivo: {reason})")
+
+
+def clear_skip_list() -> None:
+    """Apaga skip-list (no proximo scan todos os sets sao retentados)."""
+    if SKIP_LIST_FILE.exists():
+        SKIP_LIST_FILE.unlink()
+        log.info(f"Skip-list apagada: {SKIP_LIST_FILE.name}")
+
+
 class Scanner:
     def __init__(self, ct: CardTraderClient, pricing: PricingProvider, cache: Cache,
                  threshold: float = MARGIN_THRESHOLD,
                  min_price_usd: float = MIN_PRICE_USD,
                  exclude_graded: bool = EXCLUDE_GRADED,
                  shipping_brl_override: float = 0.0,
-                 hub_fee_rate: float = HUB_FEE_RATE):
+                 hub_fee_rate: float = HUB_FEE_RATE,
+                 per_set_timeout_s: float = DEFAULT_PER_SET_TIMEOUT_MIN * 60,
+                 ignore_skip_list: bool = False):
         self.ct = ct
         self.pricing = pricing
         self.cache = cache
@@ -731,6 +778,10 @@ class Scanner:
         # Default 0.06 (paridade com cardtrader_postprocess.py). Override via
         # --hub-fee X pra recalibrar quando taxas CT mudarem.
         self.hub_fee_rate = hub_fee_rate
+        # v2.4 (2026-05-15): per-set wall-clock timeout (segundos). Default 8min.
+        # Quando excedido, scan_expansion aborta + adiciona o set à skip-list.
+        self.per_set_timeout_s = per_set_timeout_s
+        self.ignore_skip_list = ignore_skip_list
         self.usd_brl = get_usd_to_brl(cache)
         self.eur_brl = get_eur_to_brl(cache)
         self.stats = {
@@ -740,6 +791,8 @@ class Scanner:
             "tcg_price_found": 0,
             "opportunities_found": 0,
             "skipped_exotic_currency": 0,  # M4 fix: contador de listings em moedas exóticas (GBP/JPY/etc)
+            "expansions_skipped_by_list": 0,  # v2.4: sets pulados via skip-list
+            "expansions_timed_out": 0,        # v2.4: sets que estouraram per_set_timeout
         }
 
     def _parse_listing(self, raw: dict, bp_index: dict) -> Optional[Listing]:
@@ -886,6 +939,8 @@ class Scanner:
         exp_code = expansion.get("code", "")
         exp_name = expansion.get("name", "")
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
+        # v2.4: marca início pra wall-clock timeout no pricing loop
+        set_start = time.monotonic()
 
         # Carrega blueprints da expansão (indexa para O(1) lookup)
         blueprints = self.ct.list_blueprints(exp_id)
@@ -919,6 +974,17 @@ class Scanner:
         # Para cada listing filtrado, busca preço TCG e calcula margem
         total_listings = len(best_by_uid)
         for i, l in enumerate(best_by_uid.values(), 1):
+            # v2.4: wall-clock timeout check antes de cada call de pricing
+            if self.per_set_timeout_s and (time.monotonic() - set_start) > self.per_set_timeout_s:
+                elapsed = time.monotonic() - set_start
+                log.error(
+                    f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}): {elapsed/60:.1f}min "
+                    f"> {self.per_set_timeout_s/60:.1f}min limite. Abortando após "
+                    f"{i-1}/{total_listings} listings priced."
+                )
+                self.stats["expansions_timed_out"] += 1
+                add_to_skip_list(exp_code, f"per_set_timeout_{int(self.per_set_timeout_s)}s_at_{i-1}_of_{total_listings}")
+                return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
             try:
@@ -960,7 +1026,21 @@ class Scanner:
 
     def scan(self, expansions: list[dict]) -> list[Opportunity]:
         opps: list[Opportunity] = []
+        # v2.4: carrega skip-list (sets que estouraram timeout em runs anteriores)
+        skip_data = load_skip_list() if not self.ignore_skip_list else {"skipped": [], "reasons": {}}
+        skip_set = set(skip_data.get("skipped", []))
+        if skip_set:
+            log.info(
+                f"Skip-list ativa ({SKIP_LIST_FILE.name}): {len(skip_set)} sets serão pulados "
+                f"({', '.join(sorted(skip_set))}). Use --ignore-skip-list pra forçar."
+            )
         for exp in expansions:
+            exp_code = exp.get("code", "")
+            if exp_code in skip_set:
+                self.stats["expansions_skipped_by_list"] += 1
+                reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
+                log.warning(f"⏭️  Pulando {exp.get('name')} ({exp_code}) — skip-list (motivo: {reason})")
+                continue
             try:
                 opps.extend(self.scan_expansion(exp))
             except requests.HTTPError as e:
@@ -1254,6 +1334,15 @@ def parse_args():
                          "payment processing) aplicada no recalc REAL. Default "
                          f"{int(HUB_FEE_RATE*100)}%%. Paridade com cardtrader_postprocess.py. "
                          "Custo real = live_brl x (1 + hub_fee)."))
+    # v2.4: per-set timeout + skip-list controls
+    p.add_argument("--per-set-timeout", type=float, default=DEFAULT_PER_SET_TIMEOUT_MIN,
+                   help=(f"v2.4: wall-clock timeout per set (minutos). Default "
+                         f"{DEFAULT_PER_SET_TIMEOUT_MIN}. Quando excedido durante pricing loop, "
+                         f"set é abortado e adicionado à skip-list. 0 = desativado."))
+    p.add_argument("--ignore-skip-list", action="store_true",
+                   help="v2.4: ignora scanner_skip_list.json (retenta sets que travaram em runs anteriores).")
+    p.add_argument("--clear-skip-list", action="store_true",
+                   help="v2.4: apaga scanner_skip_list.json antes de rodar (reset total).")
     return p.parse_args()
 
 
@@ -1334,6 +1423,11 @@ def main():
         expansions = expansions[: args.max_expansions]
     log.info(f"Scan em {len(expansions)} expansões")
 
+    # v2.4: gerencia skip-list antes de criar o Scanner
+    if args.clear_skip_list:
+        clear_skip_list()
+    per_set_timeout_s = args.per_set_timeout * 60 if args.per_set_timeout and args.per_set_timeout > 0 else 0
+
     # Scanner
     scanner = Scanner(
         ct=ct,
@@ -1344,6 +1438,8 @@ def main():
         exclude_graded=not args.include_graded,
         shipping_brl_override=args.shipping_brl,
         hub_fee_rate=args.hub_fee,
+        per_set_timeout_s=per_set_timeout_s,
+        ignore_skip_list=args.ignore_skip_list,
     )
 
     t0 = time.time()
