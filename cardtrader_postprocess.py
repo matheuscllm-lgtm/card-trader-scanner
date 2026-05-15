@@ -55,7 +55,7 @@ BUCKETS: dict[str, BucketConfig] = {
 
 COLUMN_ALIASES: dict[str, list[str]] = {
     "card_name": ["card_name","name","card","Card","Name","Card Name","Carta"],
-    "card_number": ["card_number","number","Number","Card Number","card_no","No","Numero"],
+    "card_number": ["card_number","number","Number","Card Number","card_no","No","Numero","Nº","No."],
     "set_code": ["set_code","set","Set","expansion","Expansion","set_id"],
     "rarity": ["rarity","Rarity","Raridade"],
     "variant": ["variant","Variant","version","Version","foil","Foil","Variante"],
@@ -73,7 +73,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "gross_margin_real": ["gross_margin_real","Margem REAL","Margem % REAL"],
     "net_margin_real": ["net_margin_real","Net REAL","Net Margin % REAL","Net Margin % REAL c/ frete"],
     "profit_brl_real": ["profit_brl_real","Lucro REAL","Lucro R$ REAL"],
-    "link_ct": ["link_ct","Link CT","Link","URL CT","ct_url","cardtrader_url"],
+    "link_ct": ["link_ct","Link CT","Link","URL CT","ct_url","cardtrader_url","Link CardTrader","CardTrader URL","CardTrader Link"],
     "link_tcg": ["link_tcg","URL TCGPlayer","TCG URL","tcg_url","tcgplayer_url"],
     "blueprint_id": ["blueprint_id","Blueprint ID","blueprint","bp_id"],
     "quantity": ["quantity","Quantity","qty","estoque","Estoque"],
@@ -432,6 +432,23 @@ def build_quick_decision(buckets_data):
     quick["Link CT"] = all_buy[link_col].values if link_col else ""
     return quick
 
+HYPERLINK_FONT = Font(color="0563C1", underline="single")
+
+def _apply_card_hyperlinks(ws, df):
+    """Linka coluna Carta -> URL em Link CT (mesma linha) como hyperlink azul sublinhado.
+    Sheets sem 'Carta' OU sem 'Link CT' sao no-op."""
+    cols = list(df.columns)
+    if "Carta" not in cols or "Link CT" not in cols:
+        return
+    carta_idx = cols.index("Carta") + 1
+    link_idx = cols.index("Link CT") + 1
+    for ri in range(2, len(df) + 2):
+        url = ws.cell(row=ri, column=link_idx).value
+        if isinstance(url, str) and url.startswith("http"):
+            carta_cell = ws.cell(row=ri, column=carta_idx)
+            carta_cell.hyperlink = url
+            carta_cell.font = HYPERLINK_FONT
+
 def style_sheet(ws, df, action_col=None, long_term_col=None):
     for ci in range(1, len(df.columns)+1):
         cell = ws.cell(row=1, column=ci)
@@ -459,6 +476,7 @@ def style_sheet(ws, df, action_col=None, long_term_col=None):
             vals = [str(col_data.iloc[i]) for i in range(min(50, len(col_data)))]
         ml = max([len(str(cn))] + [len(v) for v in vals]) if vals else len(str(cn))
         ws.column_dimensions[get_column_letter(ci)].width = min(ml+2, 50)
+    _apply_card_hyperlinks(ws, df)
 
 def write_sheet(wb, name, df, action_col=None, lt_col=None):
     ws = wb.create_sheet(name)
