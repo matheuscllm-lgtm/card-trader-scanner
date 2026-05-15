@@ -37,7 +37,10 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped 30→60 em 2026-05-15: run 25898522951 atingiu 30min com 5/10 sets
+    # processados (~1480 listings) e foi cancelado pelo timeout antes de
+    # iniciar blk/jtg/twm/ssp/dri. Estimativa total p/ 10 sets: ~50min.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
