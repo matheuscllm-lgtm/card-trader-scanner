@@ -7,7 +7,7 @@
 
 ## Estado atual
 
-- **Repo:** `matheuscllm-lgtm/card-trader-scanner` `main` @ `b4584a8` — working tree limpo
+- **Repo:** `matheuscllm-lgtm/card-trader-scanner` `main` @ `2d41595` — working tree limpo
 - **Scanner:** **v2.4** (per-set timeout + auto skip-list) — `cardtrader_scanner.py`
 - **Postprocess:** **v1.5** (hyperlinks + TG## auto-filter + alias fixes) — `cardtrader_postprocess.py`
 - **Hub fee paridade:** scanner ↔ postprocess intacta (6%)
@@ -66,9 +66,10 @@ Link: https://www.cardtrader.com/cards/299015 (hyperlink ativo no XLSX). HYPE/DE
 - `cardtrader_trainer_gallery_bug` — TG## filtro implementado
 - `feedback_xlsx_card_name_hyperlink` — hyperlinks aplicados
 
-## Commits desta sessão (11)
+## Commits desta sessão (12)
 
 ```
+2d41595 docs: rewrite SESSION-HANDOFF.md — retomada-first layout
 b4584a8 docs: SESSION-HANDOFF overnight summary
 233087f feat(scanner v2.4): per-set timeout + auto skip-list
 0815c1c docs: CHANGELOG + README polish
