@@ -4,6 +4,60 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-05-16 — Release v2.0 (postprocess simplificado + scanner v2.5)
+
+Decisão arquitetural do operador 2026-05-16: "objetivo CT é cartas mais
+baratas que TCG nos padrões desejados, remover heurísticas subjetivas,
+adicionar análise mecânica de compra".
+
+### Postprocess v1.5 → v2.0
+
+- **REMOVIDO:** bucket CORE/HYPE/DEAD, fundamental subjetivo (iconicidade/
+  meta/chase tier hardcoded), long_term tier, coluna `Acao` derivada
+- **ADICIONADO:** Chase Tier objetivo (TOP/MID/MODEST/BULK) baseado em
+  rarity oficial PokemonTCG; Fundamental Score (0-100) derivado só de
+  métricas objetivas (chase + net_margin + lucro + validation); Decisão
+  mecânica (COMPRA/REVISAR/NÃO) + Porque (1 linha)
+- **REDUZIDO:** 10 sheets → 3 (Deals, All Listings, Summary)
+
+Thresholds default (CLI-tuneável):
+- COMPRA: net ≥25% AND lucro ≥R$50 AND chase ≥MID AND validation OK AND NOT TG##
+- NÃO: chase BULK OR net <20% OR STALE OR TG##
+- REVISAR: zona cinza
+
+Respeita `feedback_no_purchase_decisions`: Decisão é regra reproduzível,
+não opinião Claude. Operador define thresholds via CLI.
+
+Math preservada (`ct_margin_formula`): custo = preço × 1.06, frete = 0.
+
+Arquivos:
+- `cardtrader_postprocess.py` agora é v2.0 (era v1.5)
+- `cardtrader_postprocess_legacy_v1.5.py` preserva v1.5 pra rollback
+
+### Scanner v2.4 → v2.5
+
+- **ADICIONADO:** coluna `Rarity` no XLSX raw, persistida de
+  `bp.fixed_properties.pokemon_rarity` (schema descoberto 2026-05-16
+  via inspect — NÃO está no campo raiz `rarity`)
+- Permite postprocess calcular Chase Tier preciso (TOP/MID/MODEST/BULK)
+  em vez de cair em proxies frágeis (markup tier, supranumerary, TG##)
+
+### Workflows
+
+`daily-scan.yml` e `weekly-scan.yml` atualizados:
+- CLI antes: `--core $XLSX --hype $XLSX --dead $XLSX --output ...`
+- CLI agora: `--input $XLSX --output ...` (uma chamada só)
+
+### Sequência operacional 6-decisões definida
+
+Roadmap pra maximizar discovery:
+1. ✅ Consolidar v2 como production (este commit)
+2. Weekly scan completo LOCAL overnight (~5-6h) — pendente
+3. Triagem manual + calibrar thresholds
+4. Liquidez gate (firecrawl eBay sold count)
+5. Daily refinado com 15-20 sets calibrados do weekly
+6. Cross-MYP integration (`merge_myp_ct.py` automático)
+
 ## 2026-05-15 — Postprocess v1.5 + ops (timeout, quota, hyperlinks, TG##)
 
 Noite de hardening. Operador trabalhando overnight + Excel MCP adicionado
