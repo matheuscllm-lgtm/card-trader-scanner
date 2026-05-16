@@ -1,455 +1,213 @@
-"""CardTrader Postprocess v1.4 — math corrigida + Hub fee homogeneo + sets atualizados.
+"""CardTrader Postprocess v2.0 — núcleo simplificado (operador 2026-05-16).
 
-Mudancas v1.4 (2026-05-12, auditoria pos-fixes do scanner):
-- P-C1 fix: gross_margin agora usa convencao de MARGEM (lucro/TCG), nao markup
-  (lucro/CT). Era bug semantico — output exibia "Margem TCG %" mas calculava markup.
-- P-C2 fix: custo final = preco CT * 1.06 (Hub fee 6% da CardTrader, default).
-  FRETE NAO ENTRA NA MATH — modelo operacional real do Matheus: cartas compradas
-  ficam no deposito Hub da CT na Europa, acumulam ~100 unidades, e so entao
-  sao enviadas pro Brasil em consolidacao unica. O frete daquele envio dilui
-  entre todas as cartas (R$0.30-0.50/carta) e fica negligenciavel per-listing.
-  Logo: preco final pago = preco CT * 1.06, sem deducao de frete.
-- P-H1 fix: markup_tier match agora usa substring (in) em vez de exato (==).
-  Antes: scanner produzia "hub (+6%)" mas postprocess buscava "hub" exato → falhava.
-- P-H2 fix: status anomalous agora reconhece "price_changed" (string real do scanner).
-- P-M1 fix: PRODUCTIVE_SETS agora inclui asc, meg, pfl (sets recentes 2026).
-- IMPORTANTE: bucket thresholds (0.30/0.35/0.40) sao NOMINAIS — com fix P-C1, agora
-  representam true margin (mais strict que antes que era markup). Retunar se
-  output ficar magro demais. Em 29/04 (v1.3) com markup 30% passavam ~5 deals;
-  com margem 30% v1.4 a barra é ~43% markup equivalente.
+Mudancas vs v1.5:
+- REMOVE bucket CORE/HYPE/DEAD classification
+- REMOVE fundamental_analysis original (iconicidade/chase/meta heuristicas subjetivas)
+- REMOVE long_term tier
+- REMOVE coluna "Acao" (substituida por Decisao mecanica)
+- ADICIONA Chase Tier (TOP/MID/MODEST/BULK) baseado em rarity oficial PokemonTCG
+- ADICIONA Fundamental Score (0-100) derivado de metricas OBJETIVAS (chase + margin + lucro + validation)
+- ADICIONA Decisao (COMPRA/REVISAR/NAO) via regra MECANICA (nao opiniao Claude)
+- ADICIONA Porque (1 linha factual)
+- REDUZ de 10 sheets pra 3 (Deals, All Listings, Summary)
+- MANTEM: Hub fee 6% paridade, TG## auto-filter, hyperlinks, alias fixes
+- MANTEM: ct_margin_formula (sem shipping; custo = preco_pagina × 1.06)
 
-Mudancas v1.3 (2026-04-29 noite, feedback Elizandra):
-- Iconicidade em 3 tiers: S (mass appeal +25), A (collectors +15), B (regional +8)
-- Raridade chase em 3 niveis: top (SAR/SIR/IR +25), mid (ALT/FA/TG +15), modest (holo +5)
-- Snapshot meta competitivo (+5 pra Pokemon meta atual)
-- Sets categorizados: anniversary +20, productive +5, maturing 0, dead -15
-- Coluna 'Notas Fund.' detalha quais fatores contribuiram
+Decisao mecanica (thresholds configuraveis via CLI):
+  COMPRA:  net_margin >= 25% AND lucro_liq >= R$50 AND chase_tier in {TOP, MID}
+           AND validation_status in {VALIDATED_REAL, VALIDATED_MARKUP}
+           AND NOT trainer_gallery_potential_fp
+  NAO:     chase_tier == BULK OR net_margin < 20% OR validation_status == STALE
+           OR trainer_gallery_potential_fp
+  REVISAR: else (zona cinza — margem 20-25% OU chase MODEST com margem alta)
 
-LIMITACOES (TODO futuro - requer integracoes externas):
-- Pop report (PSA 10) - escassez certificada
-- Historico de preco TCGPlayer market history
-- Meta competitivo dinamico (snapshot expira ~jul/26)
+Memorias relevantes respeitadas:
+  - ct_margin_formula: frete=0 (Hub depot consolida ~100 cards), custo = preco × 1.06
+  - feedback_no_purchase_decisions: Decisao e REGRA mecanica, nao opiniao Claude
+  - cardtrader_trainer_gallery_bug: TG## auto-filter mantido
 """
 from __future__ import annotations
 import argparse, re, sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-# Trainer Gallery: card numbers prefixados TG (ex TG01, TG12). pokemontcg.io
-# inflavel infla preco 5-10x nessas cartas (historico documentado em memoria
-# `cardtrader_trainer_gallery_bug`). Flag pra MANUAL REVIEW antes de qualquer
-# outro check, mesmo se margem aparenta passar — quase certamente FP.
+# ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
 
-@dataclass
-class BucketConfig:
-    name: str; label: str
-    min_gross_margin: float; min_net_margin: float; min_profit_brl: float
-    sets_expected: list[str] = field(default_factory=list)
-
-BUCKETS: dict[str, BucketConfig] = {
-    "core": BucketConfig("core", "CORE / PRODUCTIVE", 0.30, 0.20, 25.0,
-                          ["sfa","scr","ssp","dri","blk","jtg","twm","tef"]),
-    "hype": BucketConfig("hype", "HYPE / NEW SET", 0.35, 0.25, 40.0, ["pre","ascended-heroes"]),
-    "dead": BucketConfig("dead", "DEAD MARKET / REVALIDATION", 0.40, 0.30, 50.0,
-                          ["crz","lorg","sit","fst","evs","brs","astr","pal","par"]),
+# ─── Chase Tier classification ────────────────────────────────────────────────
+# Hierarquia objetiva baseada em PokemonTCG official rarities. Substring-aware
+# (case-insensitive) pra tolerar variacoes "Special Illustration Rare" vs "SIR".
+CHASE_TIER_PATTERNS = {
+    "TOP": [
+        "special illustration rare", "sir", "illustration rare",
+        "special art rare", "sar", "hyper rare", "ultra hyper rare",
+        "secret rare", "rara secreta",
+    ],
+    "MID": [
+        "full art", "alt art", "alternate art", "alternative art",
+        "rainbow rare", "gold rare", "trainer gallery", "double rare",
+        "rara hiper", "ultra rare",
+    ],
+    "MODEST": [
+        "holo rare", "reverse holo", "reverse foil", "promo",
+        "rare holo",
+    ],
+    "BULK": [
+        "common", "comum", "uncommon", "incomum",
+    ],
 }
 
-COLUMN_ALIASES: dict[str, list[str]] = {
+def classify_chase_tier(rarity: str | None, card_number: str | None = None,
+                         markup_tier: str | None = None) -> str:
+    """Classifica chase tier baseado em rarity. Fallback para proxies se rarity
+    indisponivel (XLSX raw pre v2.5 do scanner nao persiste rarity)."""
+    if rarity:
+        r = str(rarity).lower().strip()
+        for tier, patterns in CHASE_TIER_PATTERNS.items():
+            if any(p in r for p in patterns):
+                return tier
+        # Rarity present but unmapped → default MODEST (conservative)
+        return "MODEST"
+
+    # ── Fallback: proxies quando rarity nao foi capturada pelo scanner ──
+    num = str(card_number or "").strip()
+    # TG## = Trainer Gallery → MID (mas tb gera flag separado abaixo)
+    if TRAINER_GALLERY_RE.match(num):
+        return "MID"
+    # Supranumerary (numero > total set) é sinal de SIR/SAR — TOP
+    if "/" in num:
+        try:
+            n, total = num.split("/")[:2]
+            if int("".join(c for c in n if c.isdigit())) > int("".join(c for c in total if c.isdigit())):
+                return "TOP"
+        except (ValueError, IndexError):
+            pass
+    # Markup tier non-VAT (+20%) frequentemente sinaliza cards top
+    # (sellers profissionais cobrando margem em high-value items)
+    mt = str(markup_tier or "").lower()
+    if "non-vat" in mt or "+20%" in mt:
+        return "MID"
+    # Default sem evidencia: MODEST (conservador — nao penaliza muito,
+    # mas tb nao aprova compra automatic)
+    return "MODEST"
+
+# ─── Decisao mecanica + Porque ────────────────────────────────────────────────
+@dataclass
+class DecisionConfig:
+    min_net_margin: float = 0.25        # 25% net margin pra COMPRA
+    min_lucro_liq: float = 50.0          # R$50 lucro minimo pra COMPRA
+    revisar_min_net: float = 0.20        # 20-25% → REVISAR
+    revisar_chase_modest_min_net: float = 0.30  # MODEST com >=30% → REVISAR
+
+def classify_decision(row, cfg: DecisionConfig):
+    """Aplica regra mecanica. Retorna (decisao, porque)."""
+    chase = row.get("chase_tier", "MODEST")
+    nm = row.get("net_margin", 0)
+    profit = row.get("lucro_liq", 0)
+    val = str(row.get("validation_status", "")).upper()
+    is_tg = bool(row.get("trainer_gallery_potential_fp", False))
+
+    if pd.isna(nm) or pd.isna(profit):
+        return "NAO", "Dados insuficientes (margem/lucro ausentes)"
+
+    # NAO (rejeitos definitivos)
+    if is_tg:
+        return "NAO", "TG## potencial FP (pokemontcg.io infla 5-10x)"
+    if val in ("STALE",):
+        return "NAO", "Validation STALE — preço inseguro"
+    if chase == "BULK":
+        return "NAO", f"Chase BULK + net {nm:.0%} (bulk sem liquidez mesmo barato)"
+    if nm < cfg.revisar_min_net:
+        return "NAO", f"Net margin {nm:.0%} < {cfg.revisar_min_net:.0%} (abaixo do piso)"
+
+    # REVISAR (zona cinza)
+    if nm < cfg.min_net_margin:
+        return "REVISAR", f"Net {nm:.0%} entre {cfg.revisar_min_net:.0%}-{cfg.min_net_margin:.0%} (borderline)"
+    if profit < cfg.min_lucro_liq:
+        return "REVISAR", f"Net {nm:.0%} OK mas lucro R${profit:.0f} < R${cfg.min_lucro_liq:.0f}"
+    if chase == "MODEST":
+        if nm >= cfg.revisar_chase_modest_min_net:
+            return "REVISAR", f"MODEST + net alta {nm:.0%} (vale checar liquidez do set)"
+        return "NAO", f"MODEST + net {nm:.0%} (precisa >={cfg.revisar_chase_modest_min_net:.0%} pra MODEST)"
+    if val == "MARKUP_TIER_ANOMALOUS" or val == "ANOMALOUS_MARKUP":
+        return "REVISAR", f"Markup anomalo (>45%); chase {chase} + net {nm:.0%}"
+    if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
+        return "REVISAR", f"Validation {val or 'ausente'}; chase {chase} + net {nm:.0%}"
+
+    # COMPRA
+    return "COMPRA", f"Chase {chase} + net {nm:.0%} + lucro R${profit:.0f}"
+
+# ─── Fundamental Score objetivo (0-100) ──────────────────────────────────────
+def fundamental_score(row) -> int:
+    """Score derivado de 4 metricas objetivas (operador-pedido em 2026-05-16).
+    Nao usa heuristicas subjetivas (iconicidade, meta competitivo, etc)."""
+    score = 0
+    # Chase tier (peso 40)
+    chase_pts = {"TOP": 40, "MID": 25, "MODEST": 10, "BULK": 0}
+    score += chase_pts.get(row.get("chase_tier", "MODEST"), 0)
+    # Net margin (peso 20)
+    nm = row.get("net_margin", 0)
+    if nm >= 0.40: score += 20
+    elif nm >= 0.30: score += 15
+    elif nm >= 0.25: score += 10
+    elif nm >= 0.20: score += 5
+    # Lucro absoluto (peso 25)
+    p = row.get("lucro_liq", 0)
+    if p >= 200: score += 25
+    elif p >= 100: score += 18
+    elif p >= 50: score += 12
+    elif p >= 25: score += 6
+    # Validation status (peso 15)
+    val = str(row.get("validation_status", "")).upper()
+    if val == "VALIDATED_REAL": score += 15
+    elif val == "VALIDATED_MARKUP": score += 10
+    elif val == "ANOMALOUS_MARKUP": score += 3
+    return min(score, 100)
+
+# ─── Column aliases (preserva v1.5 fixes) ────────────────────────────────────
+COLUMN_ALIASES = {
     "card_name": ["card_name","name","card","Card","Name","Card Name","Carta"],
     "card_number": ["card_number","number","Number","Card Number","card_no","No","Numero","Nº","No."],
     "set_code": ["set_code","set","Set","expansion","Expansion","set_id"],
     "rarity": ["rarity","Rarity","Raridade"],
     "variant": ["variant","Variant","version","Version","foil","Foil","Variante"],
-    "condition": ["condition","Condition","cond","Cond","Condicao"],
+    "condition": ["condition","Condition","cond","Cond","Condicao","Condição"],
     "language": ["language","Language","lang","Lang","Idioma"],
     "seller": ["seller","Seller","seller_name"],
-    "seller_country": ["seller_country","country","Country"],
-    "scan_brl": ["scan_brl","Scan R$","Scan BRL","scan_price_brl","Scan R$ (raw)"],
-    "live_brl": ["live_brl","LIVE R$","Live BRL","live_price_brl","LIVE R$ (real)"],
+    "live_brl": ["live_brl","LIVE R$","LIVE R$ (real)","live_price_brl"],
     "markup_pct": ["markup_pct","Markup %","markup_percent","markup"],
     "markup_tier": ["markup_tier","Markup Tier","tier"],
     "validation_status": ["validation_status","Validation Status","valid_status","status"],
-    "reference_price_brl": ["reference_price_brl","Reference R$","tcg_price_brl",
-                            "TCG R$","TCG Market (BRL)","TCG Market BRL"],
-    "gross_margin_real": ["gross_margin_real","Margem REAL","Margem % REAL"],
-    "net_margin_real": ["net_margin_real","Net REAL","Net Margin % REAL","Net Margin % REAL c/ frete"],
-    "profit_brl_real": ["profit_brl_real","Lucro REAL","Lucro R$ REAL"],
-    "link_ct": ["link_ct","Link CT","Link","URL CT","ct_url","cardtrader_url","Link CardTrader","CardTrader URL","CardTrader Link"],
-    "link_tcg": ["link_tcg","URL TCGPlayer","TCG URL","tcg_url","tcgplayer_url"],
-    "blueprint_id": ["blueprint_id","Blueprint ID","blueprint","bp_id"],
-    "quantity": ["quantity","Quantity","qty","estoque","Estoque"],
+    "reference_price_brl": ["reference_price_brl","TCG Market (BRL)","TCG R$","TCG Market (R$)"],
+    "net_margin": ["net_margin","Net Margin % REAL","Net Margin %","Net REAL"],
+    "lucro_liq": ["lucro_liq","Lucro R$ REAL","Lucro REAL","Lucro Liq (R$)","Net Profit (R$)"],
+    "link_ct": ["link_ct","Link CT","Link CardTrader","CardTrader URL","CardTrader Link","Link"],
+    "quantity": ["quantity","Quantity","qty","estoque","Qtd"],
 }
 
-def detect_column(df, logical_name):
-    aliases = COLUMN_ALIASES.get(logical_name, [logical_name])
+def detect_column(df, logical):
+    aliases = COLUMN_ALIASES.get(logical, [logical])
     cols_lower = {c.lower().strip(): c for c in df.columns}
-    for alias in aliases:
-        if alias in df.columns: return alias
-        if alias.lower() in cols_lower: return cols_lower[alias.lower()]
+    for a in aliases:
+        if a in df.columns: return a
+        if a.lower() in cols_lower: return cols_lower[a.lower()]
     return None
 
-def normalize_columns(df, source_label):
-    rename_map = {}
-    missing = []
-    critical = ["card_name","live_brl","reference_price_brl"]
-    for logical in COLUMN_ALIASES.keys():
+def normalize_columns(df):
+    rename = {}
+    for logical in COLUMN_ALIASES:
         actual = detect_column(df, logical)
-        if actual: rename_map[actual] = logical
-        elif logical in critical: missing.append(logical)
-    if missing:
-        print(f"[WARN] [{source_label}] Colunas criticas ausentes: {missing}")
-        if "live_brl" in missing:
-            scan_col = detect_column(df, "scan_brl")
-            if scan_col:
-                print(f"       Fallback: '{scan_col}' como live_brl")
-                rename_map[scan_col] = "live_brl"
-                missing.remove("live_brl")
-    if "live_brl" in missing or "reference_price_brl" in missing:
-        raise ValueError(f"[{source_label}] Colunas criticas ausentes: {missing}")
-    return df.rename(columns=rename_map)
+        if actual: rename[actual] = logical
+    return df.rename(columns=rename)
 
-def apply_hub_fee(df, hub_fee_rate):
-    """Recalcula margens com Hub fee homogeneo (default 6%) sobre live_brl.
-
-    Modelo operacional (2026-05-12, confirmado por Matheus):
-    O comprador NAO paga frete per-listing. As cartas adquiridas ficam no
-    deposito do Hub CardTrader na Europa, acumulam ~100 unidades, e so
-    entao sao consolidadas e enviadas pro Brasil num unico envio. O frete
-    desse envio (~R$30-50 total) se dilui entre as 100+ cartas, dando
-    R$0.30-0.50 por carta — desprezivel. Portanto:
-
-        custo final por carta = preco CT * 1.06  (Hub fee da CardTrader)
-
-    Sem deducao de frete. Sem variabilidade FX EUR. Math simples e
-    operacionalmente exata para o fluxo de consolidacao.
-
-    v1.4 fix (2026-05-12):
-    - P-C1: gross_margin / net_margin_after_hub agora usam convencao de
-      MARGEM (lucro / TCG), nao markup (lucro / CT). Alinhado com scanner.
-    - P-C2: custo final = live_brl * (1 + hub_fee_rate). Frete nao modelado
-      (justificativa acima).
-    """
-    df = df.copy()
-    df["live_brl"] = pd.to_numeric(df["live_brl"], errors="coerce")
-    df["reference_price_brl"] = pd.to_numeric(df["reference_price_brl"], errors="coerce")
-    df["hub_fee_brl"] = df["live_brl"] * hub_fee_rate
-    df["effective_cost_brl"] = df["live_brl"] + df["hub_fee_brl"]
-    df["gross_profit_brl"] = df["reference_price_brl"] - df["live_brl"]
-    df["net_profit_after_hub_brl"] = df["reference_price_brl"] - df["effective_cost_brl"]
-    # P-C1 fix: convencao de margem (divisor = TCG = receita), nao markup (CT = custo)
-    df["gross_margin"] = df["gross_profit_brl"] / df["reference_price_brl"]
-    df["net_margin_after_hub"] = df["net_profit_after_hub_brl"] / df["reference_price_brl"]
-    df["hub_fee_impact_pct"] = (df["hub_fee_brl"] / df["live_brl"]) * 100
-    return df
-
-# ---- Analise Fundamentalista v1.3 (3 tiers iconicidade + meta + raridade granular) -----
-
-# Snapshot do meta competitivo - atualizar a cada ~3 meses
-META_SNAPSHOT_DATE = "2026-04-29"
-
-# Tier S: mass appeal global (forte hold)
-ICONIC_S_TIER = {
-    "charizard","pikachu","mewtwo","mew","rayquaza","lugia","ho-oh",
-    "eevee","vaporeon","jolteon","flareon","espeon","umbreon","leafeon","glaceon","sylveon",
-}
-# Tier A: forte demanda colecionadores
-ICONIC_A_TIER = {
-    "gengar","lucario","garchomp","dragonite","greninja","snorlax","tyranitar",
-    "metagross","blastoise","venusaur","gardevoir","gyarados","scizor","absol",
-    "lapras","arcanine","alakazam","machamp","ninetales","houndoom","milotic",
-    "zoroark","sceptile","blaziken","swampert",
-}
-# Tier B: regional/situacional
-ICONIC_B_TIER = {
-    "magikarp","decidueye","incineroar","primarina","salamence","aggron",
-    "ampharos","lopunny","mimikyu","celebi","jirachi","manaphy","shaymin",
-    "darkrai","cresselia","keldeo","meloetta","genesect","diancie","hoopa",
-    "volcanion","marshadow","zeraora","zacian","zamazenta","calyrex",
-}
-
-# Snapshot meta competitivo (validade ~3m)
-META_RELEVANT = {
-    "charizard","gardevoir","roaring moon","iron hands","miraidon","lugia",
-    "giratina","raging bolt","arceus","palkia","dragapult","gholdengo",
-    "iron crown","walking wake",
-}
-
-# Top chase: raridades mais escassas/valiosas
-TOP_CHASE_PATTERNS = [
-    "sar","sir","iri","gar","illustration rare","gold star",
-    "secret rare alt","rainbow rare","crown rare","cr",
-]
-# Mid chase: chase decente, mais comum que top
-MID_CHASE_PATTERNS = [
-    "alt","alternate","full art","fa","hyper rare","ur","ultra rare",
-    "trainer gallery","tg","amazing rare","ar",
-    "super rare","sr",  # SR = chase em sets modernos (ex SR/EX/V em scr/sfa)
-    "double rare","ex","vmax","vstar","v-union","radiant rare",
-]
-# Modest: foil basico
-MODEST_PATTERNS = ["holo rare","reverse holo","reverse foil","holofoil"]
-
-# Sets por categoria (atualizar conforme novos sets saem)
-# P-M1 fix (2026-05-12): asc, meg, pfl adicionados a PRODUCTIVE_SETS (sets
-# recentes 2026, dentro da janela 6-12m).
-ANNIVERSARY_SETS = {"mew","cel","paf","fab","pre"}        # +20
-PRODUCTIVE_SETS = {"sfa","scr","ssp","dri","blk","jtg","asc","meg","pfl"}  # +5 (janela 6-12m)
-MATURING_SETS = {"twm","tef","par","obf"}                   # +0 (12-24m)
-DEAD_SETS = {"evs","brs","astr","lorg","sit","pkmgo","svi","pal","fst"}  # -15
-
-# Aliases para retrocompatibilidade (codigo legacy)
-ICONIC_POKEMON = ICONIC_S_TIER | ICONIC_A_TIER | ICONIC_B_TIER
-ICONIC_SETS = ANNIVERSARY_SETS | {"crz"}
-DEAD_MARKET_SETS = DEAD_SETS
-PRODUCTIVE_WINDOW_SETS = PRODUCTIVE_SETS | MATURING_SETS
-CHASE_RARITIES_PATTERNS = TOP_CHASE_PATTERNS + MID_CHASE_PATTERNS
-
-
-def _extract_set_code(raw):
-    """Extrai codigo CT do set, mesmo se vier como 'Stellar Crown (scr)'.
-    Tenta primeiro extrair texto entre parenteses; senao usa string toda."""
-    s = str(raw).lower().strip()
-    if "(" in s and ")" in s:
-        inner = s[s.rfind("(")+1 : s.rfind(")")].strip()
-        if inner:
-            return inner
-    return s
-
-
-def fundamental_analysis(row):
-    """Heuristica v1.3 - 3 tiers iconicidade + meta + raridade granular."""
-    score = 50
-    notes = []
-    name = str(row.get("card_name","")).lower()
-    sc = _extract_set_code(row.get("set_code",""))
-    rar = str(row.get("rarity","")).lower().strip()
-    var = str(row.get("variant","")).lower().strip()
-
-    # 1. Iconicidade (S > A > B)
-    if any(p in name for p in ICONIC_S_TIER):
-        score += 25; notes.append("S-tier")
-    elif any(p in name for p in ICONIC_A_TIER):
-        score += 15; notes.append("A-tier")
-    elif any(p in name for p in ICONIC_B_TIER):
-        score += 8; notes.append("B-tier")
-
-    # 2. Set
-    if sc in ANNIVERSARY_SETS:
-        score += 20; notes.append("set anniversary")
-    elif sc in PRODUCTIVE_SETS:
-        score += 5; notes.append("set produtivo 6-12m")
-    elif sc in MATURING_SETS:
-        notes.append("set maduro 12-24m")
-    elif sc in DEAD_SETS:
-        score -= 15; notes.append("set morto >36m")
-
-    # 3. Raridade chase (top > mid > modest)
-    rt = f"{rar} {var}".strip()
-    if any(c in rt for c in TOP_CHASE_PATTERNS):
-        score += 25; notes.append("top chase")
-    elif any(c in rt for c in MID_CHASE_PATTERNS):
-        score += 15; notes.append("mid chase")
-    elif any(c in rt for c in MODEST_PATTERNS):
-        score += 5; notes.append("modest holo")
-    elif rar in ("c","common","comum","u","uncommon","incomum"):
-        score -= 10; notes.append("raridade comum")
-
-    # 4. Meta competitivo (snapshot 2026-04-29)
-    if any(m in name for m in META_RELEVANT):
-        score += 5; notes.append("meta atual")
-
-    score = max(0, min(100, score))
-
-    if score >= 80: label = "HIGH"
-    elif score >= 60: label = "MEDIUM"
-    elif score >= 40: label = "LOW"
-    else: label = "SPECULATIVE"
-
-    note = "; ".join(notes) if notes else "sem flags"
-    return score, note, label
-
-def classify_row(row, bucket):
-    gm = row.get("gross_margin",0); nm = row.get("net_margin_after_hub",0)
-    profit = row.get("net_profit_after_hub_brl",0)
-    val_status = str(row.get("validation_status","")).lower()
-    cond = str(row.get("condition","")).lower()
-    lang = str(row.get("language","")).lower()
-    variant = str(row.get("variant","")).lower()
-    markup_tier = str(row.get("markup_tier","")).lower()
-    card_num = str(row.get("card_number","")).strip()
-    if pd.isna(gm) or pd.isna(nm) or pd.isna(profit):
-        return ("REJECT","insufficient_data","Dados ausentes",0)
-    # TG## auto-filter: Trainer Gallery cards inflam pokemontcg.io reference
-    # 5-10x. Antes era responsabilidade do operador peneirar manual; agora
-    # vira MANUAL REVIEW automatico com nota explicita.
-    if card_num and TRAINER_GALLERY_RE.match(card_num):
-        return ("MANUAL REVIEW","trainer_gallery_potential_fp",
-                f"TG## ({card_num}): pokemontcg.io pode inflar 5-10x. Validar per-blueprint no CT antes.",35)
-    if gm < bucket.min_gross_margin:
-        return ("REJECT","low_gross_margin",f"gross={gm:.1%} < {bucket.min_gross_margin:.0%}",5)
-    if nm < bucket.min_net_margin:
-        return ("REJECT","low_net_margin_after_hub",f"net={nm:.1%} < {bucket.min_net_margin:.0%}",10)
-    if profit < bucket.min_profit_brl:
-        return ("REJECT","low_absolute_profit",f"R${profit:.0f} < R${bucket.min_profit_brl:.0f}",15)
-    if val_status == "stale":
-        return ("REJECT","reference_price_unreliable","STALE",10)
-    # P-H2 fix (2026-05-12): scanner emite "price_changed" pra markup >45%
-    # (era "anomalo" so na imaginacao). Mantemos os 3 strings antigos pra
-    # retrocompatibilidade caso outras fontes alimentem o postprocess.
-    if val_status in ("price_changed","anomalo","anomalous","anomalous_markup"):
-        return ("MANUAL REVIEW","anomalous_markup","Markup anomalo / preco mudou",30)
-    if cond and cond not in ("nm","near mint","near_mint","ex","excellent","near-mint"):
-        return ("REJECT","condition_mismatch",f"Cond '{cond}' baixa",5)
-    if lang and lang in ("pt","portuguese","português","jp","japanese","japonês"):
-        return ("MANUAL REVIEW","language_liquidity_concern",f"Idioma '{lang}'",40)
-    if any(t in variant for t in ["trainer gallery","tg ","alt art","alternate","full art"]):
-        return ("MANUAL REVIEW","variant_ambiguous",f"Variant '{variant}'",50)
-    # P-H1 fix (2026-05-12): scanner emite strings tipo "Hub (+6%)" / "non-VAT (+20%)" /
-    # "Alto markup (+30%)" / "Real (sem markup)". Match exato falhava — usar substring.
-    if "non-vat" in markup_tier:
-        risk = "Seller non-VAT (+20%). Confirmar Hub-compatible."
-    elif "hub" in markup_tier:
-        risk = "Seller Hub (+6%). OK."
-    elif "alto markup" in markup_tier:
-        risk = "Seller alto markup (30-45%). Avaliar caso, pode ser tier non-Hub legitimo."
-    elif "real" in markup_tier or "sem markup" in markup_tier:
-        risk = "Seller sem markup. Preco final ~ preco scan."
-    else:
-        risk = f"Tier: {markup_tier or 'desc'}"
-    if bucket.name == "hype":
-        return ("MANUAL REVIEW","hype_market_unstable","HYPE: confirmar liquidez. "+risk,65)
-    if bucket.name == "dead":
-        return ("MANUAL REVIEW","dead_market_needs_thesis","DEAD: tese clara. "+risk,60)
-    return ("BUY NOW","passed_all_filters",risk, 90 if markup_tier=="hub" else 75)
-
-def classify_dataframe(df, bucket):
-    df = df.copy()
-    results = df.apply(lambda r: classify_row(r, bucket), axis=1)
-    df["action"] = [r[0] for r in results]
-    df["reason"] = [r[1] for r in results]
-    df["risk_note"] = [r[2] for r in results]
-    df["confidence_score"] = [r[3] for r in results]
-    df["bucket"] = bucket.label
-    fund = df.apply(lambda r: fundamental_analysis(r), axis=1)
-    df["fundamental_score"] = [r[0] for r in fund]
-    df["fundamental_note"] = [r[1] for r in fund]
-    df["long_term"] = [r[2] for r in fund]
-    return df
-
-ACTION_ORDER = ["BUY NOW","WATCH","MANUAL REVIEW","REJECT"]
-ACTION_FILL = {
-    "BUY NOW": PatternFill("solid", fgColor="C6EFCE"),
-    "WATCH": PatternFill("solid", fgColor="FFEB9C"),
-    "MANUAL REVIEW": PatternFill("solid", fgColor="FFD966"),
-    "REJECT": PatternFill("solid", fgColor="F4CCCC"),
-}
-LONG_TERM_FILL = {
-    "HIGH": PatternFill("solid", fgColor="A9D08E"),
-    "MEDIUM": PatternFill("solid", fgColor="FFE699"),
-    "LOW": PatternFill("solid", fgColor="F8CBAD"),
-    "SPECULATIVE": PatternFill("solid", fgColor="F4B084"),
-}
-
-COLUMN_DISPLAY_NAMES = {
-    "action":"Acao","bucket":"Bucket","set_code":"Set","card_name":"Carta","card_number":"No",
-    "rarity":"Raridade","variant":"Variante","condition":"Condicao","language":"Idioma",
-    "seller":"Seller","seller_country":"Pais","live_brl":"Preco CT (R$)",
-    "reference_price_brl":"TCG Market (R$)","gross_margin":"Margem TCG %",
-    "hub_fee_brl":"Hub Fee (R$)","hub_fee_impact_pct":"Hub Fee Impact %",
-    "net_margin_after_hub":"Margem Liq %","net_profit_after_hub_brl":"Lucro Liq (R$)",
-    "fundamental_score":"Score Fund.","fundamental_note":"Notas Fund.","long_term":"Long Term",
-    "reason":"Motivo","risk_note":"Nota Risco","confidence_score":"Confianca",
-    "link_ct":"Link CT","link_tcg":"Link TCGPlayer","blueprint_id":"Blueprint ID","quantity":"Qtd Estoque",
-}
-
-COLUMN_DISPLAY_ORDER = ["action","bucket","set_code","card_name","card_number","rarity",
-    "variant","condition","language","seller","seller_country","live_brl","reference_price_brl",
-    "gross_margin","hub_fee_brl","hub_fee_impact_pct","net_margin_after_hub",
-    "net_profit_after_hub_brl","fundamental_score","long_term","fundamental_note",
-    "reason","risk_note","confidence_score","link_ct","link_tcg","blueprint_id","quantity"]
-
-COLUMNS_TO_HIDE_IN_REPORT = {"scan_brl","markup_pct","markup_tier","validation_status",
-    "gross_margin_real","net_margin_real","profit_brl_real","action_order","gross_profit_brl"}
-
-COLUMN_NAME_PATTERNS_TO_HIDE = ["frete","shipping","freight","foil","is_foil",
-    "hub_only","is_hub","hub flag","tipo seller"]
-
-def select_report_columns(df):
-    canonical = [c for c in COLUMN_DISPLAY_ORDER if c in df.columns]
-    cs = set(canonical)
-    extras = []
-    for col in df.columns:
-        if col in cs or col in COLUMNS_TO_HIDE_IN_REPORT: continue
-        cl = str(col).lower()
-        if any(p.lower() in cl for p in COLUMN_NAME_PATTERNS_TO_HIDE): continue
-        extras.append(col)
-    return canonical + extras
-
-def rename_columns_for_display(df):
-    rm = {k:v for k,v in COLUMN_DISPLAY_NAMES.items() if k in df.columns}
-    return df.rename(columns=rm)
-
-def build_executive_summary(buckets_data, hub_fee_rate):
-    rows = []; total_listings=0; total_approved=0; total_profit=0.0
-    for bk, df in buckets_data.items():
-        b = BUCKETS[bk]; n = len(df)
-        nbuy = (df["action"]=="BUY NOW").sum()
-        nw = (df["action"]=="WATCH").sum()
-        nr = (df["action"]=="MANUAL REVIEW").sum()
-        nrj = (df["action"]=="REJECT").sum()
-        prof = df.loc[df["action"]=="BUY NOW","net_profit_after_hub_brl"].sum()
-        total_listings += n; total_approved += nbuy; total_profit += prof
-        rows.append({"Bucket":b.label,"Listings escaneados":n,"BUY NOW":nbuy,"WATCH":nw,
-            "MANUAL REVIEW":nr,"REJECT":nrj,
-            "Aprovacao %":f"{(nbuy/n*100) if n else 0:.1f}%",
-            "Falsos Positivos %":f"{(nrj/n*100) if n else 0:.1f}%",
-            "Lucro Liq Pot. (R$)":f"R$ {prof:,.0f}",
-            "Filtros":f"gross>={b.min_gross_margin:.0%} | net>={b.min_net_margin:.0%} | lucro>=R${b.min_profit_brl:.0f}"})
-    rows.append({"Bucket":"TOTAL","Listings escaneados":total_listings,"BUY NOW":total_approved,
-        "WATCH":sum((d["action"]=="WATCH").sum() for d in buckets_data.values()),
-        "MANUAL REVIEW":sum((d["action"]=="MANUAL REVIEW").sum() for d in buckets_data.values()),
-        "REJECT":sum((d["action"]=="REJECT").sum() for d in buckets_data.values()),
-        "Aprovacao %":f"{(total_approved/total_listings*100) if total_listings else 0:.1f}%",
-        "Falsos Positivos %":"-","Lucro Liq Pot. (R$)":f"R$ {total_profit:,.0f}",
-        "Filtros":f"Hub fee {hub_fee_rate:.0%}"})
-    return pd.DataFrame(rows)
-
-def build_quick_decision(buckets_data):
-    parts = [df[df["action"]=="BUY NOW"] for df in buckets_data.values() if not df.empty]
-    if not parts:
-        return pd.DataFrame(columns=["Bucket","Set","Carta","No","Preco CT (R$)",
-            "TCG Market (R$)","Margem TCG %","Lucro Liq (R$)","Long Term","Score Fund.","Notas Fund.","Link CT"])
-    all_buy = pd.concat(parts, ignore_index=True)
-    if all_buy.empty:
-        return pd.DataFrame(columns=["Bucket","Set","Carta","No","Preco CT (R$)",
-            "TCG Market (R$)","Margem TCG %","Lucro Liq (R$)","Long Term","Score Fund.","Notas Fund.","Link CT"])
-    all_buy = all_buy.sort_values("net_profit_after_hub_brl", ascending=False)
-    quick = pd.DataFrame()
-    quick["Bucket"] = all_buy["bucket"].values
-    quick["Set"] = all_buy["set_code"].values if "set_code" in all_buy.columns else ""
-    quick["Carta"] = all_buy["card_name"].values if "card_name" in all_buy.columns else ""
-    quick["No"] = all_buy["card_number"].values if "card_number" in all_buy.columns else ""
-    quick["Preco CT (R$)"] = [f"R$ {v:,.2f}" for v in all_buy["live_brl"].values]
-    quick["TCG Market (R$)"] = [f"R$ {v:,.2f}" for v in all_buy["reference_price_brl"].values]
-    quick["Margem TCG %"] = [f"{v*100:.1f}%" for v in all_buy["gross_margin"].values]
-    quick["Lucro Liq (R$)"] = [f"R$ {v:,.2f}" for v in all_buy["net_profit_after_hub_brl"].values]
-    quick["Long Term"] = all_buy["long_term"].values
-    quick["Score Fund."] = all_buy["fundamental_score"].values
-    quick["Notas Fund."] = all_buy["fundamental_note"].values
-    link_col = detect_column(all_buy, "link_ct")
-    quick["Link CT"] = all_buy[link_col].values if link_col else ""
-    return quick
-
+# ─── Hyperlink helper (preservado de v1.5) ────────────────────────────────────
 HYPERLINK_FONT = Font(color="0563C1", underline="single")
 
-def _apply_card_hyperlinks(ws, df):
-    """Linka coluna Carta -> URL em Link CT (mesma linha) como hyperlink azul sublinhado.
-    Sheets sem 'Carta' OU sem 'Link CT' sao no-op."""
+def apply_card_hyperlinks(ws, df):
     cols = list(df.columns)
     if "Carta" not in cols or "Link CT" not in cols:
         return
@@ -458,137 +216,214 @@ def _apply_card_hyperlinks(ws, df):
     for ri in range(2, len(df) + 2):
         url = ws.cell(row=ri, column=link_idx).value
         if isinstance(url, str) and url.startswith("http"):
-            carta_cell = ws.cell(row=ri, column=carta_idx)
-            carta_cell.hyperlink = url
-            carta_cell.font = HYPERLINK_FONT
+            c = ws.cell(row=ri, column=carta_idx)
+            c.hyperlink = url
+            c.font = HYPERLINK_FONT
 
-def style_sheet(ws, df, action_col=None, long_term_col=None):
-    for ci in range(1, len(df.columns)+1):
-        cell = ws.cell(row=1, column=ci)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="305496")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+# ─── Main pipeline ────────────────────────────────────────────────────────────
+DECISAO_FILL = {
+    "COMPRA":  PatternFill("solid", fgColor="C6EFCE"),
+    "REVISAR": PatternFill("solid", fgColor="FFEB9C"),
+    "NAO":     PatternFill("solid", fgColor="F4CCCC"),
+}
+CHASE_FILL = {
+    "TOP":    PatternFill("solid", fgColor="A9D08E"),
+    "MID":    PatternFill("solid", fgColor="FFE699"),
+    "MODEST": PatternFill("solid", fgColor="F8CBAD"),
+    "BULK":   PatternFill("solid", fgColor="D9D9D9"),
+}
+
+def enrich_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+    df = normalize_columns(raw_df).copy()
+    # TG## flag
+    if "card_number" in df.columns:
+        df["trainer_gallery_potential_fp"] = df["card_number"].astype(str).str.match(r"^TG\d+", case=False, na=False)
+    else:
+        df["trainer_gallery_potential_fp"] = False
+    # Chase Tier
+    df["chase_tier"] = df.apply(
+        lambda r: classify_chase_tier(
+            r.get("rarity"), r.get("card_number"), r.get("markup_tier")
+        ), axis=1
+    )
+    # Fundamental Score (derived, after chase_tier)
+    df["fundamental_score"] = df.apply(fundamental_score, axis=1)
+    return df
+
+def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
+    """Sheet principal: deals com Decisao mecanica (COMPRA + REVISAR, ordenado por lucro)."""
+    df = df.copy()
+    results = df.apply(lambda r: classify_decision(r, cfg), axis=1)
+    df["decisao"] = [r[0] for r in results]
+    df["porque"] = [r[1] for r in results]
+    # Filter COMPRA + REVISAR (NAO fica em All Listings)
+    deals = df[df["decisao"].isin(["COMPRA", "REVISAR"])].copy()
+    if "lucro_liq" in deals.columns:
+        deals = deals.sort_values("lucro_liq", ascending=False)
+    # Renomeia pro display
+    display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
+                     "set_code", "card_name", "card_number", "language",
+                     "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
+                     "validation_status", "seller", "link_ct"]
+    display_cols = [c for c in display_cols if c in deals.columns]
+    deals = deals[display_cols]
+    rename_map = {
+        "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
+        "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
+        "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
+        "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
+        "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
+        "seller": "Seller", "link_ct": "Link CT",
+    }
+    return deals.rename(columns=rename_map)
+
+def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
+    """Sheet completa: TUDO com Decisao + Chase + Score (incluindo NAO)."""
+    df = df.copy()
+    results = df.apply(lambda r: classify_decision(r, cfg), axis=1)
+    df["decisao"] = [r[0] for r in results]
+    df["porque"] = [r[1] for r in results]
+    display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
+                     "set_code", "card_name", "card_number", "language",
+                     "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
+                     "validation_status", "seller", "link_ct"]
+    display_cols = [c for c in display_cols if c in df.columns]
+    df = df[display_cols]
+    rename_map = {
+        "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
+        "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
+        "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
+        "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
+        "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
+        "seller": "Seller", "link_ct": "Link CT",
+    }
+    return df.rename(columns=rename_map)
+
+def build_summary(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
+    decisions = df.apply(lambda r: classify_decision(r, cfg), axis=1)
+    decisao_col = pd.Series([r[0] for r in decisions])
+    total = len(df)
+    n_compra = (decisao_col == "COMPRA").sum()
+    n_revisar = (decisao_col == "REVISAR").sum()
+    n_nao = (decisao_col == "NAO").sum()
+    lucro_compra = df.loc[decisao_col == "COMPRA", "lucro_liq"].sum() if "lucro_liq" in df.columns else 0
+    rows = [
+        ("Total listings escaneados", total),
+        ("COMPRA", f"{n_compra} ({n_compra/total*100:.1f}%)" if total else 0),
+        ("REVISAR (zona cinza)", f"{n_revisar} ({n_revisar/total*100:.1f}%)" if total else 0),
+        ("NÃO", f"{n_nao} ({n_nao/total*100:.1f}%)" if total else 0),
+        ("Lucro líquido potencial (COMPRA)", f"R$ {lucro_compra:,.0f}"),
+        ("", ""),
+        ("Threshold COMPRA — net margin", f"≥ {cfg.min_net_margin:.0%}"),
+        ("Threshold COMPRA — lucro líquido", f"≥ R$ {cfg.min_lucro_liq:.0f}"),
+        ("Threshold COMPRA — chase tier", "≥ MID"),
+        ("Threshold REVISAR — net margin", f"≥ {cfg.revisar_min_net:.0%}"),
+        ("Threshold MODEST → REVISAR", f"net ≥ {cfg.revisar_chase_modest_min_net:.0%}"),
+        ("", ""),
+        ("Math: custo total", "preço_CT × 1.06 (Hub fee, sem shipping)"),
+        ("Math: lucro líquido", "TCG_BRL − custo_total"),
+        ("Math: net margin", "lucro_líquido / TCG_BRL"),
+    ]
+    return pd.DataFrame(rows, columns=["Métrica", "Valor"])
+
+def style_sheet(ws, df, decisao_col=None, chase_col=None):
+    # Header style
+    for ci in range(1, len(df.columns) + 1):
+        c = ws.cell(row=1, column=ci)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="305496")
+        c.alignment = Alignment(horizontal="center", vertical="center")
     ws.freeze_panes = "A2"
-    if action_col and action_col in df.columns:
-        ci = list(df.columns).index(action_col)+1
-        for ri in range(2, len(df)+2):
+    # Color rows by Decisao
+    if decisao_col and decisao_col in df.columns:
+        ci = list(df.columns).index(decisao_col) + 1
+        for ri in range(2, len(df) + 2):
             cell = ws.cell(row=ri, column=ci)
-            if cell.value in ACTION_FILL:
-                cell.fill = ACTION_FILL[cell.value]; cell.font = Font(bold=True)
-    if long_term_col and long_term_col in df.columns:
-        ci = list(df.columns).index(long_term_col)+1
-        for ri in range(2, len(df)+2):
+            if cell.value in DECISAO_FILL:
+                cell.fill = DECISAO_FILL[cell.value]
+                cell.font = Font(bold=True)
+    # Color Chase Tier column
+    if chase_col and chase_col in df.columns:
+        ci = list(df.columns).index(chase_col) + 1
+        for ri in range(2, len(df) + 2):
             cell = ws.cell(row=ri, column=ci)
-            if cell.value in LONG_TERM_FILL:
-                cell.fill = LONG_TERM_FILL[cell.value]; cell.font = Font(bold=True)
+            if cell.value in CHASE_FILL:
+                cell.fill = CHASE_FILL[cell.value]
+                cell.font = Font(bold=True)
+    # Column widths
     for ci, cn in enumerate(df.columns, 1):
-        col_data = df.iloc[:, ci-1].head(50)
         try:
-            vals = [str(v) for v in col_data.tolist()]
-        except AttributeError:
-            vals = [str(col_data.iloc[i]) for i in range(min(50, len(col_data)))]
+            vals = [str(v) for v in df.iloc[:50, ci-1].tolist()]
+        except Exception:
+            vals = []
         ml = max([len(str(cn))] + [len(v) for v in vals]) if vals else len(str(cn))
-        ws.column_dimensions[get_column_letter(ci)].width = min(ml+2, 50)
-    _apply_card_hyperlinks(ws, df)
+        ws.column_dimensions[get_column_letter(ci)].width = min(ml + 2, 50)
+    # Hyperlinks na coluna Carta
+    apply_card_hyperlinks(ws, df)
 
-def write_sheet(wb, name, df, action_col=None, lt_col=None):
-    ws = wb.create_sheet(name)
-    if df.empty:
+def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
+    df = enrich_df(df)
+    wb = Workbook(); wb.remove(wb.active)
+
+    deals = build_deals_sheet(df, cfg)
+    ws = wb.create_sheet("Deals")
+    if deals.empty:
+        ws.cell(row=1, column=1, value="Nenhum deal (COMPRA ou REVISAR) encontrado.")
+    else:
+        for ri, row in enumerate([deals.columns.tolist()] + deals.values.tolist(), 1):
+            for ci, val in enumerate(row, 1):
+                ws.cell(row=ri, column=ci, value=val)
+        style_sheet(ws, deals, decisao_col="Decisão", chase_col="Chase Tier")
+
+    all_l = build_all_listings_sheet(df, cfg)
+    ws = wb.create_sheet("All Listings")
+    if all_l.empty:
         ws.cell(row=1, column=1, value="Vazio.")
-        return
-    for ri, row in enumerate([df.columns.tolist()] + df.values.tolist(), 1):
+    else:
+        for ri, row in enumerate([all_l.columns.tolist()] + all_l.values.tolist(), 1):
+            for ci, val in enumerate(row, 1):
+                ws.cell(row=ri, column=ci, value=val)
+        style_sheet(ws, all_l, decisao_col="Decisão", chase_col="Chase Tier")
+
+    summary = build_summary(df, cfg)
+    ws = wb.create_sheet("Summary")
+    for ri, row in enumerate([summary.columns.tolist()] + summary.values.tolist(), 1):
         for ci, val in enumerate(row, 1):
             ws.cell(row=ri, column=ci, value=val)
-    style_sheet(ws, df, action_col=action_col, long_term_col=lt_col)
+    # Style summary
+    for ci in range(1, len(summary.columns) + 1):
+        c = ws.cell(row=1, column=ci)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="305496")
+    for ci, cn in enumerate(summary.columns, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = 40
 
-def write_report(buckets_data, hub_fee_rate, output_path):
-    wb = Workbook(); wb.remove(wb.active)
-    write_sheet(wb, "Decisao Rapida", build_quick_decision(buckets_data), lt_col="Long Term")
-    write_sheet(wb, "A. Executive Summary", build_executive_summary(buckets_data, hub_fee_rate))
-    for bk, df in buckets_data.items():
-        b = BUCKETS[bk]; bs = b.name.upper()
-        for action in ACTION_ORDER:
-            sub = df[df["action"]==action].copy()
-            if sub.empty: continue
-            sub = sub.sort_values("net_profit_after_hub_brl", ascending=False)
-            cols = select_report_columns(sub)
-            sub = rename_columns_for_display(sub[cols])
-            write_sheet(wb, f"{bs} - {action}"[:31], sub, action_col="Acao", lt_col="Long Term")
-    parts_buy = [df[df["action"]=="BUY NOW"] for df in buckets_data.values() if not df.empty]
-    if parts_buy:
-        all_a = pd.concat(parts_buy, ignore_index=True)
-        if not all_a.empty:
-            all_a = all_a.sort_values("net_profit_after_hub_brl", ascending=False)
-            cols = select_report_columns(all_a)
-            all_a = rename_columns_for_display(all_a[cols])
-            write_sheet(wb, "C. Top Approved Deals", all_a, action_col="Acao", lt_col="Long Term")
-    parts_rj = [df[df["action"]=="REJECT"] for df in buckets_data.values() if not df.empty]
-    if parts_rj:
-        all_rj = pd.concat(parts_rj, ignore_index=True)
-        if not all_rj.empty:
-            rs = (all_rj.groupby(["bucket","reason"]).size().reset_index(name="count")
-                  .sort_values("count", ascending=False))
-            rs = rs.rename(columns={"bucket":"Bucket","reason":"Motivo","count":"Qtd"})
-            write_sheet(wb, "D. False Positives", rs)
-    parts_all = [df for df in buckets_data.values() if not df.empty]
-    if parts_all:
-        all_data = pd.concat(parts_all, ignore_index=True)
-        all_data["action_order"] = all_data["action"].map({a:i for i,a in enumerate(ACTION_ORDER)})
-        all_data = all_data.sort_values(["action_order","net_profit_after_hub_brl"],
-                                          ascending=[True,False])
-        cols = select_report_columns(all_data)
-        all_data = rename_columns_for_display(all_data[cols])
-        write_sheet(wb, "E. Final Action List", all_data, action_col="Acao", lt_col="Long Term")
     wb.save(output_path)
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--core", type=Path, required=True)
-    p.add_argument("--hype", type=Path, required=True)
-    p.add_argument("--dead", type=Path, required=True)
-    p.add_argument("--hub-fee", type=float, default=0.06,
-                   help="Hub fee da CardTrader sobre preco CT (default 6%%). "
-                        "Frete nao modelado: cartas consolidadas no deposito "
-                        "CT (~100 cards) tornam frete per-card negligenciavel. v1.4.")
-    p.add_argument("--output", type=Path, required=True)
-    return p.parse_args()
-
-def load_bucket(path, bucket_key):
-    if not path.exists(): raise FileNotFoundError(f"{path}")
-    df = pd.read_excel(path)
-    print(f"[{bucket_key.upper()}] {path.name}: {len(df)} linhas, {len(df.columns)} colunas")
-    return normalize_columns(df, source_label=bucket_key)
+    print(f"OK: {output_path}")
 
 def main():
-    args = parse_args()
-    print(f"CardTrader Postprocess v1.4 | Surcharge = {args.hub_fee:.0%} | Meta snapshot {META_SNAPSHOT_DATE}")
-    print("-"*70)
-    bd = {}
-    for bk, path in [("core",args.core),("hype",args.hype),("dead",args.dead)]:
-        b = BUCKETS[bk]
-        try: df = load_bucket(path, bk)
-        except (FileNotFoundError, ValueError) as e:
-            print(f"[ERRO] {bk}: {e}"); return 1
-        df = apply_hub_fee(df, args.hub_fee)
-        df = classify_dataframe(df, b)
-        nb = (df["action"]=="BUY NOW").sum()
-        nw = (df["action"]=="WATCH").sum()
-        nr = (df["action"]=="MANUAL REVIEW").sum()
-        nrj = (df["action"]=="REJECT").sum()
-        pr = df.loc[df["action"]=="BUY NOW","net_profit_after_hub_brl"].sum()
-        if nb > 0:
-            ltd = df[df["action"]=="BUY NOW"]["long_term"].value_counts().to_dict()
-            lts = ", ".join([f"{k}:{v}" for k,v in ltd.items()])
-        else: lts = "-"
-        print(f"  BUY NOW: {nb} | WATCH: {nw} | REVIEW: {nr} | REJECT: {nrj}")
-        print(f"  Lucro liquido potencial: R$ {pr:,.2f}")
-        print(f"  Long-term mix: {lts}")
-        bd[bk] = df
-    print("-"*70)
-    print(f"Gerando relatorio: {args.output}")
-    write_report(bd, args.hub_fee, args.output)
-    print(f"OK: {args.output}")
-    return 0
+    p = argparse.ArgumentParser(description="CardTrader postprocess v2.0 — simplificado")
+    p.add_argument("--input", "-i", required=True, help="XLSX raw do scanner")
+    p.add_argument("--output", "-o", required=True, help="XLSX relatorio destino")
+    p.add_argument("--min-net-margin", type=float, default=0.25,
+                   help="Net margin minimo pra COMPRA (default 0.25)")
+    p.add_argument("--min-lucro", type=float, default=50.0,
+                   help="Lucro liquido R$ minimo pra COMPRA (default 50)")
+    p.add_argument("--revisar-min-net", type=float, default=0.20,
+                   help="Net margin minimo pra zona REVISAR (default 0.20)")
+    p.add_argument("--revisar-modest-min", type=float, default=0.30,
+                   help="MODEST so vai REVISAR se net >= X (default 0.30)")
+    args = p.parse_args()
+
+    cfg = DecisionConfig(
+        min_net_margin=args.min_net_margin,
+        min_lucro_liq=args.min_lucro,
+        revisar_min_net=args.revisar_min_net,
+        revisar_chase_modest_min_net=args.revisar_modest_min,
+    )
+    df = pd.read_excel(args.input)
+    print(f"Carregado: {args.input} | {len(df)} rows | cols: {len(df.columns)}")
+    write_report(df, cfg, Path(args.output))
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

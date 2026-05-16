@@ -73,7 +73,7 @@ jobs:
             --per-set-timeout $PER_SET_TIMEOUT \
             --output "cardtrader_scan_weekly_$(date +%Y%m%d_%H%M).xlsx"
 
-      - name: Run postprocess
+      - name: Run postprocess (v2 — Decisão mecânica + Chase Tier)
         env:
           PYTHONIOENCODING: utf-8
         run: |
@@ -83,7 +83,7 @@ jobs:
             exit 0
           fi
           python cardtrader_postprocess.py \
-            --core "$XLSX" --hype "$XLSX" --dead "$XLSX" \
+            --input "$XLSX" \
             --output "cardtrader_relatorio_weekly_$(date +%Y-%m-%d).xlsx"
 
       - name: Upload scan outputs
