@@ -240,6 +240,10 @@ class Listing:
     seller_can_sell_via_hub: bool    # envio centralizado (+rápido, +seguro)
     seller_user_type: str            # "private", "professional", "zero_fee"
     cardtrader_url: str
+    # v2.5 (2026-05-16): rarity persistida pra Chase Tier no postprocess v2+.
+    # Fonte: blueprint CT (preferido) ou properties_hash. String vazia ""
+    # se nem CT nem properties trouxerem (raro mas defensivo).
+    rarity: str = ""
 
     @property
     def uid(self) -> str:
@@ -871,6 +875,17 @@ class Scanner:
             seller_can_sell_via_hub=user.get("can_sell_via_hub", False),
             seller_user_type=user.get("user_type", "private"),
             cardtrader_url=f"https://www.cardtrader.com/cards/{raw['blueprint_id']}",
+            # 2026-05-16: Schema CT blueprint tem rarity em fixed_properties.pokemon_rarity,
+            # NÃO no campo `rarity` raiz (verificado via inspect do bp[0] de sfa).
+            # Patterns esperados: "Common"/"Uncommon"/"Rare"/"Ultra Rare"/"Secret Rare"/etc.
+            # Vazio = sealed product (booster, ETB) — não-card, será filtrado downstream.
+            rarity=(
+                (bp.get("fixed_properties") or {}).get("pokemon_rarity")
+                or bp.get("rarity")
+                or props.get("pokemon_rarity")
+                or props.get("rarity")
+                or ""
+            ).strip(),
         )
 
     def _passes_filters(self, l: Listing) -> bool:
@@ -1176,7 +1191,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     ws.title = "Oportunidades"
 
     headers = [
-        "Card Name", "Set", "Nº", "Condição", "Idioma",
+        "Card Name", "Set", "Nº", "Rarity", "Condição", "Idioma",
         "Scan R$ (raw)", "Moeda Original CT", "LIVE R$ (real)", "Markup %", "Markup Tier",
         "Validation Status",
         "TCG Market (BRL)", "TCG Market (USD)",
@@ -1193,6 +1208,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             l.card_name,
             f"{l.set_name} ({l.set_code})",
             l.collector_number,
+            l.rarity,
             l.condition,
             l.language.upper(),
             round(opp.ct_price_brl, 2),
