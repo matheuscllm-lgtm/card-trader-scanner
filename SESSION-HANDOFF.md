@@ -1,159 +1,97 @@
-# Session Handoff — 2026-05-15 (CT Scanner)
+# Session Handoff — CT Scanner
 
-> Preservation note pra continuidade entre sessões. Se contexto colapsar, próximo
-> Claude / operador retoma daqui.
+> Estado atual + retomada rápida pra próxima sessão.
+> **Última atualização:** 2026-05-16 (overnight 2026-05-15→16).
 
-## Estado deste momento
+---
 
-- **Repo:** `matheuscllm-lgtm/card-trader-scanner`, branch `main`, HEAD `67b3cb9` (push 2026-05-15)
-- **Working tree:** limpo
-- **Scanner:** v2.3.1 (postprocess v1.4)
+## Estado atual
+
+- **Repo:** `matheuscllm-lgtm/card-trader-scanner` `main` @ `b4584a8` — working tree limpo
+- **Scanner:** **v2.4** (per-set timeout + auto skip-list) — `cardtrader_scanner.py`
+- **Postprocess:** **v1.5** (hyperlinks + TG## auto-filter + alias fixes) — `cardtrader_postprocess.py`
 - **Hub fee paridade:** scanner ↔ postprocess intacta (6%)
+- **Cron GH Actions:** **desabilitado** (em `daily-scan.yml`, reativação documentada in-file)
+- **Quota GH Actions:** **exhausted** até 2026-06-01 — runs locais são o caminho até lá
 
-## O que foi feito nesta sessão (2026-05-15)
+## Quick-start retomada
 
-1. **MCP cleanup parcial.** Removido `n8n-mcp` local stdio. 14 connectores claude.ai irrelevantes (Wix, Asana, Linear, Slack, Webflow, Canva, Lucid, Notion, Intuit QuickBooks, Zoom, Zapier, Microsoft Learn, Gmail, Google Calendar) pendentes desconectar via https://claude.ai/settings/connectors. GitHub PAT plaintext em `.claude.json` pendente rotação.
-2. **Memória `feedback_autonomy_directive` expandida** com seção CardTrader Scanner — escopo técnico-mecânico análoga ao MYP. Mais regra "review+save por tópico" + "operator-timeout 10s" agora oficiais.
-3. **Cron daily-scan.yml desabilitado** temporariamente (operador 2026-05-15). Reativação documentada in-file. Commit `67b3cb9`.
-4. **Scan ad-hoc disparado** — run `25898522951` via workflow_dispatch ~03:25 UTC, defaults (sets `sfa scr par paf tef twm ssp dri blk jtg`, threshold 0.30, min_net_margin 0.20, validate_top 30). Status quando este handoff foi escrito: queued (~12min de fila).
-5. **/fewer-permission-prompts** rodado. 7 MCP read-only oncology adicionados ao `settings.local.json` (PubMed search/metadata/fulltext, Clinical Trials trials/details, Consensus search, related articles).
+Próxima sessão começa lendo este arquivo. Pra rodar scan agora:
 
-## Próximo passo claro
+```bash
+cd "C:/Users/mathe/Meu Drive/OBSIDIAN/01 - Projetos/TCG & Exportação/CardTrader Scanner"
+set -a; source .env; set +a
+export PYTHONIOENCODING=utf-8
+TS=$(date +%Y%m%d_%H%M)
+.venv/Scripts/python.exe cardtrader_scanner.py \
+  --sets sfa scr par paf tef twm ssp dri blk jtg \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --per-set-timeout 8 \
+  --output "cardtrader_scan_local_${TS}.xlsx"
 
-Quando run `25898522951` completar:
+# Postprocess (mesmo XLSX nos 3 buckets — scanner pré-filtra)
+.venv/Scripts/python.exe cardtrader_postprocess.py \
+  --core "cardtrader_scan_local_${TS}.xlsx" \
+  --hype "cardtrader_scan_local_${TS}.xlsx" \
+  --dead "cardtrader_scan_local_${TS}.xlsx" \
+  --output "cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
+```
 
-1. **Verificar XLSX gerado** — esperado: `cardtrader_scan_*.xlsx` + `cardtrader_relatorio_2026-05-15.xlsx`. Baixar artifact via `gh run download 25898522951 -n scan-25898522951` se não estiver no Drive.
-2. **Auditoria (checklist):**
-   - ✓ Existe relatório + sheet "Decisao Rapida" não-vazio
-   - ✓ Grep `^TG\d+` no card_number em BUY NOW (esperado: 0 matches)
-   - ✓ Hub fee paridade: sample 3 deals, validar `tcg - ct×1.06 ≈ lucro` (±R$0.10)
-   - ✓ Margens >100% sinalizadas (potencial SIR/HR/SAR misread)
-   - ✓ Comparar com baseline 2026-05-13 (2 BUY NOW Aipom par + Drampa tef = R$92)
-3. **Persistir entrega** — atualizar este handoff com sumário 1-página: top deals, FPs, ressalvas. Commit + push.
+ETA: ~30min total (medido empiricamente 2026-05-15).
 
-## Tasks ativas (TaskList)
+## Última entrega (2026-05-15)
 
-- #1 ✓ Validar estado canônico
-- #2 ▶ Dispatch scan (in_progress, aguardando run completar)
-- #3 ⏸ Auditar XLSX
-- #4 ⏸ Persistir entrega + handoff
-- #5 ⏸ Context-exhaustion protocol (este arquivo cobre)
+`cardtrader_relatorio_2026-05-15.xlsx` no Drive (sync auto). **1 BUY NOW:**
 
-## Baseline 13/05 pra comparação
+| Carta | Set | Nº | CT R$ | TCG R$ | Margem Líq | Lucro Líq | Seller |
+|---|---|---|---|---|---|---|---|
+| Milcery | Stellar Crown (scr) | 152 EN | 58.31 | 88.05 | 29.8% | **R$26.24** | DMB Direct (non-VAT +20%) |
 
-- 12 listings, 2 BUY NOW (CORE):
-  - **Aipom (par)** — CT R$96.38, TCG R$150.40, margem líq 32.1%, lucro R$48.24
-  - **Drampa (tef)** — CT R$113.81, TCG R$164.57, margem líq 26.7%, lucro R$43.93
-- HYPE/DEAD zerados (filtros mais strict)
-- FPs todos por `low_gross_margin` (queda pós-validação per-blueprint — comportamento esperado)
+Link: https://www.cardtrader.com/cards/299015 (hyperlink ativo no XLSX). HYPE/DEAD vazios. Audit 100%: TG## 0 leaks, margens >100% 0, Hub fee math confirmada.
 
-## Memórias críticas atualizadas hoje
+## Pendências / opções pra próximas sessões
 
-- `session_log_2026_05_15_mcp_cleanup_and_scan.md` (novo)
-- `feedback_autonomy_directive.md` (CT scope expandido + review+save pattern + 10s timeout)
-- `MEMORY.md` (entry adicionada)
+- **404 consecutive cap** — optimization marginal sobre v2.4. Timeout per-set já cobre o cenário prático.
+- **GH Actions quota strategy** — decisão de operador: upgrade plan vs repo público vs self-hosted runner. Bloqueia retomada de cron automático até 2026-06-01.
+- **PAT GitHub plaintext** em `~/.claude.json` linha 505 — rotação pendente (segurança).
+- **14 connectores claude.ai irrelevantes** — desconectar via https://claude.ai/settings/connectors.
+- **Bridge `merge_myp_ct.py`** — pode rodar combinação MYP↔CT quando MYP weekly tiver output (após quota reset).
 
-## Background tasks vivos
+## Memórias relevantes (carregadas auto pelo MEMORY.md)
 
-- Bash background `be5489xm7`: poll de status do run `25898522951` até `completed`. Output em `tasks/be5489xm7.output`.
+- `feedback_autonomy_directive` — postura autônoma + escopo CT explícito
+- `ct_scan_timeout_calibration` — pricing rate medido + v2.4 resolved
+- `gh_actions_quota_exhausted` — diagnóstico + workarounds locais
+- `excel_mcp_setup` — `mcp__excel__*` disponível na próxima sessão
+- `cardtrader_trainer_gallery_bug` — TG## filtro implementado
+- `feedback_xlsx_card_name_hyperlink` — hyperlinks aplicados
 
-## Update 04:42 UTC — first run cancelled, re-dispatched
+## Commits desta sessão (11)
 
-- Run `25898522951` cancelado em 30:09 pelo `timeout-minutes: 30` (subdimensionado p/ escopo de 10 sets). 5/10 sets processados.
-- Fix aplicado: `timeout-minutes` 30 → 60 (commit `2a9a413`). Calibração documentada em memória `ct_scan_timeout_calibration.md`.
-- **Run novo: `25900649576`** (dispatch 04:42 UTC). Estimativa: ~50min de execução + fila.
-- Pricing rate medido: 2-10 listings/s. 10 sets × ~280 listings = ~2800 listings total.
-- Sets já validados nesse escopo (run cancelled): sfa scr par paf tef. Pendentes no novo run: todos 10 do scratch.
+```
+b4584a8 docs: SESSION-HANDOFF overnight summary
+233087f feat(scanner v2.4): per-set timeout + auto skip-list
+0815c1c docs: CHANGELOG + README polish
+09929f5 feat(postprocess): auto-filter TG## → MANUAL REVIEW
+62fba69 feat(postprocess): Card Name hyperlink + alias fixes
+992895e deliver: 2026-05-15 scan (1 BUY NOW Milcery scr 152)
+00e896c docs: quota exhausted, switched to local run
+9bc1420 docs: handoff (first run cancelled)
+2a9a413 ops: bump timeout 30→60min
+4050ffa docs: SESSION-HANDOFF.md inicial
+67b3cb9 ops: disable daily cron schedule
+```
 
-## OVERNIGHT — 2026-05-15 → 2026-05-16 — 4 features shipped
+## Timeline operacional (referência, ordem cronológica)
 
-Sessão noturna (operator overnight). 4 tasks completas, 4 commits + entregas:
+**2026-05-15 noite (BRT):**
+- 22:33 BRT — Operador ativa card-agent. MCP cleanup parcial (n8n-mcp local removido; 14 connectores claude.ai web-only pendentes).
+- 23:25 BRT — Cron disabled + scan ad-hoc dispatched (run 25898522951).
+- 01:14 BRT — Run cancelled em 30:09 (timeout-minutes 30 subdimensionado). Fix: bump → 60.
+- 01:42 BRT — Re-dispatch (`25900649576`) falha em 3s. Quota free tier GH Actions exhausted.
+- 01:47 BRT — **Switch para scan LOCAL.** `.env` carregado, venv path.
+- 02:16 BRT — Scan local completo em 29min. Postprocess + audit OK. 1 BUY NOW.
+- 03:00-05:00 BRT — Overnight features: hyperlinks → TG## → docs → v2.4 timeout+skip-list.
 
-**Commit `62fba69` — XLSX Card Name hyperlink (operator request)**
-- Coluna `Carta` em todas sheets vira hyperlink azul → URL CardTrader
-- 32 hyperlinks no relatório 2026-05-15
-- Bonus: alias fixes `Nº`/`Link CardTrader` (preenchia colunas que vinham vazias)
-- Memória: `feedback_xlsx_card_name_hyperlink` (operator-requested)
-
-**Commit `09929f5` — TG## auto-filter no postprocess**
-- Cartas Trainer Gallery (`^TG\d+` em card_number) viram automaticamente `MANUAL REVIEW` com motivo `trainer_gallery_potential_fp` antes de checar margem
-- ~76% FP historic eliminado automatic
-- Memória atualizada: `cardtrader_trainer_gallery_bug` (era pendência v1.5, agora resolvida)
-
-**Commit `0815c1c` — CHANGELOG + README polish**
-- CHANGELOG section "2026-05-15 — Postprocess v1.5 + ops" consolidando noite
-- README banner em "Agendamento" sinalizando cron desabilitado + receita local
-
-**Commit `233087f` — Scanner v2.4 (per-set timeout + auto skip-list)**
-- Fix ESTRUTURAL pro hang `asc`/mega-evo: wall-clock timeout per-set no pricing loop
-- `--per-set-timeout MIN` (default 8min). Excedido → aborta + persiste em `scanner_skip_list.json` com motivo + UTC timestamp
-- `--ignore-skip-list` força retry; `--clear-skip-list` reseta
-- Stats: `expansions_skipped_by_list` + `expansions_timed_out`
-- 5/5 unit tests + 4 smoke paths validados (trigger real, runtime skip, force-retry, clear)
-- Pendência v2.4 anteriormente aberta na memória → fechada
-- Memória: `ct_scan_timeout_calibration` atualizada com resolução
-
-**Excel MCP adicionado** (não-CT mas útil): `@negokaz/excel-mcp-server` no `~/.claude.json` user-scope. Tools `mcp__excel__*` disponíveis a partir da próxima sessão.
-
----
-
-## ENTREGA — 2026-05-15 (CT scan completo, audit OK)
-
-**XLSX gerados (no scanner dir = sync Drive automático):**
-- Raw: `cardtrader_scan_local_20260515_0147.xlsx` (7.6 KB)
-- Relatório formatado: `cardtrader_relatorio_2026-05-15.xlsx` (21 KB) — ABRIR ESTE
-- Log execução: `scan_local_20260515_0147.log`
-
-**Resultado: 1 BUY NOW no CORE**
-
-| Carta | Set | Nº | Idioma | CT R$ | TCG R$ | Margem Líq | Lucro Líq | Seller | Tier |
-|---|---|---|---|---|---|---|---|---|---|
-| Milcery | Stellar Crown (scr) | 152 | EN | 58.31 | 88.05 | 29.8% | **R$26.24** | DMB Direct | non-VAT (+20%) |
-
-Link CT: https://www.cardtrader.com/cards/299015
-
-**Outros 4 candidatos rejeitados (low_gross_margin no CORE) — pra contexto, não pra ação:**
-- Milcery (scr 152) outro seller — gross 28.1% < 30% threshold
-- Charmander (paf 109) — gross 24.6% < 30%
-- Plusle (par 193) — gross 24.3% < 30%
-- Okidogi (sfa 74) — gross 20.2% < 30%
-
-HYPE e DEAD vazios (0 candidatos sequer passaram primeiro filtro).
-
-**Auditoria checklist:**
-- ✅ TG## leak: 0 rows
-- ✅ Margens >100% (SIR/HR misread): 0 rows
-- ✅ Hub fee paridade 6%: math confirmada — 58.31×1.06=61.81; 88.05−61.81=26.24=Lucro Líq
-- ✅ Cobertura 10 sets canônicos OK (sfa scr par paf tef twm ssp dri blk jtg)
-- ✅ Estrutura XLSX completa (10 sheets incl. Decisao Rapida + Exec Summary + Final Action List)
-
-**Comparação vs baseline 13/05:**
-- 13/05: 2 BUY NOW (Aipom par + Drampa tef = R$92 lucro total)
-- 15/05: 1 BUY NOW (Milcery scr = R$26 lucro)
-- Mercado mais magro hoje — comportamento esperado, scanner saudável.
-
-**Próximo daily scan:**
-- Cron GH Actions desabilitado + quota free tier exhausted até 01/06/2026
-- Pra rodar manual local: ver bloco "Próximo passo claro" no início deste handoff
-- Decisão pendente longer-term: upgrade GH plan / repo public / self-hosted runner
-
----
-
-## Update 04:48 UTC — GH Actions quota exhausted, switched to LOCAL run
-
-- Runs `25900649576` + `25900778686` falharam imediatamente (3s) sem alocar runner. `runner_name: ""`. Diagnóstico: cota mensal GH Actions free tier (2000min em repo privado) bateu hoje. Detalhes em memória `gh_actions_quota_exhausted.md`.
-- **Reset esperado: 01/06/2026.** Cron disable é cosmético até lá; dispatch também falha.
-- **Mitigação aplicada: scan LOCAL** rodando agora.
-  - Comando: `.venv/Scripts/python.exe cardtrader_scanner.py --sets sfa scr par paf tef twm ssp dri blk jtg --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --output cardtrader_scan_local_<TS>.xlsx`
-  - `.env` carregado (CT_JWT + POKEMONTCG_API_KEY)
-  - Started 01:47:55 BRT (04:47:55 UTC) — 2 Python processes vivos
-  - Log: `scan_local_20260515_0147.log`
-  - ETA: ~50min (mesma rate observada GH Actions)
-- Poll bg `ba1zfg3o3` monitorando exit dos processos Python.
-
-**Se contexto colapsar agora, retomar com:**
-1. `cd "Meu Drive/OBSIDIAN/01 - Projetos/TCG & Exportação/CardTrader Scanner"`
-2. `tail -30 scan_local_*.log` — ver onde parou
-3. Se processo Python morreu sem XLSX → checar log pra causa
-4. Se XLSX existe → rodar postprocess: `.venv/Scripts/python.exe cardtrader_postprocess.py --core <xlsx> --hype <xlsx> --dead <xlsx> --output cardtrader_relatorio_2026-05-15.xlsx`
-5. Auditoria conforme checklist na seção "Próximo passo claro"
+**Estado pré-sessão (2026-05-14):** v2.3.1 (progress logging only), pendências múltiplas em memória.
+**Estado pós-sessão (2026-05-16):** v2.4 + v1.5 postprocess, pendências v2.4 fechadas, toolkit ganhou Excel MCP.
