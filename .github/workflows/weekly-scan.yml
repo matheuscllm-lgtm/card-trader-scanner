@@ -1,14 +1,12 @@
-name: Daily CT Scan
+name: Weekly CT Scan (full)
+
+# Scan COMPLETO — todas as ~832 expansões Pokemon no CardTrader.
+# Sem schedule: dispatch manual apenas (decisão operador 2026-05-16). Roda
+# LOCAL preferencialmente; GH Actions só quando quota free tier permite.
 
 on:
-  # Sem agendamento: workflow só roda via dispatch manual (decisão operador
-  # 2026-05-16). Runs autônomos rodam LOCAL via venv + .env.
   workflow_dispatch:
     inputs:
-      sets:
-        description: 'Sets a escanear (códigos CT separados por espaço)'
-        required: false
-        default: 'sfa scr par paf tef twm ssp dri blk jtg asc'
       threshold:
         description: 'Margem bruta mínima (fração, ex 0.30)'
         required: false
@@ -18,9 +16,13 @@ on:
         required: false
         default: '0.20'
       validate_top:
-        description: 'Quantos candidatos validar per-blueprint'
+        description: 'Quantos candidatos validar per-blueprint (full scope: bump pra 100+)'
         required: false
-        default: '30'
+        default: '100'
+      per_set_timeout:
+        description: 'v2.4 timeout per-set (min). Default 8. Sets que estourarem vão pra skip-list.'
+        required: false
+        default: '8'
 
 concurrency:
   group: ct-scan
@@ -33,10 +35,10 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # Bumped 30→60 em 2026-05-15: run 25898522951 atingiu 30min com 5/10 sets
-    # processados (~1480 listings) e foi cancelado pelo timeout antes de
-    # iniciar blk/jtg/twm/ssp/dri. Estimativa total p/ 10 sets: ~50min.
-    timeout-minutes: 60
+    # Full scan ~832 expansões × pricing rate variável = potencialmente horas.
+    # GH Actions free tier job max = 360min (6h). v2.4 per-set timeout + skip-list
+    # protegem contra sets travados queimarem todo o budget.
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repo
@@ -53,45 +55,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scanner
+      - name: Run scanner (full scope, no --sets)
         env:
           CT_JWT: ${{ secrets.CT_JWT }}
           POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: |
-          SETS="${{ github.event.inputs.sets || 'sfa scr par paf tef twm ssp dri blk jtg asc' }}"
           THRESHOLD="${{ github.event.inputs.threshold || '0.30' }}"
           MIN_NET="${{ github.event.inputs.min_net_margin || '0.20' }}"
-          VAL_TOP="${{ github.event.inputs.validate_top || '30' }}"
+          VAL_TOP="${{ github.event.inputs.validate_top || '100' }}"
+          PER_SET_TIMEOUT="${{ github.event.inputs.per_set_timeout || '8' }}"
+          # Sem --sets → scanner pega TODAS as expansões via list_expansions
           python cardtrader_scanner.py \
-            --sets $SETS \
             --threshold $THRESHOLD \
             --validate-top $VAL_TOP \
             --min-net-margin $MIN_NET \
-            --output "cardtrader_scan_$(date +%Y%m%d_%H%M).xlsx"
+            --per-set-timeout $PER_SET_TIMEOUT \
+            --output "cardtrader_scan_weekly_$(date +%Y%m%d_%H%M).xlsx"
 
       - name: Run postprocess
         env:
           PYTHONIOENCODING: utf-8
         run: |
-          XLSX=$(ls -t cardtrader_scan_*.xlsx 2>/dev/null | head -1)
+          XLSX=$(ls -t cardtrader_scan_weekly_*.xlsx 2>/dev/null | head -1)
           if [ -z "$XLSX" ]; then
             echo "Nenhum XLSX gerado pelo scanner — pulando postprocess"
             exit 0
           fi
           python cardtrader_postprocess.py \
             --core "$XLSX" --hype "$XLSX" --dead "$XLSX" \
-            --output "cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
+            --output "cardtrader_relatorio_weekly_$(date +%Y-%m-%d).xlsx"
 
       - name: Upload scan outputs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: scan-${{ github.run_id }}
+          name: weekly-scan-${{ github.run_id }}
           path: |
-            cardtrader_scan_*.xlsx
-            cardtrader_relatorio_*.xlsx
+            cardtrader_scan_weekly_*.xlsx
+            cardtrader_relatorio_weekly_*.xlsx
             cardtrader_scanner.log
+            scanner_skip_list.json
           retention-days: 30
           if-no-files-found: error
 
@@ -101,5 +105,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue create \
-            --title "Daily CT scan failed: run ${{ github.run_id }}" \
-            --body "Scheduled scan failed at $(date -u +'%Y-%m-%d %H:%M UTC'). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --title "Weekly CT scan failed: run ${{ github.run_id }}" \
+            --body "Weekly full scan failed at $(date -u +'%Y-%m-%d %H:%M UTC'). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
