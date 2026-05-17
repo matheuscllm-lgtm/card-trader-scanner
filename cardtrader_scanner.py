@@ -104,12 +104,25 @@ from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+# ─── v2.3.2 fix (bug-hunt 2026-05-17): força UTF-8 no I/O ─────────────────────
+# Paridade com postprocess (commit 26c27bd). openpyxl.Workbook.save() pega
+# encoding do interpreter locale via algum caminho interno. Em Windows com
+# locale pt-BR, sys.stdout.encoding default é cp1252 → headers UTF-8 são
+# gravados como bytes UTF-8 mas LIDOS como latin-1, produzindo mojibake
+# (`Decis�o`, `Pre�o CT`). PYTHONIOENCODING=utf-8 resolve, mas só quando o
+# invocador seta a var (wrappers PS setam; scripts ad-hoc esquecem).
+# Garantia defensiva aqui (defense-in-depth):
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    # Python <3.7 ou stdout não-reconfigurável (raro). Fallback silencioso.
+    pass
+
 # ══════════════════════════════════════════════════════════════════════
 # LOGGING — saída para stdout E arquivo (auditoria pós-execução)
 # ══════════════════════════════════════════════════════════════════════
-# Console Windows é cp1252 por padrão e quebra em → ≥ etc — força utf-8.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # Log file path:
 #   - CT_LOG_FILE env var (preferido — set pelo wrapper PS antes de invocar)
