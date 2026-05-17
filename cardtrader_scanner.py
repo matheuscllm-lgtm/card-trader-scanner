@@ -988,7 +988,15 @@ class Scanner:
             "skipped_exotic_currency": 0,  # M4 fix: contador de listings em moedas exóticas (GBP/JPY/etc)
             "expansions_skipped_by_list": 0,  # v2.4: sets pulados via skip-list
             "expansions_timed_out": 0,        # v2.4: sets que estouraram per_set_timeout
+            "pricing_failures": 0,            # v2.9 (Codex H5): erros desconhecidos no pricing
+            "expansions_mass_pricing_abort": 0,  # v2.9: sets abortados por >50% pricing fails
         }
+        # v2.9 (Codex H5): threshold pra abortar set quando pricing está
+        # massivamente quebrado (schema drift / SSL / endpoint down). 50% das
+        # listings + minimum sample size de 20 evita falsos abort em sets
+        # com 1-2 cards.
+        self.mass_pricing_failure_threshold = 0.50
+        self.mass_pricing_failure_min_sample = 20
 
     def _parse_listing(self, raw: dict, bp_index: dict) -> Optional[Listing]:
         """Converte o dict da API para dataclass Listing.
@@ -1245,6 +1253,9 @@ class Scanner:
 
         # Para cada listing filtrado, busca preço TCG e calcula margem
         total_listings = len(best_by_uid)
+        # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
+        set_pricing_attempts = 0
+        set_pricing_failures = 0
         for i, l in enumerate(best_by_uid.values(), 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
             if self.per_set_timeout_s and (time.monotonic() - set_start) > self.per_set_timeout_s:
@@ -1259,14 +1270,54 @@ class Scanner:
                 return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
+            set_pricing_attempts += 1
+            tcg_market = None
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
                     foil=l.foil,  # H2 fix: foil-aware variant selection
                 )
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # v2.9: erros de rede transientes — já foram retried pelo provider.
+                # Log debug (não vira WARNING flood), conta como pricing_failure
+                # pra mass-failure detection.
+                log.debug(f"  Pricing transient {l.card_name}: {type(e).__name__}: {e}")
+                set_pricing_failures += 1
+                self.stats["pricing_failures"] += 1
             except Exception as e:
-                log.debug(f"  Erro pricing {l.card_name}: {e}")
-                tcg_market = None
+                # v2.9 (Codex H5): erros DESCONHECIDOS = WARNING + counter.
+                # Pre-fix: log.debug + swallow → schema drift / SSL / JSON parse
+                # silenciosamente removia deals. Agora aparece no INFO log.
+                log.warning(
+                    f"  Pricing FAILURE {l.card_name} ({l.set_code}/{l.collector_number}) "
+                    f"bp={getattr(l, 'blueprint_id', '?')}: {type(e).__name__}: {e}"
+                )
+                set_pricing_failures += 1
+                self.stats["pricing_failures"] += 1
+
+            # v2.9: detecção de mass pricing failure → aborta set + skip-list.
+            # Trigger só após sample mínimo pra evitar falso abort em sets
+            # com poucos cards.
+            if (
+                set_pricing_attempts >= self.mass_pricing_failure_min_sample
+                and (set_pricing_failures / set_pricing_attempts) > self.mass_pricing_failure_threshold
+            ):
+                fail_pct = set_pricing_failures / set_pricing_attempts * 100
+                log.error(
+                    f"  💥 MASS PRICING FAILURE em {exp_code} ({exp_name}): "
+                    f"{set_pricing_failures}/{set_pricing_attempts} ({fail_pct:.0f}%) "
+                    f"falharam. Abortando set."
+                )
+                self.stats["expansions_mass_pricing_abort"] += 1
+                try:
+                    add_to_skip_list(
+                        exp_code,
+                        f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}",
+                    )
+                except Exception as ee:
+                    log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+                return
+
             if not tcg_market or tcg_market <= 0:
                 continue
             self.stats["tcg_price_found"] += 1
@@ -1802,6 +1853,17 @@ def main():
     print(f"  Oportunidades ≥ {args.threshold:.0%}   : {scanner.stats['opportunities_found']}")
     print(f"  Câmbio USD→BRL          : {scanner.usd_brl:.4f}")
     print(f"  Câmbio EUR→BRL          : {scanner.eur_brl:.4f}")
+    # v2.9 (Codex H5): expor pricing failures pra operador detectar drift cedo
+    pricing_failures = scanner.stats.get("pricing_failures", 0)
+    if pricing_failures > 0:
+        attempts = scanner.stats.get("listings_after_filters", 0)
+        pct = (pricing_failures / attempts * 100) if attempts > 0 else 0
+        marker = "  ⚠️  " if pricing_failures >= 5 else "  "
+        print(f"{marker}Pricing failures        : {pricing_failures} ({pct:.1f}% das tentativas)")
+        if pricing_failures >= 5:
+            print(f"      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
+    if scanner.stats.get("expansions_mass_pricing_abort", 0) > 0:
+        print(f"  💥 Sets abortados (mass pricing fail): {scanner.stats['expansions_mass_pricing_abort']}")
     print(f"  Planilha                : {out_path}")
     print("═" * 60)
 
