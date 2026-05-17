@@ -99,9 +99,18 @@ if (-not (Test-Path $rawOut)) {
     exit 2
 }
 
-# Postprocess: tambem usa CT_LOG_FILE (mesmo arquivo, appendado).
-# postprocess v2 nao tem FileHandler nativo — pra ele vamos redirect via
-# Start-Process com files temp + merge utf-8.
+# Postprocess: invocacao via call operator `& $py @postArgs` (igual scanner).
+#
+# BUG fix 2026-05-17 (run 2026-05-16 weekly): Start-Process -ArgumentList NAO
+# faz quoting automatico de paths com espaco no PS 5.1. Quando $rawOut contem
+# "Meu Drive\OBSIDIAN\01 - Projetos\TCG & Exportação\...", os args eram
+# splitados em "Drive\OBSIDIAN\01" / "-" / "Projetos\TCG" / "&" / "Exporta..."
+# -> argparse rejeitava com `unrecognized arguments: Drive\OBSIDIAN...`.
+#
+# Call operator `& $py @postArgs` (splat de array) preserva tokens com espaco
+# como UM argumento — mesmo metodo que usamos pro scanner sem problemas.
+#
+# Redirect 2>&1 + tee via Out-File pra capturar stdout+stderr no log unificado.
 $postArgs = @(
     '-u',
     'cardtrader_postprocess.py',
@@ -110,12 +119,13 @@ $postArgs = @(
 )
 $postStdoutTmp = "$env:TEMP\ct_post_stdout_$PID.tmp"
 $postStderrTmp = "$env:TEMP\ct_post_stderr_$PID.tmp"
-$postProc = Start-Process -FilePath $py `
-    -ArgumentList $postArgs `
-    -Wait -PassThru -NoNewWindow `
-    -RedirectStandardOutput $postStdoutTmp `
-    -RedirectStandardError  $postStderrTmp
-$postExit = $postProc.ExitCode
+
+# Workaround: call operator NAO suporta -RedirectStandardOutput direto;
+# usamos cmd.exe wrapper pra redirect file-level (mesma estrategia do scanner
+# no fix cabd285 — funciona com paths com espaco quando o shell de fora
+# eh o cmd.exe e os args sao passados via array no call operator).
+& $py @postArgs 1> $postStdoutTmp 2> $postStderrTmp
+$postExit = $LASTEXITCODE
 if (Test-Path $postStdoutTmp) {
     Get-Content $postStdoutTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
     Remove-Item $postStdoutTmp -Force
