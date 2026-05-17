@@ -21,6 +21,9 @@ v2.1 (bug-hunt 2026-05-17):
 - #3 Força UTF-8 no stdout/encoding pra eliminar mojibake em headers
   (`Decis�o` → `Decisão`) quando invocado fora do wrapper PS sem
   PYTHONIOENCODING=utf-8. openpyxl pega encoding do interpreter locale.
+- #4 Summary separa `Total listings escaneados` (input completo) de
+  `Total deals exportados` (COMPRA + REVISAR). Antes o label estava
+  errado — número era de deals, não listings totais.
 
 Decisao mecanica (thresholds configuraveis via CLI):
   COMPRA:  net_margin >= 25% AND lucro_liq >= R$50 AND chase_tier in {TOP, MID}
@@ -391,9 +394,12 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     n_compra = (decisao_col == "COMPRA").sum()
     n_revisar = (decisao_col == "REVISAR").sum()
     n_nao = (decisao_col == "NAO").sum()
+    # v2.1 #4: deals exportados = só COMPRA + REVISAR (sheet "Deals" filtra NAO)
+    n_deals_exportados = int(n_compra + n_revisar)
     lucro_compra = df.loc[decisao_col == "COMPRA", "lucro_liq"].sum() if "lucro_liq" in df.columns else 0
     rows = [
         ("Total listings escaneados", total),
+        ("Total deals exportados (COMPRA + REVISAR)", n_deals_exportados),
         ("COMPRA", f"{n_compra} ({n_compra/total*100:.1f}%)" if total else 0),
         ("REVISAR (zona cinza)", f"{n_revisar} ({n_revisar/total*100:.1f}%)" if total else 0),
         ("NÃO", f"{n_nao} ({n_nao/total*100:.1f}%)" if total else 0),
