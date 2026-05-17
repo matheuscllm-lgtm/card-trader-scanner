@@ -55,6 +55,9 @@ $header = @(
 )
 $header | Set-Content -LiteralPath $logFile -Encoding utf8
 
+# v3 (2026-05-17 noite): stderr nao mais swallowed (mesmo fix do run_weekly_local v4)
+$stderrFile = Join-Path $repo "logs\critical_resscan_${Stamp}.stderr.log"
+
 $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
@@ -69,8 +72,14 @@ $scannerArgs = @(
     '--output', $rawOut
 )
 
-& $py @scannerArgs 2>&1 | Out-Null
+& $py @scannerArgs 2> $stderrFile | Out-Null
 $scannerExit = $LASTEXITCODE
+
+if ((Test-Path -LiteralPath $stderrFile) -and (Get-Item -LiteralPath $stderrFile).Length -gt 0) {
+    "--- STDERR (capturado) ---" | Add-Content -LiteralPath $logFile -Encoding utf8
+    Get-Content -LiteralPath $stderrFile -Raw -Encoding utf8 | Add-Content -LiteralPath $logFile -Encoding utf8
+    "--- FIM STDERR ---" | Add-Content -LiteralPath $logFile -Encoding utf8
+}
 
 "--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Add-Content -LiteralPath $logFile -Encoding utf8
 

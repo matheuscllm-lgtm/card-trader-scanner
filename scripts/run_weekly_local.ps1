@@ -87,6 +87,13 @@ $header | Set-Content -LiteralPath $logFile -Encoding utf8
 # Invocacao: call operator `& $py @args` aceita arrays com espacos.
 # Stdout do scanner vai pra console virtual da Task (descartado) — o que
 # importa eh o FileHandler.
+#
+# v4 (2026-05-17 noite, pos-incident weekly 2026-05-17 sd-v crash silencioso):
+#   stderr NAO eh mais descartado. Captura em arquivo separado pra evitar
+#   o caso de o scanner morrer com traceback antes do FileHandler flushar.
+#   Pre-fix: `2>&1 | Out-Null` swallowed qualquer ultima exception.
+#   Pos-fix: `2> $stderrFile` preserva stderr puro em UTF-8 raw bytes.
+$stderrFile = Join-Path $repo "logs\weekly_local_${Stamp}.stderr.log"
 $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
@@ -99,8 +106,16 @@ $scannerArgs = @(
     '--sets'
 ) + $setCodes
 
-& $py @scannerArgs 2>&1 | Out-Null
+# Stderr -> arquivo dedicado; stdout descartado (heartbeat ja vai pro FileHandler).
+& $py @scannerArgs 2> $stderrFile | Out-Null
 $scannerExit = $LASTEXITCODE
+
+# Anexa stderr ao log principal se nao vazio (pos-mortem)
+if ((Test-Path -LiteralPath $stderrFile) -and (Get-Item -LiteralPath $stderrFile).Length -gt 0) {
+    "--- STDERR (capturado) ---" | Add-Content -LiteralPath $logFile -Encoding utf8
+    Get-Content -LiteralPath $stderrFile -Raw -Encoding utf8 | Add-Content -LiteralPath $logFile -Encoding utf8
+    "--- FIM STDERR ---" | Add-Content -LiteralPath $logFile -Encoding utf8
+}
 
 "--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Add-Content -LiteralPath $logFile -Encoding utf8
 
