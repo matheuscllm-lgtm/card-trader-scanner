@@ -54,11 +54,24 @@ $header = @(
 $header | Out-File -FilePath $logFile -Encoding utf8
 
 # Step 1: scanner com TODOS os codes via --sets
-# IMPORTANTE: Start-Process faz string join NAIVE do ArgumentList — args com
-# espaco viram multiplos. Soluçao: invocar via call operator (&) com array
-# splat (@scannerArgs), redirecionando stdout/stderr via redirect operators
-# do PS (*>>). Garantimos `python -u` (unbuffered) + PYTHONUNBUFFERED=1.
-$scannerArgs = @(
+#
+# LOG ENCODING: PS redirect (*>>, Tee-Object, Out-File) converte stdout
+# do Python pra UTF-16 (PS interno) e gera log garbled. Solucao: invocar
+# via cmd.exe que NAO faz Unicode conversion, redirect file direto:
+#   cmd /c "...python.exe ... > log 2>&1"
+# Como o Python ja reconfigura stdout pra UTF-8 (cardtrader_scanner.py
+# linha 112), o file fica UTF-8 limpo.
+#
+# Quoting: cmd /c precisa de aspas duplas DENTRO de outer aspas duplas.
+# Solucao: monta string com cmd-style quoting (cada arg com espaco
+# embrulhado em \"...\").
+
+function Quote-CmdArg([string]$a) {
+    if ($a -match '\s|"') { return '"' + ($a -replace '"', '""') + '"' }
+    return $a
+}
+
+$scannerArgsArr = @(
     '-u',
     'cardtrader_scanner.py',
     '--threshold', '0.30',
@@ -70,10 +83,15 @@ $scannerArgs = @(
     '--sets'
 ) + $setCodes
 
-# `*>>` redireciona TODOS os streams (stdout + stderr + warning + verbose
-# + debug + information) appendando ao log. Isso eh nativo do PS5+, NAO
-# usa Tee-Object (que era o problema do encoding UTF-16 garbled).
-& $py @scannerArgs *>> $logFile
+$pyQuoted = Quote-CmdArg $py
+$logQuoted = Quote-CmdArg $logFile
+$argsJoined = ($scannerArgsArr | ForEach-Object { Quote-CmdArg $_ }) -join ' '
+
+# >> append, 2>&1 merge stderr->stdout. cmd /c roda em subprocess separado.
+$cmdLine = "$pyQuoted $argsJoined >> $logQuoted 2>&1"
+"--- cmd: $cmdLine" | Out-File -FilePath $logFile -Append -Encoding utf8
+
+& cmd.exe /c $cmdLine
 $scannerExit = $LASTEXITCODE
 
 "--- SCANNER exit=$scannerExit ---" | Out-File -FilePath $logFile -Append -Encoding utf8
@@ -91,13 +109,17 @@ if (-not (Test-Path $rawOut)) {
     exit 2
 }
 
-$postArgs = @(
+$postArgsArr = @(
     '-u',
     'cardtrader_postprocess.py',
     '--input',  $rawOut,
     '--output', $finalOut
 )
-& $py @postArgs *>> $logFile
+$postArgsJoined = ($postArgsArr | ForEach-Object { Quote-CmdArg $_ }) -join ' '
+$postCmdLine = "$pyQuoted $postArgsJoined >> $logQuoted 2>&1"
+"--- cmd: $postCmdLine" | Out-File -FilePath $logFile -Append -Encoding utf8
+
+& cmd.exe /c $postCmdLine
 $postExit = $LASTEXITCODE
 
 "=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$postExit ===" | Out-File -FilePath $logFile -Append -Encoding utf8
