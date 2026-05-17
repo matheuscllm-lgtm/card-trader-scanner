@@ -18,6 +18,9 @@ v2.1 (bug-hunt 2026-05-17):
   input carrega `live_brl` + `reference_price_brl` válidos. Compara com o
   net_margin do input — drift > 0.5pp → WARN + usa recomputado. Coluna
   `margin_source` ("input" | "recomputed") preserva auditoria.
+- #3 Força UTF-8 no stdout/encoding pra eliminar mojibake em headers
+  (`Decis�o` → `Decisão`) quando invocado fora do wrapper PS sem
+  PYTHONIOENCODING=utf-8. openpyxl pega encoding do interpreter locale.
 
 Decisao mecanica (thresholds configuraveis via CLI):
   COMPRA:  net_margin >= 25% AND lucro_liq >= R$50 AND chase_tier in {TOP, MID}
@@ -33,13 +36,28 @@ Memorias relevantes respeitadas:
   - cardtrader_trainer_gallery_bug: TG## auto-filter mantido
 """
 from __future__ import annotations
-import argparse, re, sys
+import argparse, os, re, sys
 from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+# ─── v2.1 fix #3 (bug-hunt 2026-05-17): força UTF-8 no I/O ───────────────────
+# openpyxl.Workbook.save() pega encoding do interpreter locale via algum
+# caminho interno. Em Windows com locale pt-BR, sys.stdout.encoding default
+# é cp1252 → headers UTF-8 são gravados como bytes UTF-8 mas LIDOS como
+# latin-1, produzindo mojibake (`Decis�o`, `Pre�o CT`). PYTHONIOENCODING=utf-8
+# resolve, mas só quando o invocador seta a var (wrappers PS setam; scripts
+# ad-hoc esquecem). Garantia defensiva aqui:
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    # Python <3.7 ou stdout não-reconfigurável (raro). Fallback silencioso.
+    pass
 
 # ─── Hub fee canônico (ct_margin_formula): custo = preço_CT × 1.06 ───────────
 HUB_FEE_RATE = 0.06
