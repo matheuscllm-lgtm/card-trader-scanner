@@ -96,6 +96,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator, Optional
 
+import portalocker
 import requests
 import yaml
 from dotenv import load_dotenv
@@ -744,40 +745,168 @@ PROVIDERS = {
 #   7. Dedup: mantém só melhor oferta por (carta + condição)
 # ══════════════════════════════════════════════════════════════════════
 # --- v2.4 skip-list helpers (module-level) ---
+#
+# v2.7 (bug-hunt Codex H1, 2026-05-17): mutações agora são thread+process-safe.
+# Antes: load → mutate → write_text() (read-modify-write sem lock). Dois scanners
+# paralelos podiam corromper estado (último writer vencia). Pior: load_skip_list
+# silenciosamente devolvia {} em qualquer erro de leitura/parse, então quem
+# escrevesse depois apagava todo histórico real. Agora:
+#   1. portalocker.Lock acquire exclusive antes de qualquer mutação
+#   2. read+parse acontece DENTRO do lock (evita TOCTOU)
+#   3. write é atomic: escreve em tempfile + os.replace() pra evitar truncate
+#      parcial caso processo morra no meio do write
+#   4. load_skip_list (read-only) usa shared lock e PROPAGA erro de parse
+#      (não engole) — quem chama decide se aborta ou reseta.
+# Sentinela `_SKIP_LIST_LOCK_TIMEOUT` evita deadlock se outro processo crashar
+# segurando o lock.
+
+_SKIP_LIST_LOCK_TIMEOUT = 30  # seg — operação é trivial, 30s é generoso
+
+
+def _skip_list_lock_path() -> Path:
+    """Lock file separado (.lock sidecar) — portalocker em Windows não permite
+    bloquear arquivo ainda inexistente; lock dedicado é mais robusto."""
+    return SKIP_LIST_FILE.with_suffix(SKIP_LIST_FILE.suffix + ".lock")
+
+
+def _empty_skip_payload() -> dict:
+    return {"skipped": [], "reasons": {}, "updated_at": None}
+
+
+def _read_skip_file_locked() -> dict:
+    """Lê + parseia skip-list assumindo lock já adquirido pelo caller.
+    Levanta exception em erro de parse (NÃO engole)."""
+    if not SKIP_LIST_FILE.exists():
+        return _empty_skip_payload()
+    raw = SKIP_LIST_FILE.read_text(encoding="utf-8")
+    if not raw.strip():
+        # Arquivo vazio (caso edge: write parcial / disk full). Tratado como vazio,
+        # mas loga WARNING — operador deve saber.
+        log.warning(f"Skip-list vazia ({SKIP_LIST_FILE}). Tratando como reset.")
+        return _empty_skip_payload()
+    return json.loads(raw)  # propaga JSONDecodeError
+
+
+def _atomic_write_skip_file(payload: dict) -> None:
+    """Escreve skip-list de forma atomica via tempfile + os.replace.
+    Lock deve já estar adquirido pelo caller.
+
+    Em Windows o `os.replace` pode levantar PermissionError[WinError 5] quando
+    o destino esta sendo lido por outro processo (file sharing semantics,
+    Google Drive watcher, antivirus). Retry curto com backoff cobre isso —
+    pq estamos sob lock exclusive do `.lock` sidecar, o conflito eh transient
+    (a janela termina assim que o reader concorrente fecha o handle)."""
+    tmp_path = SKIP_LIST_FILE.with_suffix(SKIP_LIST_FILE.suffix + ".tmp")
+    # Use PID + thread no nome do tmp pra evitar colisao entre workers paralelos
+    # que estejam escapando do lock (defense-in-depth — não deveria acontecer)
+    unique_tmp = tmp_path.with_suffix(f".tmp.{os.getpid()}")
+    unique_tmp.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # Retry os.replace pra contornar PermissionError transient no Windows
+    last_err: Optional[Exception] = None
+    for attempt in range(10):
+        try:
+            os.replace(unique_tmp, SKIP_LIST_FILE)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(0.1 * (attempt + 1))  # backoff 0.1, 0.2, 0.3, ... 1.0s
+    # Esgotou retries — tenta cleanup do tmp antes de propagar
+    try:
+        if unique_tmp.exists():
+            unique_tmp.unlink()
+    except Exception:
+        pass
+    raise last_err  # type: ignore[misc]
+
 
 def load_skip_list() -> dict:
-    """Le scanner_skip_list.json. Retorna dict com chaves 'skipped' (list[str])
-    e 'updated_at'/'reasons'. Vazio se arquivo nao existe."""
-    if not SKIP_LIST_FILE.exists():
-        return {"skipped": [], "reasons": {}, "updated_at": None}
+    """Lê scanner_skip_list.json (com shared lock pra coerência).
+    Em erro de read/parse, levanta exception — caller decide.
+    Retorna dict com 'skipped' (list[str]), 'reasons' (dict), 'updated_at'."""
+    lock_path = _skip_list_lock_path()
     try:
-        return json.loads(SKIP_LIST_FILE.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning(f"Skip-list inválida ({SKIP_LIST_FILE}): {e}. Tratando como vazia.")
-        return {"skipped": [], "reasons": {}, "updated_at": None}
+        # SHARED lock — múltiplos readers OK, conflita com writer exclusive.
+        # fail_when_locked=True habilita timeout polling (vs blocking infinito).
+        with portalocker.Lock(
+            lock_path,
+            mode="a+",
+            flags=portalocker.LOCK_SH | portalocker.LOCK_NB,
+            timeout=_SKIP_LIST_LOCK_TIMEOUT,
+            fail_when_locked=False,
+            check_interval=0.1,
+        ):
+            return _read_skip_file_locked()
+    except portalocker.exceptions.LockException as e:
+        # Não consegue lock em 30s → outro processo travou. Log + propaga.
+        log.error(f"Skip-list lock timeout ({lock_path}): {e}")
+        raise
+    except json.JSONDecodeError as e:
+        log.error(f"Skip-list JSON inválido ({SKIP_LIST_FILE}): {e}")
+        raise
 
 
 def add_to_skip_list(exp_code: str, reason: str) -> None:
-    """Adiciona um exp_code à skip-list com motivo + timestamp. Idempotente."""
-    data = load_skip_list()
-    skipped = set(data.get("skipped", []))
-    skipped.add(exp_code)
-    reasons = data.get("reasons") or {}
-    reasons[exp_code] = reason
-    payload = {
-        "skipped": sorted(skipped),
-        "reasons": reasons,
-        "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    SKIP_LIST_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.warning(f"  Adicionado à skip-list: {exp_code} (motivo: {reason})")
+    """Adiciona um exp_code à skip-list com motivo + timestamp. Idempotente.
+    Thread+process-safe (exclusive lock + atomic write)."""
+    lock_path = _skip_list_lock_path()
+    try:
+        with portalocker.Lock(
+            lock_path,
+            mode="a+",
+            flags=portalocker.LOCK_EX | portalocker.LOCK_NB,  # EXCLUSIVE não-bloqueante p/ polling
+            timeout=_SKIP_LIST_LOCK_TIMEOUT,
+            fail_when_locked=False,
+            check_interval=0.1,
+        ):
+            # Read CURRENT state under lock (não confiar em estado pre-lock)
+            try:
+                data = _read_skip_file_locked()
+            except json.JSONDecodeError as e:
+                # Corruption detectada. Fail loud — operador investiga.
+                # NÃO sobrescreve cegamente, isso apagaria histórico.
+                log.error(
+                    f"Skip-list corrupted ({SKIP_LIST_FILE}): {e}. "
+                    f"Abortando add({exp_code}). Renomeie/delete o arquivo se ok."
+                )
+                raise
+            skipped = set(data.get("skipped", []))
+            skipped.add(exp_code)
+            reasons = data.get("reasons") or {}
+            reasons[exp_code] = reason
+            payload = {
+                "skipped": sorted(skipped),
+                "reasons": reasons,
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            _atomic_write_skip_file(payload)
+            log.warning(f"  Adicionado à skip-list: {exp_code} (motivo: {reason})")
+    except portalocker.exceptions.LockException as e:
+        log.error(f"Skip-list lock timeout em add({exp_code}): {e}")
+        raise
 
 
 def clear_skip_list() -> None:
-    """Apaga skip-list (no proximo scan todos os sets sao retentados)."""
-    if SKIP_LIST_FILE.exists():
-        SKIP_LIST_FILE.unlink()
-        log.info(f"Skip-list apagada: {SKIP_LIST_FILE.name}")
+    """Apaga skip-list (no proximo scan todos os sets sao retentados).
+    Thread+process-safe."""
+    lock_path = _skip_list_lock_path()
+    try:
+        with portalocker.Lock(
+            lock_path,
+            mode="a+",
+            flags=portalocker.LOCK_EX | portalocker.LOCK_NB,
+            timeout=_SKIP_LIST_LOCK_TIMEOUT,
+            fail_when_locked=False,
+            check_interval=0.1,
+        ):
+            if SKIP_LIST_FILE.exists():
+                SKIP_LIST_FILE.unlink()
+                log.info(f"Skip-list apagada: {SKIP_LIST_FILE.name}")
+    except portalocker.exceptions.LockException as e:
+        log.error(f"Skip-list lock timeout em clear(): {e}")
+        raise
 
 
 class Scanner:
