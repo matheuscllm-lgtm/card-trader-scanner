@@ -13,6 +13,12 @@ Mudancas vs v1.5:
 - MANTEM: Hub fee 6% paridade, TG## auto-filter, hyperlinks, alias fixes
 - MANTEM: ct_margin_formula (sem shipping; custo = preco_pagina × 1.06)
 
+v2.1 (bug-hunt 2026-05-17):
+- #2 Defensive recompute de net_margin/lucro_liq via fórmula 1.06 quando o
+  input carrega `live_brl` + `reference_price_brl` válidos. Compara com o
+  net_margin do input — drift > 0.5pp → WARN + usa recomputado. Coluna
+  `margin_source` ("input" | "recomputed") preserva auditoria.
+
 Decisao mecanica (thresholds configuraveis via CLI):
   COMPRA:  net_margin >= 25% AND lucro_liq >= R$50 AND chase_tier in {TOP, MID}
            AND validation_status in {VALIDATED_REAL, VALIDATED_MARKUP}
@@ -34,6 +40,9 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+# ─── Hub fee canônico (ct_margin_formula): custo = preço_CT × 1.06 ───────────
+HUB_FEE_RATE = 0.06
 
 # ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
@@ -233,8 +242,66 @@ CHASE_FILL = {
     "BULK":   PatternFill("solid", fgColor="D9D9D9"),
 }
 
+def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.005) -> pd.DataFrame:
+    """v2.1 #2: defensivamente recomputa net_margin + lucro_liq via fórmula 1.06.
+
+    Antes confiávamos cegamente no input. Se o XLSX vier de scanner antigo
+    (pre v2.6) ou raw sem hub fee, o postprocess mentia sobre a fórmula que
+    o Summary documenta. Agora:
+      1. Se `live_brl` + `reference_price_brl` válidos → recomputa
+         `recomputed_net = (tcg - live*1.06) / tcg`
+      2. Compara com `net_margin` do input
+      3. Se drift > 0.5pp → log WARNING, sobrescreve com recomputado
+      4. Marca `margin_source = "input" | "recomputed"`
+
+    Não toca quando colunas faltam (input incompleto — deixa subir o "Dados
+    insuficientes" do classify_decision).
+    """
+    if "live_brl" not in df.columns or "reference_price_brl" not in df.columns:
+        df["margin_source"] = "input"
+        return df
+
+    live = pd.to_numeric(df["live_brl"], errors="coerce")
+    tcg = pd.to_numeric(df["reference_price_brl"], errors="coerce")
+    valid = live.notna() & tcg.notna() & (tcg > 0) & (live > 0)
+
+    custo = live * (1.0 + HUB_FEE_RATE)
+    recomputed_net = (tcg - custo) / tcg
+    recomputed_lucro = tcg - custo
+
+    if "net_margin" not in df.columns:
+        df["net_margin"] = recomputed_net
+        df["lucro_liq"] = recomputed_lucro
+        df["margin_source"] = "recomputed"
+        print(f"[postprocess v2.1] net_margin AUSENTE no input — recomputado em {valid.sum()} rows.")
+        return df
+
+    input_net = pd.to_numeric(df["net_margin"], errors="coerce")
+    drift = (input_net - recomputed_net).abs()
+    drifting = valid & drift.gt(drift_threshold_pp)
+
+    source = pd.Series(["input"] * len(df), index=df.index)
+    if drifting.any():
+        n_drift = int(drifting.sum())
+        max_drift_pp = float(drift[drifting].max()) * 100
+        print(
+            f"[postprocess v2.1] WARNING: net_margin do input diverge da fórmula "
+            f"1.06 em {n_drift}/{int(valid.sum())} rows (drift máx {max_drift_pp:.2f}pp). "
+            f"Sobrescrevendo com recomputado."
+        )
+        # Substitui apenas onde driftando
+        df.loc[drifting, "net_margin"] = recomputed_net[drifting]
+        df.loc[drifting, "lucro_liq"] = recomputed_lucro[drifting]
+        source[drifting] = "recomputed"
+
+    df["margin_source"] = source.values
+    return df
+
+
 def enrich_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_columns(raw_df).copy()
+    # v2.1 #2 fix: defensive recompute ANTES de classify_decision consumir.
+    df = _recompute_margin_with_fee(df)
     # TG## flag
     if "card_number" in df.columns:
         df["trainer_gallery_potential_fp"] = df["card_number"].astype(str).str.match(r"^TG\d+", case=False, na=False)
