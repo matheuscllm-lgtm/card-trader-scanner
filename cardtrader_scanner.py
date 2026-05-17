@@ -1049,8 +1049,20 @@ class Scanner:
                 f"Skip-list ativa ({SKIP_LIST_FILE.name}): {len(skip_set)} sets serão pulados "
                 f"({', '.join(sorted(skip_set))}). Use --ignore-skip-list pra forçar."
             )
-        for exp in expansions:
+        # v2.5.1 (2026-05-16 night): heartbeat por set + total elapsed.
+        # Operador pediu detectabilidade de stall: agora cada set loga
+        # "ALIVE [HH:MM:SS] set N/TOTAL exp_code elapsed=Xmin" antes de scan_expansion.
+        # Também captura Exception genérica (não só HTTPError) pra não matar
+        # o loop inteiro se um set lançar algo inesperado.
+        run_start = time.monotonic()
+        total_sets = len(expansions)
+        for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
+            elapsed_min = (time.monotonic() - run_start) / 60.0
+            log.info(
+                f"ALIVE [{datetime.now().strftime('%H:%M:%S')}] set {idx}/{total_sets} "
+                f"({exp_code}) total_elapsed={elapsed_min:.1f}min"
+            )
             if exp_code in skip_set:
                 self.stats["expansions_skipped_by_list"] += 1
                 reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
@@ -1060,6 +1072,14 @@ class Scanner:
                 opps.extend(self.scan_expansion(exp))
             except requests.HTTPError as e:
                 log.error(f"Falha em {exp.get('name')}: {e}")
+                continue
+            except Exception as e:
+                # v2.5.1: nunca deixa exceção genérica matar o full scan
+                log.error(
+                    f"Erro inesperado em {exp.get('name')} ({exp_code}): "
+                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                )
+                add_to_skip_list(exp_code, f"unexpected_error_{type(e).__name__}")
                 continue
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
