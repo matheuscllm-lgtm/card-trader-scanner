@@ -1025,14 +1025,20 @@ class Scanner:
 
             # Margem calculada em BRL (a verdade operacional pro Matheus).
             # TCGPlayer market vem em USD → converte via Frankfurter.
+            # v2.6 (bug-hunt 2026-05-17 #1): custo inclui Hub fee 6% mesmo
+            # quando --validate-top=0. Antes a margem inicial era 6pp otimista
+            # vs a fórmula canônica `custo = preço_CT × 1.06`. Mantém
+            # ct_price_brl como preço cru de página (Scan R$ raw); margens
+            # e net_margin já refletem o custo real.
             tcg_brl = tcg_market * self.usd_brl
             ct_brl = l.price_brl
-            margin = (tcg_brl - ct_brl) / tcg_brl
+            custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
+            margin = (tcg_brl - custo_brl) / tcg_brl
             if margin < self.threshold:
                 continue
 
             shipping_brl = self._estimate_shipping_brl(l)
-            net_margin = (tcg_brl - ct_brl - shipping_brl) / tcg_brl
+            net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
 
             self.stats["opportunities_found"] += 1
             yield Opportunity(
@@ -1041,7 +1047,7 @@ class Scanner:
                 tcg_market_brl=tcg_brl,
                 ct_price_brl=ct_brl,
                 margin_pct=margin,
-                margin_brl=tcg_brl - ct_brl,
+                margin_brl=tcg_brl - custo_brl,
                 estimated_shipping_brl=shipping_brl,
                 net_margin_pct=net_margin,
             )
