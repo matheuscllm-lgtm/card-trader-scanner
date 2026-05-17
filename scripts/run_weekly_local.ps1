@@ -54,8 +54,10 @@ $header = @(
 $header | Out-File -FilePath $logFile -Encoding utf8
 
 # Step 1: scanner com TODOS os codes via --sets
-# IMPORTANTE: usar 'python -u' (unbuffered) + redirect stdout+stderr direto
-# pelo Start-Process pra NAO depender de Tee-Object (que tornava UTF-16 garbled)
+# IMPORTANTE: Start-Process faz string join NAIVE do ArgumentList — args com
+# espaco viram multiplos. Soluçao: invocar via call operator (&) com array
+# splat (@scannerArgs), redirecionando stdout/stderr via redirect operators
+# do PS (*>>). Garantimos `python -u` (unbuffered) + PYTHONUNBUFFERED=1.
 $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
@@ -68,31 +70,12 @@ $scannerArgs = @(
     '--sets'
 ) + $setCodes
 
-# Start-Process com redirect direto de stdout/stderr pro mesmo file (append).
-# -Wait porque queremos rodar postprocess depois do scanner terminar.
-# -NoNewWindow porque ja estamos detached (chamado por launch_weekly_task.ps1).
-$scannerLogTmp = "$logFile.scanner.tmp"
-$scannerErrTmp = "$logFile.scanner.err.tmp"
-$proc = Start-Process -FilePath $py `
-    -ArgumentList $scannerArgs `
-    -Wait `
-    -PassThru `
-    -NoNewWindow `
-    -RedirectStandardOutput $scannerLogTmp `
-    -RedirectStandardError  $scannerErrTmp
+# `*>>` redireciona TODOS os streams (stdout + stderr + warning + verbose
+# + debug + information) appendando ao log. Isso eh nativo do PS5+, NAO
+# usa Tee-Object (que era o problema do encoding UTF-16 garbled).
+& $py @scannerArgs *>> $logFile
+$scannerExit = $LASTEXITCODE
 
-# Merge stdout + stderr ao log principal
-if (Test-Path $scannerLogTmp) {
-    Get-Content $scannerLogTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
-    Remove-Item $scannerLogTmp -Force
-}
-if (Test-Path $scannerErrTmp) {
-    "--- STDERR scanner ---" | Out-File -FilePath $logFile -Append -Encoding utf8
-    Get-Content $scannerErrTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
-    Remove-Item $scannerErrTmp -Force
-}
-
-$scannerExit = $proc.ExitCode
 "--- SCANNER exit=$scannerExit ---" | Out-File -FilePath $logFile -Append -Encoding utf8
 
 if ($scannerExit -ne 0) {
@@ -114,24 +97,7 @@ $postArgs = @(
     '--input',  $rawOut,
     '--output', $finalOut
 )
-$postLogTmp = "$logFile.post.tmp"
-$postErrTmp = "$logFile.post.err.tmp"
-$postProc = Start-Process -FilePath $py `
-    -ArgumentList $postArgs `
-    -Wait `
-    -PassThru `
-    -NoNewWindow `
-    -RedirectStandardOutput $postLogTmp `
-    -RedirectStandardError  $postErrTmp
+& $py @postArgs *>> $logFile
+$postExit = $LASTEXITCODE
 
-if (Test-Path $postLogTmp) {
-    Get-Content $postLogTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
-    Remove-Item $postLogTmp -Force
-}
-if (Test-Path $postErrTmp) {
-    "--- STDERR postprocess ---" | Out-File -FilePath $logFile -Append -Encoding utf8
-    Get-Content $postErrTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
-    Remove-Item $postErrTmp -Force
-}
-
-"=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$($postProc.ExitCode) ===" | Out-File -FilePath $logFile -Append -Encoding utf8
+"=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$postExit ===" | Out-File -FilePath $logFile -Append -Encoding utf8
