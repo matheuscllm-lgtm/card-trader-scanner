@@ -453,29 +453,62 @@ class CardTraderClient:
         self.delay = delay
         self._last_call = 0.0
 
-    def _get(self, path: str, **params) -> dict | list:
+    def _get(self, path: str, deadline_ts: Optional[float] = None, **params) -> dict | list:
+        """GET com retry. Aceita `deadline_ts` (monotonic): se passar, retries
+        e sleeps respeitam a deadline (v2.8 Codex H2 fix — antes uma chamada
+        429 com Retry-After 60s podia segurar a set bem além do per-set-timeout).
+        """
         elapsed = time.time() - self._last_call
         if elapsed < self.delay:
             time.sleep(self.delay - elapsed)
         url = f"{CT_BASE}{path}"
+
+        def _deadline_exceeded() -> bool:
+            return deadline_ts is not None and time.monotonic() > deadline_ts
+
+        def _sleep_capped(wait_s: float) -> bool:
+            """Sleep cap pra não passar da deadline. Retorna True se deadline
+            estourou durante (ou antes do) sleep."""
+            if deadline_ts is None:
+                time.sleep(wait_s)
+                return False
+            remaining = deadline_ts - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(wait_s, remaining))
+            return time.monotonic() > deadline_ts
+
+        if _deadline_exceeded():
+            raise TimeoutError(f"CT _get({path}): deadline already exceeded before request")
 
         # Retry com backoff 2/4/8s pra erros transientes (connection reset, 5xx,
         # rate limit). Descoberto em 2026-04-20 quando scan de 7 sets crashou
         # no 4º por ConnectionResetError no /blueprints/export.
         last_err: Optional[Exception] = None
         for attempt in range(3):
+            # v2.8: usa min(TIMEOUT, tempo restante até deadline) pra request timeout
+            req_timeout = TIMEOUT
+            if deadline_ts is not None:
+                remaining = max(1.0, deadline_ts - time.monotonic())
+                req_timeout = min(TIMEOUT, remaining)
             try:
-                r = self.session.get(url, params=params, timeout=TIMEOUT)
+                r = self.session.get(url, params=params, timeout=req_timeout)
                 self._last_call = time.time()
                 if r.status_code == 429:
                     retry_after = int(r.headers.get("Retry-After", "5"))
                     log.warning(f"Rate limit CT, esperando {retry_after}s...")
-                    time.sleep(retry_after)
+                    if _sleep_capped(retry_after):
+                        raise TimeoutError(
+                            f"CT _get({path}): deadline excedida em sleep pós-429"
+                        )
                     continue
                 if 500 <= r.status_code < 600:
                     backoff = 2 ** attempt
                     log.warning(f"CT {r.status_code}, retry em {backoff}s...")
-                    time.sleep(backoff)
+                    if _sleep_capped(backoff):
+                        raise TimeoutError(
+                            f"CT _get({path}): deadline excedida em sleep pós-5xx"
+                        )
                     continue
                 r.raise_for_status()
                 return r.json()
@@ -483,7 +516,10 @@ class CardTraderClient:
                 last_err = e
                 backoff = 2 ** attempt
                 log.warning(f"CT {type(e).__name__}, retry em {backoff}s... ({attempt+1}/3)")
-                time.sleep(backoff)
+                if _sleep_capped(backoff):
+                    raise TimeoutError(
+                        f"CT _get({path}): deadline excedida em sleep pós-{type(e).__name__}"
+                    ) from e
         if last_err:
             raise last_err
         raise requests.ConnectionError("CT: esgotou 3 tentativas")
@@ -494,21 +530,25 @@ class CardTraderClient:
         # API retorna TODAS as expansões de TODOS os jogos; filtra por game_id
         return [e for e in data if e.get("game_id") == game_id]
 
-    def list_blueprints(self, expansion_id: int) -> list[dict]:
+    def list_blueprints(self, expansion_id: int, deadline_ts: Optional[float] = None) -> list[dict]:
         """Lista blueprints (cartas-molde) de uma expansão."""
         # Nota: /blueprints/export retorna tudo de uma vez; /blueprints paginado.
         # Usamos /blueprints/export por simplicidade.
-        return self._get("/blueprints/export", expansion_id=expansion_id)
+        return self._get("/blueprints/export", deadline_ts=deadline_ts, expansion_id=expansion_id)
 
-    def list_listings_by_blueprint(self, blueprint_id: int, language: str = "en") -> list[dict]:
+    def list_listings_by_blueprint(self, blueprint_id: int, language: str = "en",
+                                    deadline_ts: Optional[float] = None) -> list[dict]:
         """Lista TODAS as ofertas ativas para um blueprint."""
         return self._get("/marketplace/products",
+                         deadline_ts=deadline_ts,
                          blueprint_id=blueprint_id,
                          language=language)
 
-    def list_listings_by_expansion(self, expansion_id: int, language: str = "en") -> list[dict]:
+    def list_listings_by_expansion(self, expansion_id: int, language: str = "en",
+                                    deadline_ts: Optional[float] = None) -> list[dict]:
         """Lista TODAS as ofertas de uma expansão inteira (bem mais eficiente)."""
         data = self._get("/marketplace/products",
+                         deadline_ts=deadline_ts,
                          expansion_id=expansion_id,
                          language=language)
         # API retorna dict[blueprint_id, list[listing]] — flatten para list
@@ -1100,6 +1140,30 @@ class Scanner:
             base_eur = SHIPPING_EUR_PRIVATE
         return base_eur * self.eur_brl
 
+    def _check_set_timeout(self, set_start: float, exp_code: str, exp_name: str,
+                            stage: str) -> bool:
+        """Retorna True se set deve abortar. Loga + marca skip-list quando True.
+        v2.8 (Codex H2): chamado antes de cada call externa do set."""
+        if not self.per_set_timeout_s:
+            return False
+        elapsed = time.monotonic() - set_start
+        if elapsed > self.per_set_timeout_s:
+            log.error(
+                f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}) at stage='{stage}': "
+                f"{elapsed/60:.1f}min > {self.per_set_timeout_s/60:.1f}min limite. "
+                f"Abortando."
+            )
+            self.stats["expansions_timed_out"] += 1
+            try:
+                add_to_skip_list(
+                    exp_code,
+                    f"per_set_timeout_{int(self.per_set_timeout_s)}s_at_{stage}",
+                )
+            except Exception as e:
+                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {e}")
+            return True
+        return False
+
     def scan_expansion(self, expansion: dict) -> Iterator[Opportunity]:
         exp_id = expansion["id"]
         exp_code = expansion.get("code", "")
@@ -1107,15 +1171,57 @@ class Scanner:
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
+        # v2.8 (Codex H2): deadline absoluta (monotonic). Passada pra todas
+        # chamadas CT do set, então retries/429-sleeps respeitam o cap.
+        deadline_ts: Optional[float] = (
+            set_start + self.per_set_timeout_s if self.per_set_timeout_s else None
+        )
 
-        # Carrega blueprints da expansão (indexa para O(1) lookup)
-        blueprints = self.ct.list_blueprints(exp_id)
+        # v2.8: check ANTES de blueprints (cobre o caso de set já estourado
+        # por algum estado externo, embora improvável aqui — set_start é now)
+        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_blueprints"):
+            return
+
+        # Carrega blueprints da expansão (indexa para O(1) lookup).
+        # v2.8: deadline propaga pra _get → retries respeitam cap.
+        try:
+            blueprints = self.ct.list_blueprints(exp_id, deadline_ts=deadline_ts)
+        except TimeoutError as e:
+            log.error(f"  ⏱️  CT blueprints timeout para {exp_code}: {e}")
+            self.stats["expansions_timed_out"] += 1
+            try:
+                add_to_skip_list(
+                    exp_code,
+                    f"ct_blueprints_timeout_{int(self.per_set_timeout_s or 0)}s",
+                )
+            except Exception as ee:
+                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            return
         bp_index = {bp["id"]: bp for bp in blueprints}
         log.info(f"  {len(blueprints)} blueprints carregados")
 
+        # v2.8: check entre blueprints e listings — se blueprints foi rápido
+        # mas o set já consumiu o orçamento (improvável p/ 1 call), abortar
+        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_listings"):
+            return
+
         # Puxa todas listings EN da expansão de uma vez (muito + eficiente que
-        # 1 chamada por blueprint — economiza de 400+ calls para 1)
-        raw_listings = self.ct.list_listings_by_expansion(exp_id, language=LANGUAGE_FILTER)
+        # 1 chamada por blueprint — economiza de 400+ calls para 1).
+        try:
+            raw_listings = self.ct.list_listings_by_expansion(
+                exp_id, language=LANGUAGE_FILTER, deadline_ts=deadline_ts
+            )
+        except TimeoutError as e:
+            log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
+            self.stats["expansions_timed_out"] += 1
+            try:
+                add_to_skip_list(
+                    exp_code,
+                    f"ct_listings_timeout_{int(self.per_set_timeout_s or 0)}s",
+                )
+            except Exception as ee:
+                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            return
         self.stats["listings_fetched"] += len(raw_listings)
         log.info(f"  {len(raw_listings)} listings EN encontrados")
 
