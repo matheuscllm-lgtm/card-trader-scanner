@@ -110,14 +110,23 @@ from openpyxl.utils import get_column_letter
 # Console Windows é cp1252 por padrão e quebra em → ≥ etc — força utf-8.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Log file path:
+#   - CT_LOG_FILE env var (preferido — set pelo wrapper PS antes de invocar)
+#   - default cardtrader_scanner.log no cwd
+# Por que via env e nao via --log-file CLI?
+#   logging.basicConfig roda no IMPORT (antes de argparse). Env var resolve
+#   o problema de ordem sem refactor maior.
+_LOG_FILE = os.environ.get("CT_LOG_FILE", "cardtrader_scanner.log")
+_log_handlers = [
+    logging.StreamHandler(sys.stdout),
+    logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+]
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("cardtrader_scanner.log", encoding="utf-8"),
-    ],
+    handlers=_log_handlers,
 )
 log = logging.getLogger(__name__)
 
@@ -1049,8 +1058,20 @@ class Scanner:
                 f"Skip-list ativa ({SKIP_LIST_FILE.name}): {len(skip_set)} sets serão pulados "
                 f"({', '.join(sorted(skip_set))}). Use --ignore-skip-list pra forçar."
             )
-        for exp in expansions:
+        # v2.5.1 (2026-05-16 night): heartbeat por set + total elapsed.
+        # Operador pediu detectabilidade de stall: agora cada set loga
+        # "ALIVE [HH:MM:SS] set N/TOTAL exp_code elapsed=Xmin" antes de scan_expansion.
+        # Também captura Exception genérica (não só HTTPError) pra não matar
+        # o loop inteiro se um set lançar algo inesperado.
+        run_start = time.monotonic()
+        total_sets = len(expansions)
+        for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
+            elapsed_min = (time.monotonic() - run_start) / 60.0
+            log.info(
+                f"ALIVE [{datetime.now().strftime('%H:%M:%S')}] set {idx}/{total_sets} "
+                f"({exp_code}) total_elapsed={elapsed_min:.1f}min"
+            )
             if exp_code in skip_set:
                 self.stats["expansions_skipped_by_list"] += 1
                 reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
@@ -1060,6 +1081,14 @@ class Scanner:
                 opps.extend(self.scan_expansion(exp))
             except requests.HTTPError as e:
                 log.error(f"Falha em {exp.get('name')}: {e}")
+                continue
+            except Exception as e:
+                # v2.5.1: nunca deixa exceção genérica matar o full scan
+                log.error(
+                    f"Erro inesperado em {exp.get('name')} ({exp_code}): "
+                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                )
+                add_to_skip_list(exp_code, f"unexpected_error_{type(e).__name__}")
                 continue
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
