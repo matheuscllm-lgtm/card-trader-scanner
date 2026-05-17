@@ -110,14 +110,23 @@ from openpyxl.utils import get_column_letter
 # Console Windows é cp1252 por padrão e quebra em → ≥ etc — força utf-8.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Log file path:
+#   - CT_LOG_FILE env var (preferido — set pelo wrapper PS antes de invocar)
+#   - default cardtrader_scanner.log no cwd
+# Por que via env e nao via --log-file CLI?
+#   logging.basicConfig roda no IMPORT (antes de argparse). Env var resolve
+#   o problema de ordem sem refactor maior.
+_LOG_FILE = os.environ.get("CT_LOG_FILE", "cardtrader_scanner.log")
+_log_handlers = [
+    logging.StreamHandler(sys.stdout),
+    logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+]
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("cardtrader_scanner.log", encoding="utf-8"),
-    ],
+    handlers=_log_handlers,
 )
 log = logging.getLogger(__name__)
 

@@ -15,6 +15,10 @@
 $env:PYTHONIOENCODING  = 'utf-8'
 $env:PYTHONUNBUFFERED  = '1'
 
+# CT_LOG_FILE: scanner adiciona FileHandler nativo logging em UTF-8 direto.
+# Evita pipe PS / cmd /c redirect buffering issues quando rodado via
+# Task Scheduler sem console parent. Definido apos $logFile abaixo.
+
 $base = 'C:\Users\mathe\Meu Drive\OBSIDIAN\01 - Projetos\TCG & Exporta' + [char]0xE7 + [char]0xE3 + 'o\CardTrader Scanner'
 $repo = $base
 if (-not (Test-Path $repo)) {
@@ -33,6 +37,9 @@ if (-not (Test-Path $codesFile)) {
     Write-Error "Codes file missing: $codesFile"
     exit 98
 }
+
+# Scanner usa CT_LOG_FILE env var pra adicionar FileHandler nativo
+$env:CT_LOG_FILE = $logFile
 
 Set-Location $repo
 
@@ -55,23 +62,14 @@ $header | Out-File -FilePath $logFile -Encoding utf8
 
 # Step 1: scanner com TODOS os codes via --sets
 #
-# LOG ENCODING: PS redirect (*>>, Tee-Object, Out-File) converte stdout
-# do Python pra UTF-16 (PS interno) e gera log garbled. Solucao: invocar
-# via cmd.exe que NAO faz Unicode conversion, redirect file direto:
-#   cmd /c "...python.exe ... > log 2>&1"
-# Como o Python ja reconfigura stdout pra UTF-8 (cardtrader_scanner.py
-# linha 112), o file fica UTF-8 limpo.
+# Scanner adiciona FileHandler nativo (UTF-8) ao logging quando ve a env
+# CT_LOG_FILE setada. NAO precisamos de redirect PS/cmd (que tinham
+# problema de buffering quando rodado via Task Scheduler sem console).
 #
-# Quoting: cmd /c precisa de aspas duplas DENTRO de outer aspas duplas.
-# Solucao: monta string com cmd-style quoting (cada arg com espaco
-# embrulhado em \"...\").
-
-function Quote-CmdArg([string]$a) {
-    if ($a -match '\s|"') { return '"' + ($a -replace '"', '""') + '"' }
-    return $a
-}
-
-$scannerArgsArr = @(
+# Invocacao: call operator `& $py @args` aceita arrays com espacos.
+# Stdout do scanner vai pra console virtual da Task (descartado) — o que
+# importa eh o FileHandler.
+$scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
     '--threshold', '0.30',
@@ -83,18 +81,10 @@ $scannerArgsArr = @(
     '--sets'
 ) + $setCodes
 
-$pyQuoted = Quote-CmdArg $py
-$logQuoted = Quote-CmdArg $logFile
-$argsJoined = ($scannerArgsArr | ForEach-Object { Quote-CmdArg $_ }) -join ' '
-
-# >> append, 2>&1 merge stderr->stdout. cmd /c roda em subprocess separado.
-$cmdLine = "$pyQuoted $argsJoined >> $logQuoted 2>&1"
-"--- cmd: $cmdLine" | Out-File -FilePath $logFile -Append -Encoding utf8
-
-& cmd.exe /c $cmdLine
+& $py @scannerArgs 2>&1 | Out-Null
 $scannerExit = $LASTEXITCODE
 
-"--- SCANNER exit=$scannerExit ---" | Out-File -FilePath $logFile -Append -Encoding utf8
+"--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Out-File -FilePath $logFile -Append -Encoding utf8
 
 if ($scannerExit -ne 0) {
     "SCANNER FAILED exit=$scannerExit" | Out-File -FilePath $logFile -Append -Encoding utf8
@@ -109,17 +99,31 @@ if (-not (Test-Path $rawOut)) {
     exit 2
 }
 
-$postArgsArr = @(
+# Postprocess: tambem usa CT_LOG_FILE (mesmo arquivo, appendado).
+# postprocess v2 nao tem FileHandler nativo — pra ele vamos redirect via
+# Start-Process com files temp + merge utf-8.
+$postArgs = @(
     '-u',
     'cardtrader_postprocess.py',
     '--input',  $rawOut,
     '--output', $finalOut
 )
-$postArgsJoined = ($postArgsArr | ForEach-Object { Quote-CmdArg $_ }) -join ' '
-$postCmdLine = "$pyQuoted $postArgsJoined >> $logQuoted 2>&1"
-"--- cmd: $postCmdLine" | Out-File -FilePath $logFile -Append -Encoding utf8
-
-& cmd.exe /c $postCmdLine
-$postExit = $LASTEXITCODE
+$postStdoutTmp = "$env:TEMP\ct_post_stdout_$PID.tmp"
+$postStderrTmp = "$env:TEMP\ct_post_stderr_$PID.tmp"
+$postProc = Start-Process -FilePath $py `
+    -ArgumentList $postArgs `
+    -Wait -PassThru -NoNewWindow `
+    -RedirectStandardOutput $postStdoutTmp `
+    -RedirectStandardError  $postStderrTmp
+$postExit = $postProc.ExitCode
+if (Test-Path $postStdoutTmp) {
+    Get-Content $postStdoutTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
+    Remove-Item $postStdoutTmp -Force
+}
+if (Test-Path $postStderrTmp) {
+    "--- postprocess STDERR ---" | Out-File -FilePath $logFile -Append -Encoding utf8
+    Get-Content $postStderrTmp -Encoding utf8 | Out-File -FilePath $logFile -Append -Encoding utf8
+    Remove-Item $postStderrTmp -Force
+}
 
 "=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$postExit ===" | Out-File -FilePath $logFile -Append -Encoding utf8
