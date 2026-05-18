@@ -615,6 +615,17 @@ class PokemonTcgIoProvider(PricingProvider):
         (set codes divergem entre CT e pokemontcg.io — ex: CT `pre` = ptcg
         `sv8pt5`). Na segunda tentativa fica nome+número, que é razoavelmente
         único pra singles.
+
+        v2.7 (bug-hunt 2026-05-18 Layer 1): strict set match no fallback.
+        Antes — quando `set.id:X` retornava 0, o fallback aceitava `totalCount==1`
+        sem checar set retornado. Isso fez Blastoise CT `clb` matchear
+        `base5-3` (Dark Blastoise Team Rocket, 1stEdition $383) e Mewtwo CT
+        `xybsp` matchear `rs:101/109` (Mewtwo ex Ruby & Sapphire $269) em vez
+        de `xyp:XY101` ($25). Custou ~96% de falsos positivos no weekly v2.6.
+        Fix: no fallback, exigir `card.set.id == set_code` (case-insensitive).
+        Mismatch → log INFO + skip pra próximo candidato. Trade-off: alguns
+        sets perdem cobertura (ex pupr→sm5 = Lusamine Promos Ultra Prism);
+        compensado por UNSUPPORTED_SETS no postprocess (Layer 3).
         """
         num_clean = clean_collector_number(number)
         safe_name = card_name.replace('"', '\\"')
@@ -622,15 +633,17 @@ class PokemonTcgIoProvider(PricingProvider):
         if num_clean:
             base_q += f" number:{num_clean}"
 
-        # Cada tupla: (query, ambiguous_prone). Ambiguous_prone=True significa
-        # que a query não restringe set, então múltiplos candidatos de sets
-        # diferentes podem voltar — preferimos rejeitar a pegar o primeiro.
+        # Cada tupla: (query, strict_set_check).
+        # - strict_set_check=False: query já tinha set.id na string → match
+        #   garantido por construção, retorna primeiro hit
+        # - strict_set_check=True: fallback sem set.id → precisa validar
+        #   `result.set.id == set_code` pra evitar matching cross-set
         queries: list[tuple[str, bool]] = []
         if set_code:
             queries.append((f'{base_q} set.id:{set_code}', False))
         queries.append((base_q, True))
 
-        for q, ambiguous_prone in queries:
+        for q, strict_set_check in queries:
             self._rate_limit()
             r = self.session.get(f"{POKEMONTCG_BASE}/cards",
                                  params={"q": q, "pageSize": 5}, timeout=TIMEOUT)
@@ -642,10 +655,20 @@ class PokemonTcgIoProvider(PricingProvider):
             total = resp.get("totalCount", len(results))
             if not results:
                 continue
-            if ambiguous_prone and total > 1:
-                # Ex.: "Mawile #246" existe em sm11 (2019) e me2pt5 (2026).
-                # Sem set.id pra desambiguar, não dá pra saber qual é a certa.
-                log.debug(f"match ambíguo ({total} candidatos) para '{q}' — rejeitado")
+            if strict_set_check:
+                # v2.7 Layer 1: rejeita match se set retornado ≠ set query.
+                # Não basta totalCount==1 — precisa o set bater literalmente.
+                expected = (set_code or "").lower()
+                for cand in results:
+                    cand_set = (cand.get("set") or {}).get("id", "").lower()
+                    if cand_set == expected:
+                        return cand
+                # Nenhum candidato bate o set_code do CT
+                first_set = (results[0].get("set") or {}).get("id", "")
+                log.info(
+                    f"set mismatch rejected: CT_set={set_code} ≠ api_set={first_set} "
+                    f"({total} candidatos, nenhum no set esperado) — '{base_q}'"
+                )
                 continue
             return results[0]
         return None
