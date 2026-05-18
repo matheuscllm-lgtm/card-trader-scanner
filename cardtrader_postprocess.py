@@ -68,6 +68,35 @@ HUB_FEE_RATE = 0.06
 # ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
 
+# ─── Unsupported sets filter (v2.2 Layer 3 bug-hunt 2026-05-18) ──────────────
+# Sets onde pokemontcg.io tem cobertura ruim OU os codes do CT divergem de
+# forma que mesmo com Layer 1 (strict set match) acabamos pegando o set
+# errado. Quando um listing CT vem de um destes sets, qualquer Decisão
+# automática vira REVISAR_MANUAL — operador valida preço TCG manual antes
+# de comprar.
+#
+# Lista canônica (operador 2026-05-18 pós-debug weekly v2.6):
+#   - Promo/legacy sets sem alias em pokemontcg.io: phs, pplf, pupr, xybsp
+#   - World Championship decks (não-tradeable na ptcg.io): wcd2004/06/07
+#   - Theme deck exclusives sem reverse map: deckexclusives, xytkn
+#   - Pokemon TCG Classic reprint set: clb (matched Team Rocket originals)
+#   - McDonald's promo sets: m24
+UNSUPPORTED_SETS = {
+    "clb", "wcd2004", "wcd2006", "wcd2007", "deckexclusives",
+    "xytkn", "m24", "phs", "pplf", "xybsp",
+}
+
+def _extract_set_code_from_label(set_label: str | None) -> str:
+    """Set label vem como 'Jungle (ju)' ou direto 'ju'. Extrai código entre
+    parênteses se presente, senão devolve label normalizado."""
+    if not set_label:
+        return ""
+    s = str(set_label).strip()
+    m = re.search(r"\(([^)]+)\)\s*$", s)
+    if m:
+        return m.group(1).strip().lower()
+    return s.lower()
+
 # ─── Chase Tier classification ────────────────────────────────────────────────
 # Hierarquia objetiva baseada em PokemonTCG official rarities. Substring-aware
 # (case-insensitive) pra tolerar variacoes "Special Illustration Rare" vs "SIR".
@@ -140,6 +169,14 @@ def classify_decision(row, cfg: DecisionConfig):
     profit = row.get("lucro_liq", 0)
     val = str(row.get("validation_status", "")).upper()
     is_tg = bool(row.get("trainer_gallery_potential_fp", False))
+
+    # v2.2 Layer 3 (bug-hunt 2026-05-18): unsupported sets → REVISAR forçado.
+    # Mesmo que Layer 1 (strict set match) tenha aceito o pricing, alguns
+    # sets têm cobertura ruim no pokemontcg.io OU divergem de forma
+    # silenciosa. Operador valida manual antes de comprar.
+    set_code = _extract_set_code_from_label(row.get("set_code"))
+    if set_code in UNSUPPORTED_SETS:
+        return "REVISAR", f"Set {set_code} sem cobertura confiável em pokemontcg.io — valide TCG manual"
 
     if pd.isna(nm) or pd.isna(profit):
         return "NAO", "Dados insuficientes (margem/lucro ausentes)"
