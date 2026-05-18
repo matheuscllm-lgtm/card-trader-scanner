@@ -949,6 +949,134 @@ def clear_skip_list() -> None:
         raise
 
 
+# ══════════════════════════════════════════════════════════════════════
+# CHECKPOINT WRITER — JSONL append-only crash-safe (v2.6, 2026-05-17)
+#
+# Por quê?
+#   Scanner v2.5 mantinha `opps: list[Opportunity]` em memória até
+#   `wb.save()` no fim do `scan()`. Crash mid-run (incidente 2026-05-17
+#   17:56→20:21, weekly local) perdia TUDO — 686 sets de dados.
+#
+# Modelo:
+#   - Append-only JSONL ao lado do XLSX final (.checkpoint.jsonl sidecar)
+#   - Flush imediato + fsync após cada SET — não bufferizar
+#   - Linha de header com args/total_sets, set_complete por set, e
+#     opportunity por deal encontrado (preserva ordem temporal real)
+#   - Last line parcial é descartável em parse (JSONL semantics)
+#
+# Recovery via scripts/recover_from_checkpoint.py: parseia JSONL,
+# reconstrói lista de Opportunity equivalente, reusa export_xlsx().
+# ══════════════════════════════════════════════════════════════════════
+class CheckpointWriter:
+    """Append-only JSONL writer crash-safe pra estado parcial do scan.
+
+    Uso:
+        cw = CheckpointWriter(path, every_n=10)   # every_n=0 desabilita
+        cw.write_header(args_dict, total_sets)
+        for ...:
+            for opp in scan_expansion(exp):
+                cw.write_opportunity(opp)
+            cw.write_set_complete(set_code, set_name, stats_dict, elapsed_s)
+        cw.close()
+
+    Atributo `every_n` é UM NO-OP semântico no v2.6 — todos os writes
+    fazem flush+fsync imediato (toda granularidade é per-set, não por
+    batch). Mantido pra compatibilidade futura caso adicionemos
+    bufferização opcional.
+    """
+
+    def __init__(self, path: Path, every_n: int = 10):
+        self.path = path
+        self.every_n = every_n
+        self.enabled = every_n > 0
+        self._fh = None
+        self._opps_written = 0
+        self._sets_written = 0
+        if self.enabled:
+            # Garante diretório existente
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Abre em modo append — preserva qualquer conteúdo de run anterior
+            # incompleto. Recovery script pode unir múltiplas runs se necessário.
+            self._fh = open(self.path, "a", encoding="utf-8")
+            log.info(
+                f"Checkpoint JSONL ativo: {self.path} (flush per-set, "
+                f"every_n={every_n})"
+            )
+
+    def _write(self, obj: dict) -> None:
+        """Append + flush + fsync. Síncrono. Falha silenciosa em log."""
+        if not self.enabled or self._fh is None:
+            return
+        try:
+            self._fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            self._fh.flush()
+            os.fsync(self._fh.fileno())
+        except Exception as e:
+            # NUNCA mata o scan por falha de checkpoint. Loga + continua.
+            log.warning(f"Checkpoint write falhou ({obj.get('_type', '?')}): {e}")
+
+    def write_header(self, args_dict: dict, total_sets: int) -> None:
+        if not self.enabled:
+            return
+        self._write({
+            "_type": "scan_header",
+            "stamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "args": args_dict,
+            "total_sets": total_sets,
+        })
+
+    def write_opportunity(self, opp: "Opportunity") -> None:
+        if not self.enabled:
+            return
+        # asdict() converte Opportunity+Listing nested em dict serializável.
+        # Adiciona _type + denormaliza campos críticos pro topo (set_code,
+        # blueprint_id, name) — facilita parse no recovery script sem precisar
+        # entrar no nested listing.
+        d = asdict(opp)
+        d["_type"] = "opportunity"
+        d["set_code"] = opp.listing.set_code
+        d["blueprint_id"] = opp.listing.blueprint_id
+        d["name"] = opp.listing.card_name
+        self._write(d)
+        self._opps_written += 1
+
+    def write_set_complete(self, set_code: str, set_name: str,
+                            per_set_stats: dict, elapsed_s: float) -> None:
+        if not self.enabled:
+            return
+        self._write({
+            "_type": "set_complete",
+            "set_code": set_code,
+            "set_name": set_name,
+            "blueprints": per_set_stats.get("blueprints", 0),
+            "filtered": per_set_stats.get("filtered", 0),
+            "priced": per_set_stats.get("priced", 0),
+            "opps_found": per_set_stats.get("opps_found", 0),
+            "elapsed_s": round(elapsed_s, 2),
+        })
+        self._sets_written += 1
+
+    def write_scan_complete(self, total_opps: int, total_elapsed_s: float) -> None:
+        if not self.enabled:
+            return
+        self._write({
+            "_type": "scan_complete",
+            "stamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "total_opps": total_opps,
+            "total_elapsed_s": round(total_elapsed_s, 2),
+            "sets_written": self._sets_written,
+            "opps_written": self._opps_written,
+        })
+
+    def close(self) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            self._fh = None
+
+
 class Scanner:
     def __init__(self, ct: CardTraderClient, pricing: PricingProvider, cache: Cache,
                  threshold: float = MARGIN_THRESHOLD,
@@ -1353,7 +1481,8 @@ class Scanner:
 
         self.stats["expansions_scanned"] += 1
 
-    def scan(self, expansions: list[dict]) -> list[Opportunity]:
+    def scan(self, expansions: list[dict],
+             checkpoint: Optional["CheckpointWriter"] = None) -> list[Opportunity]:
         opps: list[Opportunity] = []
         # v2.4: carrega skip-list (sets que estouraram timeout em runs anteriores)
         skip_data = load_skip_list() if not self.ignore_skip_list else {"skipped": [], "reasons": {}}
@@ -1382,10 +1511,24 @@ class Scanner:
                 reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
                 log.warning(f"⏭️  Pulando {exp.get('name')} ({exp_code}) — skip-list (motivo: {reason})")
                 continue
+            # v2.6 (2026-05-17): snapshot per-set stats antes do scan_expansion
+            # pra calcular DIFFs (self.stats é cumulativo). Permite registrar
+            # blueprints/filtered/priced/opps_found per set no checkpoint JSONL.
+            stats_pre = dict(self.stats) if checkpoint and checkpoint.enabled else None
+            set_start = time.monotonic()
+            opps_pre_count = len(opps)
             try:
-                opps.extend(self.scan_expansion(exp))
+                # v2.6: itera o generator e escreve cada Opportunity no checkpoint
+                # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
+                # — esperar o generator esgotar dava melhor desempenho mas perdia
+                # tudo em crash mid-set. Agora: live append-only.
+                for opp in self.scan_expansion(exp):
+                    opps.append(opp)
+                    if checkpoint:
+                        checkpoint.write_opportunity(opp)
             except requests.HTTPError as e:
                 log.error(f"Falha em {exp.get('name')}: {e}")
+                # Não emite set_complete em falha — recovery vai mostrar lacuna
                 continue
             except Exception as e:
                 # v2.5.1: nunca deixa exceção genérica matar o full scan
@@ -1395,6 +1538,20 @@ class Scanner:
                 )
                 add_to_skip_list(exp_code, f"unexpected_error_{type(e).__name__}")
                 continue
+            # v2.6: set completou sem exception → emite set_complete com DIFFs
+            if checkpoint and checkpoint.enabled and stats_pre is not None:
+                per_set_stats = {
+                    "blueprints": 0,  # sem stat agregado de blueprints; deixar 0
+                    "filtered": self.stats.get("listings_after_filters", 0) - stats_pre.get("listings_after_filters", 0),
+                    "priced": self.stats.get("tcg_price_found", 0) - stats_pre.get("tcg_price_found", 0),
+                    "opps_found": len(opps) - opps_pre_count,
+                }
+                checkpoint.write_set_complete(
+                    set_code=exp_code,
+                    set_name=exp.get("name", ""),
+                    per_set_stats=per_set_stats,
+                    elapsed_s=time.monotonic() - set_start,
+                )
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
         return opps
@@ -1693,6 +1850,13 @@ def parse_args():
                    help="v2.4: ignora scanner_skip_list.json (retenta sets que travaram em runs anteriores).")
     p.add_argument("--clear-skip-list", action="store_true",
                    help="v2.4: apaga scanner_skip_list.json antes de rodar (reset total).")
+    # v2.6 (2026-05-17): partial JSONL checkpoint crash-recovery
+    p.add_argument("--checkpoint-every", type=int, default=10,
+                   help=("v2.6: emite checkpoint JSONL append-only a cada N sets "
+                         "(default 10). 0 = desativado. Path: "
+                         "<output>.checkpoint.jsonl sidecar. Crash mid-run não "
+                         "perde mais dados — `scripts/recover_from_checkpoint.py "
+                         "--checkpoint <path>` regenera XLSX equivalente."))
     return p.parse_args()
 
 
@@ -1792,9 +1956,26 @@ def main():
         ignore_skip_list=args.ignore_skip_list,
     )
 
+    # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar
+    out_path = Path(args.output) if args.output else (
+        SCRIPT_DIR / f"cardtrader_scan_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    )
+    checkpoint_path = out_path.with_suffix(out_path.suffix + ".checkpoint.jsonl")
+    checkpoint = CheckpointWriter(checkpoint_path, every_n=args.checkpoint_every)
+    if checkpoint.enabled:
+        # Header com args dict pra reprodutibilidade no recovery
+        checkpoint.write_header(vars(args), total_sets=len(expansions))
+
     t0 = time.time()
-    opps = scanner.scan(expansions)
+    try:
+        opps = scanner.scan(expansions, checkpoint=checkpoint)
+    finally:
+        # Flush + close mesmo em exception. fsync já roda per-write.
+        pass
     dt = time.time() - t0
+    if checkpoint.enabled:
+        checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
+        checkpoint.close()
     log.info(f"Scan completo em {dt:.1f}s — {len(opps)} oportunidades ≥ {args.threshold:.0%}")
     log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
 
@@ -1829,10 +2010,8 @@ def main():
         # quando houve validação, não só quando min_net_margin > 0.
         opps.sort(key=lambda o: o.real_net_margin_pct or -999, reverse=True)
 
-    # Export
-    out_path = Path(args.output) if args.output else (
-        SCRIPT_DIR / f"cardtrader_scan_{datetime.now():%Y%m%d_%H%M}.xlsx"
-    )
+    # Export — out_path já resolvido acima (v2.6 fix: precisa antes do scan
+    # pra calcular .checkpoint.jsonl sidecar)
     export_xlsx(opps, scanner.stats, out_path,
                 usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
                 threshold=args.threshold)
