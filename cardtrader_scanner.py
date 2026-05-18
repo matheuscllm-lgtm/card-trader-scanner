@@ -710,37 +710,56 @@ class PokemonTcgIoProvider(PricingProvider):
         if not tcg:
             return None
 
-        # Escolhe a variante relevante baseado no foil flag do listing CT.
-        # 2026-05-11 H2 fix: antes a priority era fixa em [holofoil, normal,
-        # reverseHolofoil, ...], independente do listing. Isso quebrava em
-        # commons Reverse Holo (priority pegava `normal.market` quando o
-        # listing era RH, gerando margem aparente errada).
-        # - foil=True (listing CT é foil): pode ser holofoil de rare ou
-        #   reverseHolofoil de common. Tenta holofoil primeiro (rares só
-        #   têm essa variante), depois reverseHolofoil (commons RH), depois
-        #   normal como fallback.
-        # - foil=False: prioriza normal (versão não-foil), depois holofoil
-        #   (caso o card seja só holo no DB), depois reverseHolofoil.
-        if foil:
-            priority = ["holofoil", "reverseHolofoil", "normal",
-                        "1stEditionHolofoil", "unlimitedHolofoil"]
-        else:
-            priority = ["normal", "holofoil", "reverseHolofoil",
-                        "1stEditionHolofoil", "unlimitedHolofoil"]
+        # v2.7 Layer 2 (bug-hunt 2026-05-18): variant priority canônica.
+        #
+        # Pre-fix (H2 v2.2 foil-aware): priority lists incluíam
+        # `1stEditionHolofoil` e `unlimitedHolofoil` como fallback. Em sets
+        # vintage (Jungle, Fossil, Base) onde TCGPlayer carrega apenas as
+        # variantes `1stEditionHolofoil` + `unlimitedHolofoil`, a priority
+        # caía no `1stEditionHolofoil` ($168 Vaporeon Jungle) em vez do
+        # `unlimitedHolofoil` ($52). Mesmo padrão em Blastoise Team Rocket
+        # base5-3 ($383 1stEd Dark Blastoise). 1stEdition é variante
+        # raríssima de coleção, NM Unlimited é o que o operador trade.
+        #
+        # Canon (operador 2026-05-18):
+        #   Target: `holofoil.market` (Unlimited NM Holofoil)
+        #   Fallback ordem: `holofoil` → `normal` → `reverseHolofoil`
+        #     → `unlimitedHolofoil` (sets vintage onde TCGPlayer não usa
+        #     o nome `holofoil` por convenção histórica — ex Jungle Holo
+        #     aparece só como `unlimitedHolofoil`)
+        #   EXCLUIR: `1stEditionHolofoil`, `1stEditionNormal` (variantes
+        #     especiais, raros, inflados 3-10x)
+        #
+        # Foil-aware removido: o bug v2.6 nas variants demanda ordem fixa.
+        # `foil` continua no cache key pra evitar colisão NM vs Holo na
+        # camada de cache, mas não muda priority. Foil RH commons sem
+        # `reverseHolofoil.market` retornam None — preferível a inflar
+        # via `1stEditionHolofoil`.
+        PRIORITY = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
+        EXCLUDED = {"1stEditionHolofoil", "1stEditionNormal"}
         chosen = None
-        for variant in priority:
+        chosen_variant = None
+        for variant in PRIORITY:
+            if variant in EXCLUDED:
+                continue
             if variant in tcg and tcg[variant].get("market"):
                 chosen = tcg[variant]
+                chosen_variant = variant
                 break
         if not chosen:
-            # fallback: primeira variante disponível
-            for v in tcg.values():
-                if v.get("market"):
-                    chosen = v
-                    break
-        if not chosen:
+            # Nenhuma variante canônica → return None. Pre-fix tinha fallback
+            # "primeira variante disponível" que pegava 1stEdition em vintage.
+            available = [v for v in tcg.keys() if v not in EXCLUDED]
+            log.debug(
+                f"no canonical variant for {card_name} ({set_code}/{collector_number}): "
+                f"available={list(tcg.keys())} canonical_after_exclusion={available}"
+            )
             return None
 
+        log.debug(
+            f"variant chosen: {chosen_variant} for {card_name} "
+            f"({set_code}/{collector_number}) — market=${chosen.get('market')}"
+        )
         market = chosen.get("market") or 0.0
         low = chosen.get("low") or 0.0
         mid = chosen.get("mid") or 0.0
