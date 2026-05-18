@@ -4,6 +4,57 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-05-17 — Scanner v2.6 (partial JSONL checkpoint crash-recovery)
+
+Motivação: incidente weekly local 2026-05-17 17:56→20:21. Scanner crashou
+mid-run; 686 sets de dados ficaram in-memory e viraram pó. Output XLSX
+nunca chegou a `wb.save()`. Padrão estrutural: scanner v2.5 manteve
+`opps: list[Opportunity]` em memória até o fim do `scan()` antes de
+gravar XLSX. Single point of failure crítico em runs longas (full weekly
+~5-6h, 832 expansões).
+
+### Scanner
+
+- **NOVO:** classe `CheckpointWriter` (append-only JSONL writer)
+- **NOVO:** flag `--checkpoint-every N` (default 10, 0 desativa)
+- Path sidecar: `<output_path>.checkpoint.jsonl` (próximo do XLSX final)
+- Formato linha-a-linha: `scan_header` + `set_complete` + `opportunity`
+  + `scan_complete`. Última linha incompleta é descartável em parse.
+- Write protocol: `f.write() + f.flush() + os.fsync(f.fileno())` síncrono
+  per-set. Garante write-through ao disco antes de continuar próximo set.
+- `scan()` agora itera o generator de `scan_expansion()` e grava cada
+  Opportunity NO MOMENTO do yield (antes era `opps.extend(generator)` que
+  esperava generator esgotar — perdia tudo em crash mid-set).
+- `scan_complete` ausente no JSONL = sinal de crash; recovery flagueia.
+
+### Scripts
+
+- **NOVO:** `scripts/recover_from_checkpoint.py` — standalone CLI que
+  parseia `.checkpoint.jsonl`, reconstrói `Opportunity` + `Listing`,
+  reusa `export_xlsx()` do scanner module pra gerar XLSX equivalente.
+  Flags: `--checkpoint`, `--output`, `--min-net-margin`. Skipa linhas
+  inválidas com warning. Loga "Recovered N opportunities across M sets".
+- **NOVO:** `scripts/test_checkpoint_crash_recovery.py` — regression
+  suite com 18 asserts cobrindo: writer order, recovery clean checkpoint,
+  recovery com linha truncada (simula crash), recovery de arquivo vazio.
+  Roda em ~2s sem network call.
+
+### Smoke test validado
+
+`--sets sfa --threshold 0.30 --validate-top 5 --checkpoint-every 1`:
+checkpoint sidecar com 5 linhas (header + 2 opps + set_complete + scan_complete),
+recovery regenera XLSX com mesmas 2 opportunities (margens scan-time
+idênticas; validation per-blueprint requer re-scan pq roda após o write).
+
+### Limitações conhecidas / v2.7 candidates
+
+- FX rates (usd_brl/eur_brl) não estão no header → recovery grava 0.
+  Mover pra header é trivial (next pass).
+- Validation per-blueprint state não está no checkpoint pois roda DEPOIS
+  do scan loop. Pra preservar, mover write_opportunity post-validation
+  ou emitir update-events. Tradeoff: per-set crash safety vs validated
+  state preservation. Default escolha = crash safety > validated.
+
 ## 2026-05-16 — Release v2.0 (postprocess simplificado + scanner v2.5)
 
 Decisão arquitetural do operador 2026-05-16: "objetivo CT é cartas mais

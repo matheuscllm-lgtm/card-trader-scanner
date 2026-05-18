@@ -28,6 +28,8 @@ cardtrader_relatorio_*.xlsx
 cardtrader_scanner.log
 scan_*.log
 *.log
+# v2.6 checkpoint sidecars (crash-recovery JSONL — data, não código)
+*.checkpoint.jsonl
 
 # MYP / merge tool outputs (sibling tools)
 merge_*.xlsx
