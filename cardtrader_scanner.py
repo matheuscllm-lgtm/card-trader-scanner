@@ -608,6 +608,45 @@ class PokemonTcgIoProvider(PricingProvider):
             time.sleep(self.delay - elapsed)
         self._last_call = time.time()
 
+    # v2.7 Layer 1.5 (bug-hunt 2026-05-18): alias map CT → pokemontcg.io.
+    # CT usa códigos curtos derivados de TCGPlayer/comunidade; pokemontcg.io
+    # usa codes oficiais Wizards/Nintendo da era. Sem alias, Layer 1 (strict
+    # set match) rejeita TODA Jungle/Fossil/Neo/Gym/Wizards-era porque
+    # ct `ju` ≠ ptcg `base2`. Estende set query no _search: além do código
+    # CT, tentamos os aliases listados. Match em qualquer um aceita.
+    #
+    # Lista derivada do README + probes 2026-05-18. Não exhaustivo, foca
+    # sets que apareceram no weekly v2.6 + vintage Wizards essenciais.
+    SET_ALIAS_TO_PTCG = {
+        # Wizards original era
+        "ju": ["base2"],          # Jungle
+        "fo": ["base3"],          # Fossil
+        "b2": ["base4"],          # Base Set 2
+        "tr": ["base5"],          # Team Rocket
+        "g1": ["gym1"],           # Gym Heroes
+        "g2": ["gym2"],           # Gym Challenge
+        "n1": ["neo1"],           # Neo Genesis
+        "n2": ["neo2"],           # Neo Discovery
+        "n3": ["neo3"],           # Neo Revelation
+        "n4": ["neo4"],           # Neo Destiny
+        "lc": ["base6"],          # Legendary Collection
+        # E-Card era
+        "ex": ["ecard1"],         # Expedition Base Set
+        "aq": ["ecard2"],         # Aquapolis
+        "skg": ["ecard3"],        # Skyridge
+        # EX series (Ruby & Sapphire era)
+        "dr": ["ex3"],            # EX Dragon
+        # Sun & Moon Promos
+        "pupr": ["sm5"],          # Ultra Prism Promos → SM Ultra Prism
+        # XY Promos
+        "xybsp": ["xyp"],         # XY Black Star Promos
+        # Scarlet & Violet era
+        "pre": ["sv8pt5"],        # Prismatic Evolutions
+        "twm": ["sv6"],           # Twilight Masquerade
+        "scr": ["sv7"],           # Stellar Crown
+        "ssp": ["sv8"],           # Surging Sparks
+    }
+
     def _search(self, card_name: str, set_code: str, number: str) -> Optional[dict]:
         """Busca carta e retorna o primeiro match.
         Estratégia em cascata: primeiro tenta com set.id (mais específico, menor
@@ -633,14 +672,22 @@ class PokemonTcgIoProvider(PricingProvider):
         if num_clean:
             base_q += f" number:{num_clean}"
 
+        # v2.7 Layer 1.5: monta lista de set_ids aceitos (canonical + aliases).
+        # `expected_sets` é o conjunto de set.ids que satisfazem "set match".
+        # Inclui o CT code original + qualquer alias mapeado em
+        # SET_ALIAS_TO_PTCG. Sem alias → só o code CT (comportamento Layer 1
+        # puro). Com alias → varia: pra `ju` aceita {`ju`, `base2`}.
+        ct_code = (set_code or "").lower()
+        expected_sets: set[str] = {ct_code} if ct_code else set()
+        for alias in self.SET_ALIAS_TO_PTCG.get(ct_code, []):
+            expected_sets.add(alias.lower())
+
         # Cada tupla: (query, strict_set_check).
-        # - strict_set_check=False: query já tinha set.id na string → match
-        #   garantido por construção, retorna primeiro hit
-        # - strict_set_check=True: fallback sem set.id → precisa validar
-        #   `result.set.id == set_code` pra evitar matching cross-set
+        # Tentamos uma query por set candidato (CT code + cada alias).
+        # strict_set_check só é necessário no fallback sem set.id.
         queries: list[tuple[str, bool]] = []
-        if set_code:
-            queries.append((f'{base_q} set.id:{set_code}', False))
+        for sid in sorted(expected_sets):  # determinism
+            queries.append((f'{base_q} set.id:{sid}', False))
         queries.append((base_q, True))
 
         for q, strict_set_check in queries:
@@ -656,18 +703,17 @@ class PokemonTcgIoProvider(PricingProvider):
             if not results:
                 continue
             if strict_set_check:
-                # v2.7 Layer 1: rejeita match se set retornado ≠ set query.
-                # Não basta totalCount==1 — precisa o set bater literalmente.
-                expected = (set_code or "").lower()
+                # v2.7 Layer 1: rejeita match se set retornado ∉ expected_sets.
+                # Não basta totalCount==1 — precisa bater algum set esperado.
                 for cand in results:
                     cand_set = (cand.get("set") or {}).get("id", "").lower()
-                    if cand_set == expected:
+                    if cand_set in expected_sets:
                         return cand
-                # Nenhum candidato bate o set_code do CT
+                # Nenhum candidato bate o set_code do CT ou alias
                 first_set = (results[0].get("set") or {}).get("id", "")
                 log.info(
-                    f"set mismatch rejected: CT_set={set_code} ≠ api_set={first_set} "
-                    f"({total} candidatos, nenhum no set esperado) — '{base_q}'"
+                    f"set mismatch rejected: CT_set={set_code} (esperado {sorted(expected_sets)}) "
+                    f"≠ api_set={first_set} ({total} candidatos) — '{base_q}'"
                 )
                 continue
             return results[0]
