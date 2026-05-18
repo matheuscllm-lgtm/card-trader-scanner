@@ -92,7 +92,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -919,7 +919,7 @@ def add_to_skip_list(exp_code: str, reason: str) -> None:
             payload = {
                 "skipped": sorted(skipped),
                 "reasons": reasons,
-                "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
             _atomic_write_skip_file(payload)
             log.warning(f"  Adicionado à skip-list: {exp_code} (motivo: {reason})")
