@@ -302,6 +302,12 @@ class Opportunity:
     real_lucro_brl: Optional[float] = None
     markup_pct: Optional[float] = None
     markup_tier: Optional[str] = None
+    # v2.7.1 (2026-05-18): URL TCGPlayer da carta exata matched no pokemontcg.io.
+    # Vem de `card.tcgplayer.url` na response da API. Pra operador validar a
+    # variante correta (ex: Lusamine 1st Place vs normal) antes de comprar.
+    # Pode ser None quando: provider != pokemontcg, card sem entry TCGPlayer,
+    # ou cobertura ruim da fonte.
+    tcg_url: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -373,15 +379,25 @@ class Cache:
 
     def get_price(self, key: str) -> Optional[dict]:
         row = self.db.execute(
-            "SELECT market_usd, low_usd, mid_usd, fetched_at FROM price_cache WHERE key = ?",
+            "SELECT market_usd, low_usd, mid_usd, raw_json, fetched_at FROM price_cache WHERE key = ?",
             (key,),
         ).fetchone()
         if not row:
             return None
-        market, low, mid, fetched_at = row
+        market, low, mid, raw_json, fetched_at = row
         if datetime.fromisoformat(fetched_at) < datetime.now() - PRICE_TTL:
             return None
-        return {"market_usd": market, "low_usd": low, "mid_usd": mid}
+        # v2.7.1: extrai `tcgplayer.url` do raw_json pra hidratar Opportunity
+        # mesmo em cache hit (sem refazer _search()). raw_json é o card dict
+        # original do pokemontcg.io. Falha de parse = url None (não crash).
+        tcg_url = None
+        try:
+            if raw_json:
+                raw = json.loads(raw_json)
+                tcg_url = (raw.get("tcgplayer") or {}).get("url")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            tcg_url = None
+        return {"market_usd": market, "low_usd": low, "mid_usd": mid, "tcg_url": tcg_url}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -566,6 +582,13 @@ class CardTraderClient:
 # ══════════════════════════════════════════════════════════════════════
 class PricingProvider(ABC):
     name: str = "base"
+    # v2.7.1 (2026-05-18): URL TCGPlayer da última carta consultada com sucesso.
+    # Provider sobrescreve em cada market_price_usd() bem-sucedido (set via
+    # `self.last_tcg_url = ...`). scan_expansion lê após cada chamada e
+    # propaga pra Opportunity.tcg_url. Reset pra None em cada chamada
+    # (qualquer cache hit + lookup miss reseta) pra evitar carry-over entre
+    # cards diferentes.
+    last_tcg_url: Optional[str] = None
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
@@ -722,16 +745,24 @@ class PokemonTcgIoProvider(PricingProvider):
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False) -> Optional[float]:
+        # v2.7.1: reset last_tcg_url no início de cada chamada pra evitar
+        # carry-over do card anterior caso este falhe sem set explícito.
+        self.last_tcg_url = None
         # Cache inclui foil pra evitar colisão entre versão normal e RH
         # do mesmo card (2026-05-11 H2 fix).
         cache_key = f"pokemontcg:{set_code}:{collector_number}:{card_name}:foil={foil}"
         cached = self.cache.get_price(cache_key)
         if cached:
+            self.last_tcg_url = cached.get("tcg_url")
             return cached["market_usd"]
 
         card = self._search(card_name, set_code, collector_number)
         if not card:
             return None
+        # v2.7.1: captura tcgplayer.url da response (pode ser ausente em alguns
+        # cards — set defensivo). Setado ANTES de validações restantes pra
+        # garantir que sempre que retornarmos um preço, a url esteja disponível.
+        self.last_tcg_url = (card.get("tcgplayer") or {}).get("url")
 
         # M5 fix (2026-05-12): instrumentação supranumerários.
         # Detecta quando o match retornado é SIR/SAR/HR/Gold/Rainbow (collector
@@ -1556,6 +1587,9 @@ class Scanner:
             net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
 
             self.stats["opportunities_found"] += 1
+            # v2.7.1: tcg_url vem do provider (last call). Pode ser None se
+            # provider != pokemontcg ou se a card não tem entry TCGPlayer.
+            tcg_url = getattr(self.pricing, "last_tcg_url", None)
             yield Opportunity(
                 listing=l,
                 tcg_market_usd=tcg_market,
@@ -1565,6 +1599,7 @@ class Scanner:
                 margin_brl=tcg_brl - custo_brl,
                 estimated_shipping_brl=shipping_brl,
                 net_margin_pct=net_margin,
+                tcg_url=tcg_url,
             )
 
         self.stats["expansions_scanned"] += 1
@@ -1777,7 +1812,11 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         "Margem % (scan)", "Margem % REAL", "Net Margin % (scan)", "Net Margin % REAL",
         "Lucro R$ REAL", "Frete Est. R$",
         "Qtd", "Foil", "Seller", "Tipo Seller", "Hub",
-        "Link CardTrader", "Scanned At",
+        # v2.7.1 (2026-05-18): Link TCG (col AA) — URL TCGPlayer da carta exata
+        # matched no pokemontcg.io. Operador valida variante (ex Lusamine 1st Place
+        # vs normal) antes de comprar. Vazio quando provider != pokemontcg ou
+        # card sem entry TCGPlayer (Promos antigos comum).
+        "Link CardTrader", "Link TCG", "Scanned At",
     ]
     ws.append(headers)
 
@@ -1810,6 +1849,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             l.seller_user_type,
             "Yes" if l.seller_can_sell_via_hub else "No",
             l.cardtrader_url,
+            opp.tcg_url or "",
             opp.scanned_at,
         ])
 
@@ -1833,7 +1873,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         12, 12, 12, 16,           # N-Q: margem scan/real/net scan/net REAL
         12, 10,                   # R-S: lucro REAL / frete
         6, 6, 20, 14, 6,          # T-X: qtd/foil/seller/tipo/hub
-        40, 18,                   # Y-Z: link/scanned_at
+        40, 40, 18,               # Y-AA: link CT / link TCG / scanned_at
     ]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -1854,6 +1894,18 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         row[16].number_format = "0.00%"         # Q: Net REAL
         row[17].number_format = '"R$"#,##0.00'  # R: Lucro R$ REAL
         row[18].number_format = '"R$"#,##0.00'  # S: Frete R$
+        # v2.7.1: hyperlink ativo em Link CardTrader + Link TCG.
+        # Headers atuais (28 cols): ... "Hub"(25), "Link CardTrader"(26),
+        # "Link TCG"(27), "Scanned At"(28). 0-based: 25=Link CT, 26=Link TCG.
+        # Apenas quando célula tem URL não-vazia.
+        link_font = Font(color="0563C1", underline="single")
+        for col_0 in (25, 26):  # 0-based: Link CardTrader, Link TCG
+            if col_0 < len(row):
+                cell = row[col_0]
+                v = cell.value
+                if isinstance(v, str) and v.startswith("http"):
+                    cell.hyperlink = v
+                    cell.font = link_font
 
     # Freeze header + filtro
     ws.freeze_panes = "A2"

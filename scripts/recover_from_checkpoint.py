@@ -175,6 +175,9 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         real_lucro_brl=d.get("real_lucro_brl"),
         markup_pct=d.get("markup_pct"),
         markup_tier=d.get("markup_tier"),
+        # v2.7.1 (2026-05-18): backward-compat com checkpoints pré-v2.7.1.
+        # Get com default None — checkpoints antigos não tinham este campo.
+        tcg_url=d.get("tcg_url"),
     )
 
 
