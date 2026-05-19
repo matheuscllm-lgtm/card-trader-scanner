@@ -25,6 +25,16 @@ v2.1 (bug-hunt 2026-05-17):
   `Total deals exportados` (COMPRA + REVISAR). Antes o label estava
   errado — número era de deals, não listings totais.
 
+v2.3 Layer 5 (bug-hunt 2026-05-18):
+- ALPHA_SUFFIX_RE detecta `153a`, `022a`, `156b` no collector number.
+  Tipicamente promo/League variant (1st/2nd/3rd/4th Place ou Prerelease)
+  cega pra pokemontcg.io. classify_decision retorna REVISAR antes de
+  qualquer outro check.
+- Pareado com Scanner v2.8 Layer 4 (foil-aware variant disambiguation
+  no provider) — cobre as 2 classes de falsos positivos de variante
+  detectados na validação manual do weekly v2.6 (Pichu/Tyranitar e
+  Lusamine).
+
 Decisao mecanica (thresholds configuraveis via CLI):
   COMPRA:  net_margin >= 25% AND lucro_liq >= R$50 AND chase_tier in {TOP, MID}
            AND validation_status in {VALIDATED_REAL, VALIDATED_MARKUP}
@@ -67,6 +77,26 @@ HUB_FEE_RATE = 0.06
 
 # ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
+
+# ─── Alpha suffix filter (v2.3 Layer 5 — bug-hunt 2026-05-18) ────────────────
+# Cards com collector number `\d+[a-zA-Z]+` (ex `153a`, `022a`, `156b`) são
+# tipicamente variantes promo/league cegas pra pokemontcg.io:
+#   - "1st Place Pokemon League" / "2nd Place" / "3rd Place" / "4th Place"
+#   - Prerelease (alguns sets)
+#   - Staff variants (Champion's Festival, World Championships)
+# Pokemontcg.io agrega TODAS sob o número-base (ex `153`) com o preço da
+# variante mais cara → margem inflada 5-30× quando seller CT está vendendo
+# a promo barata. Caso histórico operador: Lusamine sm5/153a — scanner
+# pegou main set Lusamine ($160) mas seller CT vende 1st Place ($13.77).
+#
+# Estratégia: REVISAR forçado (operador valida via Link TCG → variant
+# selector visual). NÃO marcar NÃO automático pq alguns alpha suffixes
+# legítimos existem em sets vintage (Topps Movie, Black Star Promos
+# numerados como `TVR_1a`, etc — fora do escopo CT).
+#
+# NÃO confundir com TG##: TG## tem letras ANTES do número, então a regex
+# `^\d+[a-zA-Z]+` não casa. TG## fica com sua flag separada.
+ALPHA_SUFFIX_RE = re.compile(r'^\d+[a-zA-Z]+', re.IGNORECASE)
 
 # ─── Unsupported sets filter (v2.2 Layer 3 bug-hunt 2026-05-18) ──────────────
 # Sets onde pokemontcg.io tem cobertura ruim OU os codes do CT divergem de
@@ -169,6 +199,18 @@ def classify_decision(row, cfg: DecisionConfig):
     profit = row.get("lucro_liq", 0)
     val = str(row.get("validation_status", "")).upper()
     is_tg = bool(row.get("trainer_gallery_potential_fp", False))
+
+    # v2.3 Layer 5 (bug-hunt 2026-05-18): alpha-suffix detect (153a, 022a).
+    # Cards com sufixo alfanumérico no collector number são tipicamente
+    # promos/league (1st/2nd/3rd/4th Place, Prerelease) cegas pra pokemontcg.io.
+    # Operador validou em 2026-05-18: Lusamine sm5/153a — preço scanner $160
+    # vs preço real $13.77 (1st Place variant). REVISAR forçado.
+    card_num = str(row.get("card_number") or "").strip()
+    if ALPHA_SUFFIX_RE.match(card_num) and not TRAINER_GALLERY_RE.match(card_num):
+        return ("REVISAR",
+                f"Alpha suffix '{card_num}' — provável promo/League variant "
+                f"(1st/2nd/3rd/4th Place ou Prerelease); pokemontcg.io cega "
+                f"pra essas, valide via Link TCG antes")
 
     # v2.2 Layer 3 (bug-hunt 2026-05-18): unsupported sets → REVISAR forçado.
     # Mesmo que Layer 1 (strict set match) tenha aceito o pricing, alguns
