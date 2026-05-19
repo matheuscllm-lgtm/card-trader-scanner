@@ -308,6 +308,14 @@ class Opportunity:
     # Pode ser None quando: provider != pokemontcg, card sem entry TCGPlayer,
     # ou cobertura ruim da fonte.
     tcg_url: Optional[str] = None
+    # v2.8 Layer 4 (2026-05-18): variante TCGPlayer usada no cálculo de margem.
+    # Foil-aware disambiguation: listing CT foil → prioriza `holofoil`;
+    # listing CT non-foil → prioriza `reverseHolofoil` (default landing TCG
+    # pra 90% dos Holo Rare antigos). Sem essa coluna o operador não sabia
+    # se o preço scanner vinha de Holofoil ($224 Pichu ecard1/22) ou Reverse
+    # Holofoil ($50 mesma carta). Valores: "holofoil", "reverseHolofoil",
+    # "normal", "unlimitedHolofoil", "" (provider != pokemontcg ou sem variant).
+    price_variant_used: Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -390,14 +398,21 @@ class Cache:
         # v2.7.1: extrai `tcgplayer.url` do raw_json pra hidratar Opportunity
         # mesmo em cache hit (sem refazer _search()). raw_json é o card dict
         # original do pokemontcg.io. Falha de parse = url None (não crash).
+        # v2.8 Layer 4: também extrai `_variant_used` (gravado pelo provider
+        # no card dict antes de json.dumps). Cache hit antigo (pre-v2.8) não
+        # tem essa key → variant_used vira None, scanner persiste vazio.
         tcg_url = None
+        variant_used = None
         try:
             if raw_json:
                 raw = json.loads(raw_json)
                 tcg_url = (raw.get("tcgplayer") or {}).get("url")
+                variant_used = raw.get("_variant_used")
         except (json.JSONDecodeError, AttributeError, TypeError):
             tcg_url = None
-        return {"market_usd": market, "low_usd": low, "mid_usd": mid, "tcg_url": tcg_url}
+            variant_used = None
+        return {"market_usd": market, "low_usd": low, "mid_usd": mid,
+                "tcg_url": tcg_url, "variant_used": variant_used}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -589,6 +604,11 @@ class PricingProvider(ABC):
     # (qualquer cache hit + lookup miss reseta) pra evitar carry-over entre
     # cards diferentes.
     last_tcg_url: Optional[str] = None
+    # v2.8 Layer 4 (2026-05-18): variante TCGPlayer usada pra resolver o preço
+    # (`holofoil`, `reverseHolofoil`, `normal`, `unlimitedHolofoil`). Provider
+    # foil-aware sobrescreve a cada chamada. scan_expansion propaga pra
+    # Opportunity.price_variant_used. Reset pra None igual `last_tcg_url`.
+    last_variant_used: Optional[str] = None
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
@@ -747,13 +767,16 @@ class PokemonTcgIoProvider(PricingProvider):
                          foil: bool = False) -> Optional[float]:
         # v2.7.1: reset last_tcg_url no início de cada chamada pra evitar
         # carry-over do card anterior caso este falhe sem set explícito.
+        # v2.8 Layer 4: reset last_variant_used também.
         self.last_tcg_url = None
+        self.last_variant_used = None
         # Cache inclui foil pra evitar colisão entre versão normal e RH
         # do mesmo card (2026-05-11 H2 fix).
         cache_key = f"pokemontcg:{set_code}:{collector_number}:{card_name}:foil={foil}"
         cached = self.cache.get_price(cache_key)
         if cached:
             self.last_tcg_url = cached.get("tcg_url")
+            self.last_variant_used = cached.get("variant_used")
             return cached["market_usd"]
 
         card = self._search(card_name, set_code, collector_number)
@@ -787,33 +810,39 @@ class PokemonTcgIoProvider(PricingProvider):
         if not tcg:
             return None
 
-        # v2.7 Layer 2 (bug-hunt 2026-05-18): variant priority canônica.
+        # v2.8 Layer 4 (bug-hunt 2026-05-18): variant disambiguation foil-aware.
         #
-        # Pre-fix (H2 v2.2 foil-aware): priority lists incluíam
-        # `1stEditionHolofoil` e `unlimitedHolofoil` como fallback. Em sets
-        # vintage (Jungle, Fossil, Base) onde TCGPlayer carrega apenas as
-        # variantes `1stEditionHolofoil` + `unlimitedHolofoil`, a priority
-        # caía no `1stEditionHolofoil` ($168 Vaporeon Jungle) em vez do
-        # `unlimitedHolofoil` ($52). Mesmo padrão em Blastoise Team Rocket
-        # base5-3 ($383 1stEd Dark Blastoise). 1stEdition é variante
-        # raríssima de coleção, NM Unlimited é o que o operador trade.
+        # Histórico:
+        #   v2.7 Layer 2: priority fixa `holofoil → normal → reverseHolofoil
+        #     → unlimitedHolofoil`. Bug: pra Holo Rare antigas (Expedition,
+        #     EX Dragon, Aquapolis, Skyridge) o TCG Player Default Landing é
+        #     **Reverse Holofoil**, não Holofoil. Scanner pegava sempre
+        #     `holofoil` se existisse → Pichu Expedition #22 → $224.99 (Holo)
+        #     vs $50.41 (Reverse, default da página). Mesmo padrão Tyranitar
+        #     Aquapolis ($210 inflado vs $69.99 real).
         #
-        # Canon (operador 2026-05-18):
-        #   Target: `holofoil.market` (Unlimited NM Holofoil)
-        #   Fallback ordem: `holofoil` → `normal` → `reverseHolofoil`
-        #     → `unlimitedHolofoil` (sets vintage onde TCGPlayer não usa
-        #     o nome `holofoil` por convenção histórica — ex Jungle Holo
-        #     aparece só como `unlimitedHolofoil`)
-        #   EXCLUIR: `1stEditionHolofoil`, `1stEditionNormal` (variantes
-        #     especiais, raros, inflados 3-10x)
+        # v2.8 (operador 2026-05-18 pós-validação dos 10 weekly v2.6):
+        #   Se o listing CT é foil (`l.foil == True`):
+        #     priority: holofoil → unlimitedHolofoil → normal → reverseHolofoil
+        #     (versão metálica é a que o seller está vendendo)
+        #   Se o listing CT é non-foil (`l.foil == False`):
+        #     priority: reverseHolofoil → normal → holofoil → unlimitedHolofoil
+        #     (Reverse Holofoil é Default Landing em 90% dos Holo Rare
+        #     antigos; Holofoil só como último fallback)
+        #   Se foil é None (variant desconhecido): preserve comportamento v2.7.
         #
-        # Foil-aware removido: o bug v2.6 nas variants demanda ordem fixa.
-        # `foil` continua no cache key pra evitar colisão NM vs Holo na
-        # camada de cache, mas não muda priority. Foil RH commons sem
-        # `reverseHolofoil.market` retornam None — preferível a inflar
-        # via `1stEditionHolofoil`.
-        PRIORITY = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
+        # EXCLUIR sempre: `1stEditionHolofoil`, `1stEditionNormal` (variantes
+        # raras, inflam 3-10x; operador não vende 1st Ed).
         EXCLUDED = {"1stEditionHolofoil", "1stEditionNormal"}
+        if foil is True:
+            PRIORITY = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
+        elif foil is False:
+            PRIORITY = ["reverseHolofoil", "normal", "holofoil", "unlimitedHolofoil"]
+        else:
+            # Foil-flag ausente (cache miss antigo ou provider chamado direto).
+            # Preserve v2.7 Layer 2 priority.
+            PRIORITY = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
+
         chosen = None
         chosen_variant = None
         for variant in PRIORITY:
@@ -829,17 +858,26 @@ class PokemonTcgIoProvider(PricingProvider):
             available = [v for v in tcg.keys() if v not in EXCLUDED]
             log.debug(
                 f"no canonical variant for {card_name} ({set_code}/{collector_number}): "
-                f"available={list(tcg.keys())} canonical_after_exclusion={available}"
+                f"available={list(tcg.keys())} canonical_after_exclusion={available} foil={foil}"
             )
             return None
 
         log.debug(
             f"variant chosen: {chosen_variant} for {card_name} "
-            f"({set_code}/{collector_number}) — market=${chosen.get('market')}"
+            f"({set_code}/{collector_number}) foil={foil} — market=${chosen.get('market')}"
         )
+        # v2.8 Layer 4: expõe variante usada pra Opportunity.price_variant_used.
+        self.last_variant_used = chosen_variant
         market = chosen.get("market") or 0.0
         low = chosen.get("low") or 0.0
         mid = chosen.get("mid") or 0.0
+        # v2.8 Layer 4: persiste variante no cache (raw payload tem o card dict
+        # completo, mas extrair na leitura significa parsear JSON sempre.
+        # Anotar `_variant_used` direto no card antes de json.dumps é O(1)).
+        try:
+            card["_variant_used"] = chosen_variant
+        except (TypeError, AttributeError):
+            pass
         self.cache.set_price(cache_key, market, low, mid, card)
         return market
 
@@ -1590,6 +1628,8 @@ class Scanner:
             # v2.7.1: tcg_url vem do provider (last call). Pode ser None se
             # provider != pokemontcg ou se a card não tem entry TCGPlayer.
             tcg_url = getattr(self.pricing, "last_tcg_url", None)
+            # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
+            variant_used = getattr(self.pricing, "last_variant_used", None)
             yield Opportunity(
                 listing=l,
                 tcg_market_usd=tcg_market,
@@ -1600,6 +1640,7 @@ class Scanner:
                 estimated_shipping_brl=shipping_brl,
                 net_margin_pct=net_margin,
                 tcg_url=tcg_url,
+                price_variant_used=variant_used,
             )
 
         self.stats["expansions_scanned"] += 1
@@ -1811,8 +1852,14 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         "TCG Market (BRL)", "TCG Market (USD)",
         "Margem % (scan)", "Margem % REAL", "Net Margin % (scan)", "Net Margin % REAL",
         "Lucro R$ REAL", "Frete Est. R$",
-        "Qtd", "Foil", "Seller", "Tipo Seller", "Hub",
-        # v2.7.1 (2026-05-18): Link TCG (col AA) — URL TCGPlayer da carta exata
+        "Qtd", "Foil",
+        # v2.8 Layer 4 (2026-05-18): variante TCGPlayer usada no cálculo.
+        # Operador valida: foil-listing deve casar com `holofoil`; non-foil
+        # com `reverseHolofoil` na maioria dos Holo Rare antigos. Mismatch
+        # entre Foil="No" e Variant="holofoil" indica preço inflado.
+        "Variant",
+        "Seller", "Tipo Seller", "Hub",
+        # v2.7.1 (2026-05-18): Link TCG — URL TCGPlayer da carta exata
         # matched no pokemontcg.io. Operador valida variante (ex Lusamine 1st Place
         # vs normal) antes de comprar. Vazio quando provider != pokemontcg ou
         # card sem entry TCGPlayer (Promos antigos comum).
@@ -1845,6 +1892,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             round(opp.estimated_shipping_brl, 2),
             l.quantity,
             "Yes" if l.foil else "No",
+            opp.price_variant_used or "",
             l.seller_username,
             l.seller_user_type,
             "Yes" if l.seller_can_sell_via_hub else "No",
@@ -1865,6 +1913,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # Larguras de coluna ajustadas à leitura
+    # v2.8 Layer 4: nova coluna Variant inserida entre Foil e Seller
     widths = [
         28, 28, 8, 12, 8,         # A-E: card/set/num/cond/idioma
         12, 10, 12, 9, 18,        # F-J: scan/moeda/live/markup%/markup_tier
@@ -1872,8 +1921,10 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         14, 14,                   # L-M: TCG BRL/USD
         12, 12, 12, 16,           # N-Q: margem scan/real/net scan/net REAL
         12, 10,                   # R-S: lucro REAL / frete
-        6, 6, 20, 14, 6,          # T-X: qtd/foil/seller/tipo/hub
-        40, 40, 18,               # Y-AA: link CT / link TCG / scanned_at
+        6, 6,                     # T-U: qtd/foil
+        18,                       # V: variant (holofoil/reverseHolofoil/normal)
+        20, 14, 6,                # W-Y: seller/tipo/hub
+        40, 40, 18,               # Z-AB: link CT / link TCG / scanned_at
     ]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -1894,12 +1945,13 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         row[16].number_format = "0.00%"         # Q: Net REAL
         row[17].number_format = '"R$"#,##0.00'  # R: Lucro R$ REAL
         row[18].number_format = '"R$"#,##0.00'  # S: Frete R$
-        # v2.7.1: hyperlink ativo em Link CardTrader + Link TCG.
-        # Headers atuais (28 cols): ... "Hub"(25), "Link CardTrader"(26),
-        # "Link TCG"(27), "Scanned At"(28). 0-based: 25=Link CT, 26=Link TCG.
+        # v2.8 Layer 4: nova coluna Variant inserida entre Foil e Seller.
+        # Headers atuais (29 cols): ... "Foil"(22), "Variant"(23), "Seller"(24),
+        # "Tipo Seller"(25), "Hub"(26), "Link CardTrader"(27), "Link TCG"(28),
+        # "Scanned At"(29). 0-based: 26=Link CT, 27=Link TCG.
         # Apenas quando célula tem URL não-vazia.
         link_font = Font(color="0563C1", underline="single")
-        for col_0 in (25, 26):  # 0-based: Link CardTrader, Link TCG
+        for col_0 in (26, 27):  # 0-based: Link CardTrader, Link TCG
             if col_0 < len(row):
                 cell = row[col_0]
                 v = cell.value
