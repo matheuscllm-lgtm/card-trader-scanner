@@ -735,6 +735,131 @@ class PokemonTcgIoProvider(PricingProvider):
         "pfl":   ["me2"],         # Phantasmal Flames
         "asc":   ["me2pt5"],      # Ascended Heroes (sfa was timing out → asc same family)
         "por":   ["me3"],         # Perfect Order
+        # === v2.10 BATCH (added 2026-05-19 from logs/alias_gaps_2026-05-19.md) ===
+        # 110 high-confidence 1-to-1 aliases extracted from 558 rejected
+        # (CT_set → api_set) pairs in weekly v2.9 scan log. Criterion: log shows
+        # api_set mode with empty runner-ups OR runner-ups with hits ≤ 10% of
+        # mode. Ambiguous codes (bs, c25, clb, crz, svpromo, etc.) deferred to
+        # v2.11 case-by-case. xytkas/xytkos NOT included — log mapped them to
+        # tk1a/tk1b but those are EX Trainer Kits, not XY (pokemontcg.io lacks
+        # XY Trainer Kit coverage). EX series core sets dominate this batch.
+        # Wizards / vintage era
+        "wiz":   ["basep"],       # WotC Promos (Wizards Black Star)
+        "nbsp":  ["np"],          # Nintendo Black Star Promos
+        # E-Card era (extends existing aq/ex/skg)
+        # (nothing new — ecard1/2/3 already covered by ex/aq/skg)
+        # EX series (Ruby & Sapphire onwards)
+        "rs":    ["ex1"],         # Ruby & Sapphire
+        "ss":    ["ex2"],         # Sandstorm
+        "exma":  ["ex4"],         # Team Magma vs Team Aqua
+        "hl":    ["ex5"],         # Hidden Legends
+        "rg":    ["ex6"],         # FireRed & LeafGreen
+        "trr":   ["ex7"],         # Team Rocket Returns
+        "dx":    ["ex8"],         # Deoxys
+        "em":    ["ex9"],         # Emerald
+        "uf":    ["ex10"],        # Unseen Forces
+        "ds":    ["ex11"],        # Delta Species
+        "lm":    ["ex12"],        # Legend Maker
+        "hp":    ["ex13"],        # Holon Phantoms
+        "cg":    ["ex14"],        # Crystal Guardians
+        "df":    ["ex15"],        # Dragon Frontiers
+        "pk":    ["ex16"],        # Power Keepers
+        # Diamond & Pearl era
+        "mt":    ["dp2"],         # Mysterious Treasures
+        "sw":    ["dp3"],         # Secret Wonders
+        "ge":    ["dp4"],         # Great Encounters
+        "wcd2010": ["dp6"],       # World Championship Deck 2010 — Legends Awakened
+        "sft":   ["dp7"],         # Stormfront
+        # Platinum
+        "pl":    ["pl1"],         # Platinum base
+        "rr":    ["pl2"],         # Rising Rivals
+        "prr":   ["pl2"],         # Pre-release Rising Rivals
+        "sv":    ["pl3"],         # Supreme Victors (CT 'sv' — NOT Scarlet & Violet!)
+        # HeartGold & SoulSilver
+        "hgs":   ["hgss1"],       # HeartGold & SoulSilver base
+        "ul":    ["hgss2"],       # Unleashed
+        "und":   ["hgss3"],       # Undaunted
+        "tri":   ["hgss4"],       # Triumphant
+        "clo":   ["col1"],        # Call of Legends
+        # Black & White era
+        "blw":   ["bw1"],         # Black & White base
+        "epo":   ["bw2"],         # Emerging Powers
+        "nvi":   ["bw3"],         # Noble Victories
+        "nxd":   ["bw4"],         # Next Destinies
+        "dex":   ["bw5"],         # Dark Explorers
+        "drx":   ["bw6"],         # Dragons Exalted
+        "bcr":   ["bw7"],         # Boundaries Crossed
+        "pbcr":  ["bw7"],         # Promo BCR
+        "pls":   ["bw8"],         # Plasma Storm
+        "ppls":  ["bw8"],         # Promo PLS
+        "plf":   ["bw9"],         # Plasma Freeze
+        "pplf":  ["bw9"],         # Promo PLF
+        "plb":   ["bw10"],        # Plasma Blast
+        "pplb":  ["bw10"],        # Promo PLB
+        "ltr":   ["bw11"],        # Legendary Treasures
+        "pltr":  ["bw11"],        # Promo LTR
+        "drv":   ["dv1"],         # Dragon Vault
+        # XY era
+        "kss":   ["xy0"],         # Kalos Starter Set
+        "xy-en": ["xy1"],         # XY base (EN)
+        "flf":   ["xy2"],         # Flashfire
+        "ffi":   ["xy3"],         # Furious Fists
+        "phf":   ["xy4"],         # Phantom Forces
+        "prc":   ["xy5"],         # Primal Clash
+        "ros":   ["xy6"],         # Roaring Skies
+        "aor":   ["xy7"],         # Ancient Origins
+        "bkt":   ["xy8"],         # BREAKthrough
+        "bkp":   ["xy9"],         # BREAKpoint
+        "pbkp":  ["xy9"],         # Promo BKP
+        "fco":   ["xy10"],        # Fates Collide
+        "sts":   ["xy11"],        # Steam Siege
+        "psts":  ["xy11"],        # Promo STS
+        "evo":   ["xy12"],        # Evolutions
+        "gen":   ["g1"],          # Generations
+        "pgen":  ["g1"],          # Promo Generations
+        "dcr":   ["dc1"],         # Double Crisis
+        "det":   ["det1"],        # Detective Pikachu (movie set)
+        # Sun & Moon era
+        "sum":   ["sm1"],         # Sun & Moon base
+        "gri":   ["sm2"],         # Guardians Rising
+        "bus":   ["sm3"],         # Burning Shadows
+        "pbus":  ["sm3"],         # Promo BUS
+        "cinv":  ["sm4"],         # Crimson Invasion
+        "upr":   ["sm5"],         # Ultra Prism
+        "fli":   ["sm6"],         # Forbidden Light
+        "ces":   ["sm7"],         # Celestial Storm
+        "pces":  ["sm7"],         # Promo CES
+        "lot":   ["sm8"],         # Lost Thunder
+        "teu":   ["sm9"],         # Team Up
+        "unb":   ["sm10"],        # Unbroken Bonds
+        "unm":   ["sm11"],        # Unified Minds
+        "cec":   ["sm12"],        # Cosmic Eclipse
+        "pcec":  ["sm12"],        # Promo CEC
+        "slg":   ["sm35"],        # Shining Legends
+        "drm":   ["sm75"],        # Dragon Majesty
+        "hif":   ["sm115"],       # Hidden Fates
+        "pdp":   ["dp1"],         # Promo DP
+        # McDonald's promos (trivial 1-to-1)
+        "mc11":  ["mcd11"],
+        "mc12":  ["mcd12"],
+        "mc14":  ["mcd14"],
+        "mc15":  ["mcd15"],
+        "mc17":  ["mcd17"],
+        "mc18":  ["mcd18"],
+        "mc19":  ["mcd19"],
+        "mc21":  ["mcd21"],
+        # World Championship Decks (only mode-strong ones; ambiguous ones skipped)
+        "wcd2005": ["ex7"],       # WCD 2005 — Team Rocket Returns
+        "wcd2008": ["ex14"],      # WCD 2008 — Crystal Guardians
+        "wcd2023": ["swsh9"],     # WCD 2023 — Brilliant Stars
+        # Battle Arena / SV-era promo lines (mode-strong)
+        "ba-20":   ["dp3"],       # Battle Arena 2020
+        "ba-2024": ["svp"],       # Battle Arena 2024
+        # Mega Evolution promo lines (m-blk, m-wht — mode-strong)
+        "m-blk":   ["zsv10pt5"],  # Mega Black promo line
+        "m-wht":   ["rsv10pt5"],  # Mega White promo line
+        "p-blk":   ["zsv10pt5"],  # Promo Mega Black
+        "p-wht":   ["rsv10pt5"],  # Promo Mega White
     }
 
     def _search(self, card_name: str, set_code: str, number: str) -> Optional[dict]:
