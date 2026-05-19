@@ -4,6 +4,58 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-05-18 — Scanner v2.8 Layer 4 + Postprocess v2.3 Layer 5
+
+Motivação: validação manual dos 10 deals do weekly v2.6 (operador, 2026-05-18)
+revelou 3 falsos positivos sistêmicos:
+
+1. **Pichu Expedition #22** — scanner pegou `holofoil` ($224.99) mas seller CT
+   vende non-foil → TCG real (Default Landing) é `reverseHolofoil` ($50.41).
+   Margem cálculo errado 4×.
+2. **Lusamine sm5/153a** — alpha suffix `153a` indica **1st Place Pokemon
+   League** variante; scanner matched main set Lusamine sm5/153 ($160) mas
+   real é $13.77. Pokemontcg.io cego pra promos com sufixo alfanumérico.
+3. **Tyranitar Aquapolis** — mesmo padrão Pichu (Holofoil vs Reverse Holofoil,
+   $210 vs $69.99).
+
+Diagnóstico: ~90% dos Holo Rare antigos têm Default Landing = Reverse Holofoil
+no TCG Player. Scanner ignorava o foil-flag do listing CT.
+
+### Scanner (v2.8 Layer 4)
+
+- **`market_price_usd` foil-aware** (`PokemonTcgIoProvider`):
+  - `foil=True` → priority `holofoil → unlimitedHolofoil → normal →
+    reverseHolofoil`
+  - `foil=False` → priority `reverseHolofoil → normal → holofoil →
+    unlimitedHolofoil`
+  - `foil=None` → preserva v2.7 Layer 2 (`holofoil → normal →
+    reverseHolofoil → unlimitedHolofoil`)
+- **Sempre excluir** `1stEditionHolofoil` + `1stEditionNormal` (inflam 3-10×)
+- `PricingProvider.last_variant_used` exposto pra scan_expansion
+- `Opportunity.price_variant_used` novo campo
+- Cache `set_price` anota `_variant_used` no card dict antes de json.dumps;
+  `get_price` extrai pra hidratar cache hits (sem refazer _search)
+- XLSX gain coluna **Variant** entre Foil e Seller (operador valida foil-listing
+  match com `holofoil`; non-foil com `reverseHolofoil`)
+
+### Postprocess (v2.3 Layer 5 — alpha suffix filter)
+
+- `ALPHA_SUFFIX_RE = ^\d+[a-zA-Z]+` detecta `153a`, `022a`, `156b`, etc.
+- Não conflita com TG## (filtrado antes por TRAINER_GALLERY_RE)
+- `classify_decision` retorna `REVISAR` + "Promo/League variant — valide TCG manual"
+  pra qualquer card com alpha suffix
+- Coluna `Link TCG` (v2.7.1) permite operador validar variante em 1 clique
+
+### Test cases validados
+
+- Pichu ecard1/22 foil=True → $224.99 (holofoil) ✓
+- Pichu ecard1/22 foil=False → $120.57 (reverseHolofoil) ✓
+- Arbok ecard1/3 foil=True → $82.77 (holofoil) ✓
+- Arbok ecard1/3 foil=False → $27.93 (reverseHolofoil) ✓
+- Vaporeon base2/12 foil=True → $52.25 (mantém ground truth v2.7 Layer 2,
+  fallback `unlimitedHolofoil`) ✓
+- Lusamine sm5/153a → REVISAR via Layer 5 ✓
+
 ## 2026-05-17 — Scanner v2.6 (partial JSONL checkpoint crash-recovery)
 
 Motivação: incidente weekly local 2026-05-17 17:56→20:21. Scanner crashou
