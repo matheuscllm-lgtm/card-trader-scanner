@@ -858,6 +858,15 @@ class PokemonTcgIoProvider(PricingProvider):
             return None
 
         # v2.8 Layer 4 (bug-hunt 2026-05-18): variant disambiguation foil-aware.
+        # v2.10 Layer 4.1 (2026-05-19): foil=False priority INVERTIDA — normal
+        # antes de reverseHolofoil. Motivação: weekly 2026-05-19 mostrou que
+        # vintage cards (e-Card era, Legendary Collection, Skyridge, Aquapolis)
+        # frequentemente têm `reverseHolofoil.market` maior que `normal.market`
+        # (variante mais cara/desejada). CT sellers com foil=False vendem a
+        # versão "normal" (não-foil) — pegar reverse inflava sistematicamente:
+        # Snorlax LC #11 ~R$3275 (reverse inflado) vs preço real (normal).
+        # Mesmo padrão Hitmonlee LC, Nidoqueen LC, Alakazam Skyridge, Mantine
+        # Skyridge.
         #
         # Histórico:
         #   v2.7 Layer 2: priority fixa `holofoil → normal → reverseHolofoil
@@ -865,18 +874,19 @@ class PokemonTcgIoProvider(PricingProvider):
         #     EX Dragon, Aquapolis, Skyridge) o TCG Player Default Landing é
         #     **Reverse Holofoil**, não Holofoil. Scanner pegava sempre
         #     `holofoil` se existisse → Pichu Expedition #22 → $224.99 (Holo)
-        #     vs $50.41 (Reverse, default da página). Mesmo padrão Tyranitar
-        #     Aquapolis ($210 inflado vs $69.99 real).
+        #     vs $50.41 (Reverse, default da página).
+        #   v2.8: foil-aware. foil=False → `reverseHolofoil → normal → holofoil
+        #     → unlimitedHolofoil` (acreditando que RH era Default Landing
+        #     universal). Funcionou pra Pichu/Tyranitar Expedition+Aquapolis
+        #     mas inflou non-foil de muito vintage (LC/Skyridge non-holo).
+        #   v2.10 Layer 4.1: foil=False → `normal → reverseHolofoil → holofoil
+        #     → unlimitedHolofoil`. `normal` é o preço mais conservador e
+        #     reflete o que CT seller foil=False normalmente lista. Reverse
+        #     fica como fallback (sob protesto), holofoil último.
         #
-        # v2.8 (operador 2026-05-18 pós-validação dos 10 weekly v2.6):
-        #   Se o listing CT é foil (`l.foil == True`):
-        #     priority: holofoil → unlimitedHolofoil → normal → reverseHolofoil
-        #     (versão metálica é a que o seller está vendendo)
-        #   Se o listing CT é non-foil (`l.foil == False`):
-        #     priority: reverseHolofoil → normal → holofoil → unlimitedHolofoil
-        #     (Reverse Holofoil é Default Landing em 90% dos Holo Rare
-        #     antigos; Holofoil só como último fallback)
-        #   Se foil é None (variant desconhecido): preserve comportamento v2.7.
+        # foil=True: mantido v2.8 (holofoil → unlimitedHolofoil → normal →
+        #   reverseHolofoil). Listings CT foil são versão metálica.
+        # foil=None: preserva v2.7 Layer 2.
         #
         # EXCLUIR sempre: `1stEditionHolofoil`, `1stEditionNormal` (variantes
         # raras, inflam 3-10x; operador não vende 1st Ed).
@@ -884,7 +894,8 @@ class PokemonTcgIoProvider(PricingProvider):
         if foil is True:
             PRIORITY = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
         elif foil is False:
-            PRIORITY = ["reverseHolofoil", "normal", "holofoil", "unlimitedHolofoil"]
+            # v2.10 Layer 4.1: normal > reverseHolofoil > holofoil > unlimited.
+            PRIORITY = ["normal", "reverseHolofoil", "holofoil", "unlimitedHolofoil"]
         else:
             # Foil-flag ausente (cache miss antigo ou provider chamado direto).
             # Preserve v2.7 Layer 2 priority.
