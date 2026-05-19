@@ -254,6 +254,10 @@ COLUMN_ALIASES = {
     "lucro_liq": ["lucro_liq","Lucro R$ REAL","Lucro REAL","Lucro Liq (R$)","Net Profit (R$)"],
     "link_ct": ["link_ct","Link CT","Link CardTrader","CardTrader URL","CardTrader Link","Link"],
     "quantity": ["quantity","Quantity","qty","estoque","Qtd"],
+    # v2.7.1 postprocess (2026-05-18): URL TCGPlayer da carta exata
+    # matched no pokemontcg.io. Operador valida variante (ex Lusamine 1st Place
+    # vs normal) antes de comprar. None aceitável (não-pokemontcg providers).
+    "link_tcg": ["link_tcg","Link TCG","tcg_url","TCG URL","TCGPlayer URL","TCGPlayer Link"],
 }
 
 def detect_column(df, logical):
@@ -275,17 +279,34 @@ def normalize_columns(df):
 HYPERLINK_FONT = Font(color="0563C1", underline="single")
 
 def apply_card_hyperlinks(ws, df):
+    """Aplica hyperlink ativo em Carta → Link CT, e na própria célula Link TCG.
+
+    v2.7.1 (postprocess 2026-05-18): Link TCG (URL TCGPlayer) ganha
+    hyperlink no próprio texto (operador clica diretamente). Distinção
+    de design vs Link CT: Carta vira link clicável apontando pro CT
+    (workflow de compra primário); Link TCG é texto URL clicável
+    (workflow de validação de variante secundário).
+    """
     cols = list(df.columns)
-    if "Carta" not in cols or "Link CT" not in cols:
-        return
-    carta_idx = cols.index("Carta") + 1
-    link_idx = cols.index("Link CT") + 1
-    for ri in range(2, len(df) + 2):
-        url = ws.cell(row=ri, column=link_idx).value
-        if isinstance(url, str) and url.startswith("http"):
-            c = ws.cell(row=ri, column=carta_idx)
-            c.hyperlink = url
-            c.font = HYPERLINK_FONT
+    # Carta → Link CT
+    if "Carta" in cols and "Link CT" in cols:
+        carta_idx = cols.index("Carta") + 1
+        link_idx = cols.index("Link CT") + 1
+        for ri in range(2, len(df) + 2):
+            url = ws.cell(row=ri, column=link_idx).value
+            if isinstance(url, str) and url.startswith("http"):
+                c = ws.cell(row=ri, column=carta_idx)
+                c.hyperlink = url
+                c.font = HYPERLINK_FONT
+    # Link TCG → célula própria (URL clicável)
+    if "Link TCG" in cols:
+        tcg_idx = cols.index("Link TCG") + 1
+        for ri in range(2, len(df) + 2):
+            cell = ws.cell(row=ri, column=tcg_idx)
+            v = cell.value
+            if isinstance(v, str) and v.startswith("http"):
+                cell.hyperlink = v
+                cell.font = HYPERLINK_FONT
 
 # ─── Main pipeline ────────────────────────────────────────────────────────────
 DECISAO_FILL = {
@@ -389,7 +410,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
-                     "validation_status", "seller", "link_ct"]
+                     "validation_status", "seller", "link_ct", "link_tcg"]
     display_cols = [c for c in display_cols if c in deals.columns]
     deals = deals[display_cols]
     rename_map = {
@@ -398,7 +419,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
-        "seller": "Seller", "link_ct": "Link CT",
+        "seller": "Seller", "link_ct": "Link CT", "link_tcg": "Link TCG",
     }
     return deals.rename(columns=rename_map)
 
@@ -411,7 +432,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
-                     "validation_status", "seller", "link_ct"]
+                     "validation_status", "seller", "link_ct", "link_tcg"]
     display_cols = [c for c in display_cols if c in df.columns]
     df = df[display_cols]
     rename_map = {
@@ -420,7 +441,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
-        "seller": "Seller", "link_ct": "Link CT",
+        "seller": "Seller", "link_ct": "Link CT", "link_tcg": "Link TCG",
     }
     return df.rename(columns=rename_map)
 
@@ -493,6 +514,20 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     df = enrich_df(df)
     wb = Workbook(); wb.remove(wb.active)
 
+    # v2.7.1: helper pra escrever NaN/None como célula vazia em vez de "nan".
+    # Pandas serializa None em coluna object via NaN; openpyxl escreve "nan"
+    # se passar pd.NA/float('nan') sem tratamento. Importa especialmente pra
+    # nova coluna Link TCG (None aceitável quando provider != pokemontcg).
+    def _safe_val(val):
+        try:
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return None
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return val
+
     deals = build_deals_sheet(df, cfg)
     ws = wb.create_sheet("Deals")
     if deals.empty:
@@ -500,7 +535,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     else:
         for ri, row in enumerate([deals.columns.tolist()] + deals.values.tolist(), 1):
             for ci, val in enumerate(row, 1):
-                ws.cell(row=ri, column=ci, value=val)
+                ws.cell(row=ri, column=ci, value=_safe_val(val) if ri > 1 else val)
         style_sheet(ws, deals, decisao_col="Decisão", chase_col="Chase Tier")
 
     all_l = build_all_listings_sheet(df, cfg)
@@ -510,7 +545,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     else:
         for ri, row in enumerate([all_l.columns.tolist()] + all_l.values.tolist(), 1):
             for ci, val in enumerate(row, 1):
-                ws.cell(row=ri, column=ci, value=val)
+                ws.cell(row=ri, column=ci, value=_safe_val(val) if ri > 1 else val)
         style_sheet(ws, all_l, decisao_col="Decisão", chase_col="Chase Tier")
 
     summary = build_summary(df, cfg)
