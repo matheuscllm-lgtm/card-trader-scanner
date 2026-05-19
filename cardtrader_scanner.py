@@ -683,11 +683,58 @@ class PokemonTcgIoProvider(PricingProvider):
         "pupr": ["sm5"],          # Ultra Prism Promos → SM Ultra Prism
         # XY Promos
         "xybsp": ["xyp"],         # XY Black Star Promos
-        # Scarlet & Violet era
-        "pre": ["sv8pt5"],        # Prismatic Evolutions
-        "twm": ["sv6"],           # Twilight Masquerade
-        "scr": ["sv7"],           # Stellar Crown
-        "ssp": ["sv8"],           # Surging Sparks
+        # Sword & Shield era (v2.9 bug-hunt 2026-05-19):
+        # CT uses 3-letter ptcgo-style codes; ptcg.io uses positional swsh*.
+        # All EN main sets explicitly mapped to avoid Layer 1 strict-set
+        # rejection. Verified via CT API (game_id=5) + pokemontcg.io /sets
+        # 2026-05-19. Trainer Gallery splits (swsh9tg, swsh10tg, swsh11tg,
+        # swsh12tg, swsh12pt5gg) NOT aliased here — TG cards have known
+        # inflation bug (regex ^TG\d+ in postprocess routes to MANUAL).
+        "ssh":   ["swsh1"],       # Sword & Shield base
+        "rcl":   ["swsh2"],       # Rebel Clash
+        "daa":   ["swsh3"],       # Darkness Ablaze
+        "cpa":   ["swsh35"],      # Champion's Path
+        "viv":   ["swsh4"],       # Vivid Voltage
+        "shf":   ["swsh45"],      # Shining Fates
+        "bst":   ["swsh5"],       # Battle Styles
+        "cre":   ["swsh6"],       # Chilling Reign
+        "evs":   ["swsh7"],       # Evolving Skies
+        "fst":   ["swsh8"],       # Fusion Strike
+        "brs":   ["swsh9"],       # Brilliant Stars
+        "astr":  ["swsh10"],      # Astral Radiance (CT: astr, NOT asr)
+        "pkmgo": ["pgo"],         # Pokémon GO (CT: pkmgo, NOT pgo)
+        "lorg":  ["swsh11"],      # Lost Origin (CT: lorg; lot=Lost Thunder)
+        "sit":   ["swsh12"],      # Silver Tempest
+        "crz":   ["swsh12pt5"],   # Crown Zenith
+        # Scarlet & Violet era (v2.9 expansion 2026-05-19):
+        # Existing aliases (pre/twm/scr/ssp) retained. Added missing SV core
+        # so Layer 1 doesn't drop matches for Paldea Evolved, Obsidian Flames,
+        # 151, Paradox Rift, Paldean Fates, Temporal Forces, Shrouded Fable.
+        # NOTE: CT codes sv6/sv7/sv8/sv9 point to JP-original sets (Mask of
+        # Change, Stellar Miracle, Super Electric Breaker, Battle Partners) —
+        # NOT aliased to EN ptcg.io ids on purpose. ptcg.io lacks JP coverage
+        # and aliasing would produce wrong cards.
+        "svi":   ["sv1"],         # Scarlet & Violet base
+        "pal":   ["sv2"],         # Paldea Evolved
+        "obf":   ["sv3"],         # Obsidian Flames
+        "mew":   ["sv3pt5"],      # 151 (CT: mew)
+        "par":   ["sv4"],         # Paradox Rift
+        "paf":   ["sv4pt5"],      # Paldean Fates
+        "tef":   ["sv5"],         # Temporal Forces
+        "twm":   ["sv6"],         # Twilight Masquerade
+        "sfa":   ["sv6pt5"],      # Shrouded Fable
+        "scr":   ["sv7"],         # Stellar Crown
+        "ssp":   ["sv8"],         # Surging Sparks
+        "pre":   ["sv8pt5"],      # Prismatic Evolutions
+        "jtg":   ["sv9"],         # Journey Together
+        "dri":   ["sv10"],        # Destined Rivals
+        "blk":   ["zsv10pt5"],    # Black Bolt
+        "wht":   ["rsv10pt5"],    # White Flare
+        # Mega Evolution era (v2.9 — first ME aliases added 2026-05-19):
+        "meg":   ["me1"],         # Mega Evolution base
+        "pfl":   ["me2"],         # Phantasmal Flames
+        "asc":   ["me2pt5"],      # Ascended Heroes (sfa was timing out → asc same family)
+        "por":   ["me3"],         # Perfect Order
     }
 
     def _search(self, card_name: str, set_code: str, number: str) -> Optional[dict]:
