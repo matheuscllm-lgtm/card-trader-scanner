@@ -9,24 +9,12 @@
 # dos sets que quer escanear periodicamente.
 # ═══════════════════════════════════════════════════════════════════
 
-# Sets Scarlet & Violet (era atual, mais líquida/volume)
-# Remova comentário dos que quer monitorar.
-sets:
-  - sv1      # Scarlet & Violet Base
-  - sv2      # Paldea Evolved
-  - sv3      # Obsidian Flames
-  - sv3pt5   # 151
-  - sv4      # Paradox Rift
-  - sv4pt5   # Paldean Fates
-  - sv5      # Temporal Forces
-  - sv6      # Twilight Masquerade
-  - sv6pt5   # Shrouded Fable
-  - sv7      # Stellar Crown
-  - sv8      # Surging Sparks
-  - sv8pt5   # Prismatic Evolutions
-  - sv9      # Journey Together
-  - sv10     # Destined Rivals
-  - zsv10pt5 # Black Bolt / White Flare
+# Sets — vazio = scanner usa TODAS as expansões CT (~832)
+# Pra restringir, descomentar e listar codes
+sets: []
+# Exemplos:
+#  - sfa    # Shrouded Fable
+#  - scr    # Stellar Crown
 
 # Filtros de seller (experimentais — comentar para desativar)
 # sellers:
