@@ -62,15 +62,66 @@ def _clean_set_name(set_name: str) -> str:
     return re.sub(r"\s*\([^)]*\)\s*$", "", set_name).strip()
 
 
-def search_card_url(card_name: str, set_name: str, session: requests.Session) -> str | None:
-    """Search PriceCharting and return the first /game/pokemon-* URL."""
-    query = f"{card_name} {_clean_set_name(set_name)}"
-    url = SEARCH_URL.format(q=quote_plus(query))
-    r = session.get(url, timeout=20)
-    if r.status_code != 200:
-        return None
-    m = GAME_URL_RE.search(r.text)
-    return m.group(1) if m else None
+def _slugify(s: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    return s
+
+
+def _set_tokens(set_name: str) -> list[str]:
+    """Tokens from set name that must appear in URL set-slug. EX/promo noise filtered."""
+    clean = _clean_set_name(set_name)
+    raw = _slugify(clean).split("-")
+    stop = {"ex", "the", "of", "pokemon", "set", "tcg", "collection"}
+    return [t for t in raw if t and t not in stop and len(t) > 2]
+
+
+def _url_set_slug(url: str) -> str:
+    """Extract the set slug between `/game/pokemon-` and `/card`."""
+    m = re.search(r"/game/pokemon-([a-z0-9\-]+)/", url)
+    return m.group(1) if m else ""
+
+
+def _url_matches_card_set(url: str, card_name: str, set_name: str) -> bool:
+    """Require URL slug to match BOTH the card name AND the set."""
+    if not url:
+        return False
+    card_slug_part = url.rsplit("/", 1)[-1].lower()
+    card_slug = _slugify(card_name)
+    first = card_slug.split("-")[0]
+    if not card_slug:
+        return False
+    card_ok = (card_slug in card_slug_part) or (
+        first and first in card_slug_part
+    )
+    if not card_ok:
+        return False
+    set_slug = _url_set_slug(url)
+    tokens = _set_tokens(set_name)
+    if not tokens:
+        return True  # nothing to enforce
+    # At least one distinctive set token must appear in URL set slug
+    return any(t in set_slug for t in tokens)
+
+
+def search_card_url(card_name: str, set_name: str, number: str,
+                    session: requests.Session) -> str | None:
+    """Search PriceCharting; return first URL whose slug matches BOTH card+set."""
+    clean_set = _clean_set_name(set_name)
+    queries = []
+    if number:
+        queries.append(f"{card_name} {clean_set} {number}")
+    queries.append(f"{card_name} {clean_set}")
+
+    for q in queries:
+        url_search = SEARCH_URL.format(q=quote_plus(q))
+        r = session.get(url_search, timeout=20)
+        if r.status_code != 200:
+            continue
+        for m in GAME_URL_RE.finditer(r.text):
+            candidate = m.group(1)
+            if _url_matches_card_set(candidate, card_name, set_name):
+                return candidate
+    return None
 
 
 def fetch_prices(url: str, session: requests.Session) -> dict:
@@ -91,16 +142,18 @@ def fetch_prices(url: str, session: requests.Session) -> dict:
     return prices
 
 
-def get_card_prices(card_name: str, set_name: str, session: requests.Session,
+def get_card_prices(card_name: str, set_name: str, number: str,
+                    session: requests.Session,
                     cache: dict, rate_limit: float = 1.0) -> dict:
     """Lookup PSA prices for one card, with disk cache."""
-    key = f"{card_name}|{set_name}".lower()
+    key = f"{card_name}|{set_name}|{number}".lower()
     if key in cache:
         return cache[key]
 
-    result = {"card_name": card_name, "set_name": set_name, "url": None, "prices": {}, "error": None}
+    result = {"card_name": card_name, "set_name": set_name, "number": number,
+              "url": None, "prices": {}, "error": None}
     try:
-        url = search_card_url(card_name, set_name, session)
+        url = search_card_url(card_name, set_name, number, session)
         if not url:
             result["error"] = "no_search_match"
         else:
@@ -213,7 +266,8 @@ def build_analysis(cards: list[dict], grading_fee: float, rate_limit: float) -> 
     n = len(cards)
     for i, c in enumerate(cards, 1):
         print(f"[{i}/{n}] {c['card_name']} ({c['set_name']})", flush=True)
-        pc = get_card_prices(c["card_name"], c["set_name"], session, cache, rate_limit)
+        pc = get_card_prices(c["card_name"], c["set_name"], c.get("number", ""),
+                             session, cache, rate_limit)
         prices = pc.get("prices", {}) or {}
         raw_nm = c.get("price_usd")
         ungraded_pc = prices.get("ungraded")
