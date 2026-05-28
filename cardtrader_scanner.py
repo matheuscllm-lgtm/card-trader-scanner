@@ -1142,6 +1142,58 @@ PROVIDERS = {
 
 _SKIP_LIST_LOCK_TIMEOUT = 30  # seg — operação é trivial, 30s é generoso
 
+# PR-F (2026-05-28): TTL pra entries TRANSIENTES da skip-list. Sets pulados por
+# timeout (per_set_timeout_/ct_*_timeout_) ou mass-pricing-failure costumam ser
+# stalls passageiros (rede ruim, 429 burst, cobertura pokemontcg.io temporária).
+# Após 7 dias, devem ser re-tentados automaticamente. Já erros estruturais
+# (unexpected_error_*) ficam PERMANENTES — provavelmente bug de schema/dados.
+_SKIP_LIST_TTL_DAYS = 7
+# Prefixos de reason considerados TRANSIENTES (elegíveis a TTL/expiração).
+_SKIP_LIST_TRANSIENT_PREFIXES = (
+    "per_set_timeout_",
+    "mass_pricing_failure_",
+    "ct_blueprints_timeout_",
+    "ct_listings_timeout_",
+)
+
+
+def _skip_reason_str(entry) -> str:
+    """Normaliza uma entry de reason (str legada OU dict {reason, added_at})
+    para a string de motivo. Retrocompat com skip-lists pré-PR-F."""
+    if isinstance(entry, dict):
+        return str(entry.get("reason", ""))
+    return str(entry) if entry is not None else ""
+
+
+def _skip_entry_is_expired(entry, now: Optional[datetime] = None) -> bool:
+    """PR-F: True se a entry é TRANSIENTE (prefixo conhecido) E tem added_at
+    mais velho que _SKIP_LIST_TTL_DAYS.
+
+    Regras de retrocompat:
+      - entry legada (str pura, sem added_at) → NUNCA expira (permanente).
+      - dict sem added_at (ou added_at inválido) → NUNCA expira (conservador).
+      - reason não-transiente (ex. unexpected_error_*) → NUNCA expira.
+    """
+    reason = _skip_reason_str(entry)
+    if not reason.startswith(_SKIP_LIST_TRANSIENT_PREFIXES):
+        return False
+    if not isinstance(entry, dict):
+        # Legada (str) → sem timestamp → trata como permanente (não dropa).
+        return False
+    added_at = entry.get("added_at")
+    if not added_at:
+        return False
+    try:
+        # Formato gravado: "%Y-%m-%dT%H:%M:%SZ" (UTC). Parse robusto via fromisoformat.
+        ts = datetime.fromisoformat(str(added_at).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        # added_at corrompido → conservador: não dropar.
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - ts) > timedelta(days=_SKIP_LIST_TTL_DAYS)
+
 
 def _skip_list_lock_path() -> Path:
     """Lock file separado (.lock sidecar) — portalocker em Windows não permite
@@ -1255,7 +1307,13 @@ def add_to_skip_list(exp_code: str, reason: str) -> None:
             skipped = set(data.get("skipped", []))
             skipped.add(exp_code)
             reasons = data.get("reasons") or {}
-            reasons[exp_code] = reason
+            # PR-F (2026-05-28): reason agora é {reason, added_at} (era str pura)
+            # pra suportar TTL na leitura. Entries legadas (str) seguem aceitas
+            # no read (tratadas como permanentes).
+            reasons[exp_code] = {
+                "reason": reason,
+                "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
             payload = {
                 "skipped": sorted(skipped),
                 "reasons": reasons,
@@ -1897,7 +1955,23 @@ class Scanner:
         self.heartbeat = checkpoint.touch_heartbeat if checkpoint else (lambda *_: None)
         # v2.4: carrega skip-list (sets que estouraram timeout em runs anteriores)
         skip_data = load_skip_list() if not self.ignore_skip_list else {"skipped": [], "reasons": {}}
+        # PR-F (2026-05-28): TTL. Entries TRANSIENTES (timeout / mass-pricing-fail)
+        # com added_at > 7d são re-tentadas (dropadas do skip_set deste run; o
+        # arquivo NÃO é reescrito aqui — se o set falhar de novo, add_to_skip_list
+        # refresca added_at). Entries permanentes (unexpected_error_*) e legadas
+        # (str pura, sem timestamp) seguem pulando.
+        reasons_map = skip_data.get("reasons") or {}
         skip_set = set(skip_data.get("skipped", []))
+        expired = {
+            code for code in skip_set
+            if _skip_entry_is_expired(reasons_map.get(code))
+        }
+        if expired:
+            log.info(
+                f"Skip-list TTL ({_SKIP_LIST_TTL_DAYS}d): re-tentando {len(expired)} "
+                f"set(s) transiente(s) expirado(s): {', '.join(sorted(expired))}"
+            )
+            skip_set -= expired
         if skip_set:
             log.info(
                 f"Skip-list ativa ({SKIP_LIST_FILE.name}): {len(skip_set)} sets serão pulados "
@@ -1921,7 +1995,8 @@ class Scanner:
             self.heartbeat(f"set {idx}/{total_sets} ({exp_code}) elapsed={elapsed_min:.1f}min")
             if exp_code in skip_set:
                 self.stats["expansions_skipped_by_list"] += 1
-                reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
+                # PR-F: reason pode ser dict {reason, added_at} ou str legada.
+                reason = _skip_reason_str(reasons_map.get(exp_code)) or "?"
                 log.warning(f"⏭️  Pulando {exp.get('name')} ({exp_code}) — skip-list (motivo: {reason})")
                 continue
             # v2.6 (2026-05-17): snapshot per-set stats antes do scan_expansion
