@@ -106,6 +106,10 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
                 sets_complete.append(obj)
             elif typ == "scan_complete":
                 scan_complete = obj
+            elif typ == "set_progress":
+                # PR-F (2026-05-28): telemetria de progresso intra-set (heartbeat
+                # JSONL). NÃO é um deal — ignora silenciosamente no recovery.
+                continue
             elif typ == "opportunity":
                 try:
                     opp = _reconstruct_opportunity(obj)

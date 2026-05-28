@@ -1325,10 +1325,18 @@ class CheckpointWriter:
     bufferização opcional.
     """
 
-    def __init__(self, path: Path, every_n: int = 10):
+    def __init__(self, path: Path, every_n: int = 10,
+                 heartbeat_path: Optional[Path] = None,
+                 flush_every_listings: int = 50):
         self.path = path
         self.every_n = every_n
         self.enabled = every_n > 0
+        # PR-F (2026-05-28): heartbeat + flush per-listing.
+        # heartbeat é independente do checkpoint JSONL — útil pra detectar stall
+        # mesmo com --checkpoint-every 0. flush_every_listings controla a
+        # cadência das linhas set_progress no JSONL (telemetria, não deal).
+        self.heartbeat_path = heartbeat_path
+        self.flush_every_listings = flush_every_listings
         self._fh = None
         self._opps_written = 0
         self._sets_written = 0
@@ -1340,20 +1348,58 @@ class CheckpointWriter:
             self._fh = open(self.path, "a", encoding="utf-8")
             log.info(
                 f"Checkpoint JSONL ativo: {self.path} (flush per-set, "
-                f"every_n={every_n})"
+                f"every_n={every_n}, flush_every_listings={flush_every_listings})"
             )
+        if self.heartbeat_path is not None:
+            try:
+                self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                log.warning(f"Heartbeat dir mkdir falhou ({self.heartbeat_path}): {e}")
 
     def _write(self, obj: dict) -> None:
         """Append + flush + fsync. Síncrono. Falha silenciosa em log."""
         if not self.enabled or self._fh is None:
             return
         try:
-            self._fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            # default=str: torna Path (e outros não-serializáveis, ex. do args
+            # dict no header) seguros. PR-F: --state-dir injeta um Path em args.
+            self._fh.write(json.dumps(obj, ensure_ascii=False, default=str) + "\n")
             self._fh.flush()
             os.fsync(self._fh.fileno())
         except Exception as e:
             # NUNCA mata o scan por falha de checkpoint. Loga + continua.
             log.warning(f"Checkpoint write falhou ({obj.get('_type', '?')}): {e}")
+
+    def touch_heartbeat(self, note: str = "") -> None:
+        """PR-F: reescreve heartbeat.txt (modo 'w') com timestamp + nota, com
+        flush+fsync. Independente do checkpoint JSONL — funciona mesmo com
+        --checkpoint-every 0. Falha silenciosa em log (igual _write): heartbeat
+        NUNCA mata o scan."""
+        if self.heartbeat_path is None:
+            return
+        try:
+            ts = datetime.now().astimezone().isoformat(timespec="seconds")
+            with open(self.heartbeat_path, "w", encoding="utf-8") as hb:
+                hb.write(f"{ts}\t{note}\n")
+                hb.flush()
+                os.fsync(hb.fileno())
+        except Exception as e:
+            log.warning(f"Heartbeat write falhou ({note!r}): {e}")
+
+    def write_progress(self, set_code: str, i: int, total: int) -> None:
+        """PR-F: linha de telemetria set_progress (NÃO é deal). Sinaliza ao
+        recovery/monitor que o pricing loop está vivo dentro de um set. O
+        parser de recovery DEVE ignorar _type=set_progress (não vira
+        Opportunity). Append + flush + fsync via _write."""
+        if not self.enabled:
+            return
+        self._write({
+            "_type": "set_progress",
+            "stamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "set_code": set_code,
+            "i": i,
+            "total": total,
+        })
 
     def write_header(self, args_dict: dict, total_sets: int) -> None:
         if not self.enabled:
@@ -1445,6 +1491,11 @@ class Scanner:
         # Quando excedido, scan_expansion aborta + adiciona o set à skip-list.
         self.per_set_timeout_s = per_set_timeout_s
         self.ignore_skip_list = ignore_skip_list
+        # PR-F (2026-05-28): defaults seguros pra heartbeat/checkpoint quando
+        # scan_expansion é chamado direto (tests/diagnose) sem passar por scan().
+        # scan() reaponta esses dois quando há um CheckpointWriter ativo.
+        self.heartbeat = lambda *_: None
+        self._checkpoint: Optional["CheckpointWriter"] = None
         self.usd_brl = get_usd_to_brl(cache)
         self.eur_brl = get_eur_to_brl(cache)
         self.stats = {
@@ -1738,6 +1789,14 @@ class Scanner:
                 return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
+            # PR-F (2026-05-28): heartbeat + set_progress JSONL na cadência
+            # configurável (--flush-every-listings, default 50). Distinto do
+            # INFO log acima (mantido em i%50 pra não quebrar contrato de log).
+            flush_n = getattr(self._checkpoint, "flush_every_listings", 0) if self._checkpoint else 0
+            if flush_n and (i % flush_n == 0 or i == total_listings):
+                self.heartbeat(f"set={exp_code} i={i}/{total_listings}")
+                if self._checkpoint is not None:
+                    self._checkpoint.write_progress(exp_code, i, total_listings)
             set_pricing_attempts += 1
             tcg_market = None
             try:
@@ -1831,6 +1890,11 @@ class Scanner:
     def scan(self, expansions: list[dict],
              checkpoint: Optional["CheckpointWriter"] = None) -> list[Opportunity]:
         opps: list[Opportunity] = []
+        # PR-F (2026-05-28): expõe heartbeat + checkpoint pro scan_expansion
+        # (que não recebe checkpoint como arg). Se não há checkpoint, heartbeat
+        # vira no-op (lambda) e write_progress é guardado por self._checkpoint=None.
+        self._checkpoint = checkpoint
+        self.heartbeat = checkpoint.touch_heartbeat if checkpoint else (lambda *_: None)
         # v2.4: carrega skip-list (sets que estouraram timeout em runs anteriores)
         skip_data = load_skip_list() if not self.ignore_skip_list else {"skipped": [], "reasons": {}}
         skip_set = set(skip_data.get("skipped", []))
@@ -1853,6 +1917,8 @@ class Scanner:
                 f"ALIVE [{datetime.now().strftime('%H:%M:%S')}] set {idx}/{total_sets} "
                 f"({exp_code}) total_elapsed={elapsed_min:.1f}min"
             )
+            # PR-F: heartbeat por set (detecta stall externamente via mtime)
+            self.heartbeat(f"set {idx}/{total_sets} ({exp_code}) elapsed={elapsed_min:.1f}min")
             if exp_code in skip_set:
                 self.stats["expansions_skipped_by_list"] += 1
                 reason = (skip_data.get("reasons") or {}).get(exp_code, "?")
@@ -2229,9 +2295,22 @@ def parse_args():
     p.add_argument("--checkpoint-every", type=int, default=10,
                    help=("v2.6: emite checkpoint JSONL append-only a cada N sets "
                          "(default 10). 0 = desativado. Path: "
-                         "<output>.checkpoint.jsonl sidecar. Crash mid-run não "
+                         "<state-dir>/<output-name>.checkpoint.jsonl sidecar. "
+                         "Crash mid-run não "
                          "perde mais dados — `scripts/recover_from_checkpoint.py "
                          "--checkpoint <path>` regenera XLSX equivalente."))
+    # PR-F (2026-05-28): state dir + flush per-listing.
+    p.add_argument("--state-dir", type=Path, default=None,
+                   help=("v2.11 (PR-F): diretório de estado mutável (cache.db, "
+                         "scanner_skip_list.json, heartbeat.txt, *.checkpoint.jsonl). "
+                         "Default: %%LOCALAPPDATA%%/CardTraderScanner. Tira estado "
+                         "volátil do Google Drive (evita conflitos de sync + lock). "
+                         "O XLSX final continua indo pra --output."))
+    p.add_argument("--flush-every-listings", type=int, default=50,
+                   help=("v2.11 (PR-F): emite linha de telemetria set_progress + "
+                         "heartbeat a cada N listings precificados (default 50). "
+                         "Distinto de --checkpoint-every (que é por SET). Permite "
+                         "detectar stall mid-set. 0 = desativado."))
     return p.parse_args()
 
 
@@ -2240,6 +2319,25 @@ def load_config() -> dict:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
+
+
+def resolve_state_dir(state_dir_arg: Optional[Path]) -> Path:
+    """PR-F (2026-05-28): resolve o diretório de estado MUTÁVEL.
+
+    Precedência:
+      1. --state-dir explícito (se passado).
+      2. %LOCALAPPDATA%/CardTraderScanner (default em Windows).
+      3. SCRIPT_DIR (fallback legado quando LOCALAPPDATA ausente — nunca
+         quebra a inicialização em CI/não-Windows).
+
+    NÃO cria o diretório (caller faz mkdir) — fica testável puro.
+    """
+    if state_dir_arg is not None:
+        return Path(state_dir_arg)
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        return Path(localappdata) / "CardTraderScanner"
+    return SCRIPT_DIR
 
 
 def main():
@@ -2271,13 +2369,29 @@ def main():
     load_dotenv(ENV_FILE)
     cfg = load_config()
 
+    # PR-F (2026-05-28): resolve state dir. Tudo que é estado MUTÁVEL
+    # (cache.db, skip-list, heartbeat, checkpoint JSONL) vive aqui — fora do
+    # Google Drive, que causa lock-conflict + sync-conflict (.tmp/desktop.ini).
+    # O XLSX final (out_path) continua indo pra --output (default SCRIPT_DIR).
+    # Reaponta os globais CACHE_DB + SKIP_LIST_FILE pra que as 6 funções de
+    # skip-list (que referenciam o nome do módulo em call-time) sigam o novo
+    # path. ARMADILHA: Cache.__init__ tem db_path=CACHE_DB como DEFAULT-ARG
+    # (bindado no import) — mudar o global não basta; passamos explícito abaixo.
+    global CACHE_DB, SKIP_LIST_FILE
+    state_dir = resolve_state_dir(args.state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    CACHE_DB = state_dir / "cache.db"
+    SKIP_LIST_FILE = state_dir / "scanner_skip_list.json"
+    log.info(f"State dir: {state_dir}")
+
     ct_jwt = os.getenv("CT_JWT", "").strip()
     if not ct_jwt:
         log.error("CT_JWT não definido. Configure no arquivo .env")
         log.error("Como obter: CardTrader → Settings → API Access → Create New Token")
         sys.exit(1)
 
-    cache = Cache()
+    # PR-F: db_path EXPLÍCITO (não confiar no default-arg bindado no import).
+    cache = Cache(db_path=state_dir / "cache.db")
     if args.no_cache:
         log.info("--no-cache: limpando price_cache e fx_cache (forçando refresh)...")
         cache.clear_prices()
@@ -2331,12 +2445,22 @@ def main():
         ignore_skip_list=args.ignore_skip_list,
     )
 
-    # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar
+    # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.
+    # XLSX final continua no --output (default SCRIPT_DIR / Drive). Só o JSONL
+    # de checkpoint + heartbeat migram pro state_dir (PR-F).
     out_path = Path(args.output) if args.output else (
         SCRIPT_DIR / f"cardtrader_scan_{datetime.now():%Y%m%d_%H%M}.xlsx"
     )
-    checkpoint_path = out_path.with_suffix(out_path.suffix + ".checkpoint.jsonl")
-    checkpoint = CheckpointWriter(checkpoint_path, every_n=args.checkpoint_every)
+    # PR-F: checkpoint sidecar vive no state_dir (fora do Drive), nomeado a
+    # partir do XLSX final pra rastreabilidade (<output-name>.checkpoint.jsonl).
+    checkpoint_path = state_dir / (out_path.name + ".checkpoint.jsonl")
+    heartbeat_path = state_dir / "heartbeat.txt"
+    checkpoint = CheckpointWriter(
+        checkpoint_path,
+        every_n=args.checkpoint_every,
+        heartbeat_path=heartbeat_path,
+        flush_every_listings=args.flush_every_listings,
+    )
     if checkpoint.enabled:
         # Header com args dict pra reprodutibilidade no recovery
         checkpoint.write_header(vars(args), total_sets=len(expansions))
