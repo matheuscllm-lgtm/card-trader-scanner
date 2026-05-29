@@ -438,6 +438,27 @@ def enrich_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     df["fundamental_score"] = df.apply(fundamental_score, axis=1)
     return df
 
+def _combine_name_number(df: pd.DataFrame) -> pd.DataFrame:
+    """Junta card_name + card_number numa célula só ('Minccino 182') pro operador
+    copiar-e-colar direto no site de busca. Mantém card_number separado (coluna Nº).
+    Robusto a número float ('182.0'→'182'), ausente, ou alfanumérico (TG12, SV161)."""
+    if "card_name" not in df.columns or "card_number" not in df.columns:
+        return df
+    df = df.copy()
+    def _combine(row):
+        name = row["card_name"]
+        num = row["card_number"]
+        if num is None or (isinstance(num, float) and pd.isna(num)):
+            return name
+        s = str(num).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        if not s or s.lower() == "nan":
+            return name
+        return f"{name} {s}"
+    df["card_name"] = df.apply(_combine, axis=1)
+    return df
+
 def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     """Sheet principal: deals com Decisao mecanica (COMPRA + REVISAR, ordenado por lucro)."""
     df = df.copy()
@@ -455,6 +476,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
                      "validation_status", "seller", "link_ct", "link_tcg"]
     display_cols = [c for c in display_cols if c in deals.columns]
     deals = deals[display_cols]
+    deals = _combine_name_number(deals)
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
@@ -477,6 +499,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
                      "validation_status", "seller", "link_ct", "link_tcg"]
     display_cols = [c for c in display_cols if c in df.columns]
     df = df[display_cols]
+    df = _combine_name_number(df)
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
