@@ -349,6 +349,26 @@ def apply_card_hyperlinks(ws, df):
             if isinstance(v, str) and v.startswith("http"):
                 cell.hyperlink = v
                 cell.font = HYPERLINK_FONT
+    # Preço CT → Link CT (clicar no preço abre a página do card no CT pra conferir)
+    if "Preço CT (R$)" in cols and "Link CT" in cols:
+        price_idx = cols.index("Preço CT (R$)") + 1
+        link_idx = cols.index("Link CT") + 1
+        for ri in range(2, len(df) + 2):
+            url = ws.cell(row=ri, column=link_idx).value
+            if isinstance(url, str) and url.startswith("http"):
+                c = ws.cell(row=ri, column=price_idx)
+                c.hyperlink = url
+                c.font = HYPERLINK_FONT
+    # TCG (R$) → Link TCG (clicar no preço abre a página TCGplayer pra conferir)
+    if "TCG (R$)" in cols and "Link TCG" in cols:
+        tprice_idx = cols.index("TCG (R$)") + 1
+        link_idx = cols.index("Link TCG") + 1
+        for ri in range(2, len(df) + 2):
+            url = ws.cell(row=ri, column=link_idx).value
+            if isinstance(url, str) and url.startswith("http"):
+                c = ws.cell(row=ri, column=tprice_idx)
+                c.hyperlink = url
+                c.font = HYPERLINK_FONT
 
 # ─── Main pipeline ────────────────────────────────────────────────────────────
 DECISAO_FILL = {
