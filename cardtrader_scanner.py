@@ -1210,7 +1210,11 @@ def _read_skip_file_locked() -> dict:
     Levanta exception em erro de parse (NÃO engole)."""
     if not SKIP_LIST_FILE.exists():
         return _empty_skip_payload()
-    raw = SKIP_LIST_FILE.read_text(encoding="utf-8")
+    # utf-8-sig: tolera BOM UTF-8 (EF BB BF) que PS 5.1 `Set-Content -Encoding utf8`
+    # e vários editores prepend ao reescrever a skip-list. `json.loads` puro rejeita
+    # BOM com "Unexpected UTF-8 BOM" → crash pré-set-1 (já quebrou um daily 2026-05-29).
+    # Comportamento idêntico ao utf-8 quando não há BOM.
+    raw = SKIP_LIST_FILE.read_text(encoding="utf-8-sig")
     if not raw.strip():
         # Arquivo vazio (caso edge: write parcial / disk full). Tratado como vazio,
         # mas loga WARNING — operador deve saber.
