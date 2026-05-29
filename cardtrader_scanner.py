@@ -2262,17 +2262,19 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         for cell in row:
             cell.border = border
         # Colunas monetárias (índices 0-based)
-        row[5].number_format = '"R$"#,##0.00'   # F: Scan R$
-        row[7].number_format = '"R$"#,##0.00'   # H: LIVE R$
-        row[8].number_format = "0.00%"          # I: Markup %
-        row[11].number_format = '"R$"#,##0.00'  # L: TCG Market BRL
-        row[12].number_format = "$#,##0.00"     # M: TCG Market USD
-        row[13].number_format = "0.00%"         # N: Margem % scan
-        row[14].number_format = "0.00%"         # O: Margem % REAL
-        row[15].number_format = "0.00%"         # P: Net scan
-        row[16].number_format = "0.00%"         # Q: Net REAL
-        row[17].number_format = '"R$"#,##0.00'  # R: Lucro R$ REAL
-        row[18].number_format = '"R$"#,##0.00'  # S: Frete R$
+        # v2.8 Layer 4: índices corrigidos após inserção da coluna "Idioma"
+        # (idx 5). O bloco anterior estava todo -1 (escrito pré-Idioma).
+        row[6].number_format = '"R$"#,##0.00'   # G: Scan R$ (raw)
+        row[8].number_format = '"R$"#,##0.00'   # I: LIVE R$ (real)
+        row[9].number_format = "0.00%"          # J: Markup %
+        row[12].number_format = '"R$"#,##0.00'  # M: TCG Market BRL
+        row[13].number_format = "$#,##0.00"     # N: TCG Market USD
+        row[14].number_format = "0.00%"         # O: Margem % (scan)
+        row[15].number_format = "0.00%"         # P: Margem % REAL
+        row[16].number_format = "0.00%"         # Q: Net Margin % (scan)
+        row[17].number_format = "0.00%"         # R: Net Margin % REAL
+        row[18].number_format = '"R$"#,##0.00'  # S: Lucro R$ REAL
+        row[19].number_format = '"R$"#,##0.00'  # T: Frete Est. R$
         # v2.8 Layer 4: nova coluna Variant inserida entre Foil e Seller.
         # Headers atuais (29 cols): ... "Foil"(22), "Variant"(23), "Seller"(24),
         # "Tipo Seller"(25), "Hub"(26), "Link CardTrader"(27), "Link TCG"(28),
@@ -2291,10 +2293,12 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
-    # Formatação condicional na coluna Net Margin REAL (Q): verde forte = oportunidade real
+    # Formatação condicional na coluna Net Margin REAL (R, idx17): verde forte
+    # = oportunidade real. Antes apontava p/ Q (Net Margin % scan, otimista
+    # pré-validação) — bug de off-by-one igual ao bloco de number_format.
     if ws.max_row > 1:
         ws.conditional_formatting.add(
-            f"Q2:Q{ws.max_row}",
+            f"R2:R{ws.max_row}",
             ColorScaleRule(
                 start_type="num", start_value=0, start_color="FEE2E2",
                 mid_type="num", mid_value=0.15, mid_color="FEF3C7",
