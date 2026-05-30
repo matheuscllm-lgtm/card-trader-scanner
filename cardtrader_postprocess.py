@@ -78,6 +78,48 @@ HUB_FEE_RATE = 0.06
 # ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
 
+# ─── CT set base totals (PR-K — alinhamento com modelo MYP, 2026-05-29) ──────
+# Formato Carta MYP-style: "Plusle (193/197)". Total = printedTotal do
+# pokemontcg.io (números BASE do set, NÃO incluindo SIR/HR/secret rares).
+# Fonte: api.pokemontcg.io/v2/sets queried 2026-05-29.
+#   sv4 par   = 182 base / 266 total (Paradox Rift)
+#   sv4pt5 paf= 91 base / 245 total  (Paldean Fates)
+#   sv5 tef   = 162 base / 218 total (Temporal Forces)
+#   sv6 twm   = 167 base / 226 total (Twilight Masquerade)
+#   sv6pt5 sfa= 64 base / 99 total   (Shrouded Fable)
+#   sv7 scr   = 142 base / 175 total (Stellar Crown)
+#   sv8 ssp   = 191 base / 252 total (Surging Sparks)
+#   sv8pt5 pre= 131 base / 180 total (Prismatic Evolutions)
+#   sv9 jtg   = 159 base / 190 total (Journey Together)
+#   sv10 dri  = 182 base / 244 total (Destined Rivals)
+#   zsv10pt5 blk = 86 base / 172 total (Black Bolt)
+#   me2pt5 asc= 217 base / 295 total (Ascended Heroes)
+# Para sets fora desta tabela → fallback "Nome (NNN)" sem total.
+CT_SET_TOTAL: dict[str, int] = {
+    "par": 182,
+    "paf": 91,
+    "tef": 162,
+    "twm": 167,
+    "sfa": 64,
+    "scr": 142,
+    "ssp": 191,
+    "pre": 131,
+    "jtg": 159,
+    "dri": 182,
+    "asc": 217,
+    "blk": 86,
+}
+
+# ─── Vintage suspect filter (PR-K — Validate Manually heuristic) ─────────────
+# Sets confirmados como inflados na memória ct_scanner_session_handoff_2026_05_19
+# (LC + BA-20 inflados confirmados). Pokemontcg.io aplica reverseHolofoil
+# fallback que infla 5-30× quando o card-base tem preço baixo.
+VINTAGE_SUSPECT_SETS = {
+    "lc",       # Legendary Collection
+    "ba-20", "ba20",  # Battle Academy 2020
+    "ba-22", "ba22",  # Battle Academy 2022
+}
+
 # ─── Alpha suffix filter (v2.3 Layer 5 — bug-hunt 2026-05-18) ────────────────
 # Cards com collector number `\d+[a-zA-Z]+` (ex `153a`, `022a`, `156b`) são
 # tipicamente variantes promo/league cegas pra pokemontcg.io:
@@ -459,12 +501,22 @@ def enrich_df(raw_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _combine_name_number(df: pd.DataFrame) -> pd.DataFrame:
-    """Junta card_name + card_number numa célula só ('Minccino 182') pro operador
-    copiar-e-colar direto no site de busca. Mantém card_number separado (coluna Nº).
-    Robusto a número float ('182.0'→'182'), ausente, ou alfanumérico (TG12, SV161)."""
+    """Junta card_name + card_number numa célula só, formato MYP-style.
+
+    PR-K (2026-05-29) — alinhamento com MYP scanner:
+      - Com total mapeado: "Plusle (193/197)" (parens + total do set)
+      - Sem total mapeado: "Plusle (193)" (parens só, sem total)
+      - Sem número: "Plusle" (só nome)
+
+    set_code é extraído da coluna 'set_code' (string como "Stellar Crown (scr)"
+    ou direto "scr"). Robusto a número float ('182.0'→'182'), ausente,
+    alfanumérico (TG12, SV161, 153a) e total ausente.
+    """
     if "card_name" not in df.columns or "card_number" not in df.columns:
         return df
     df = df.copy()
+    has_set = "set_code" in df.columns
+
     def _combine(row):
         name = row["card_name"]
         num = row["card_number"]
@@ -475,7 +527,15 @@ def _combine_name_number(df: pd.DataFrame) -> pd.DataFrame:
             s = s[:-2]
         if not s or s.lower() == "nan":
             return name
-        return f"{name} {s}"
+        # Resolve total via CT_SET_TOTAL se set_code mapeado
+        total = None
+        if has_set:
+            code = _extract_set_code_from_label(row.get("set_code"))
+            total = CT_SET_TOTAL.get(code)
+        if total is not None:
+            return f"{name} ({s}/{total})"
+        return f"{name} ({s})"
+
     df["card_name"] = df.apply(_combine, axis=1)
     return df
 
@@ -529,6 +589,65 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
         "seller": "Seller", "link_ct": "Link CT", "link_tcg": "Link TCG",
     }
     return df.rename(columns=rename_map)
+
+def build_top50_margin_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
+    """PR-K: Top 50 listings por Net % desc (ranking puro do universo All Listings).
+    Recebe DataFrame JÁ na forma final (mesmas colunas das outras sheets).
+    Aceita ranking puro: qualquer Decisão (inclusive NÃO) — operador vê o teto."""
+    if all_listings.empty or "Net %" not in all_listings.columns:
+        return all_listings.head(0)
+    return all_listings.sort_values("Net %", ascending=False).head(50)
+
+
+def build_validate_manually_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
+    """PR-K: listings que pedem revisão manual via heurísticas:
+      - Carta TG## (Trainer Gallery, ^TG\\d+) no Nº
+      - Validação ∈ {STALE, PRICE_CHANGED, API_ERROR}
+      - Set vintage suspect (lc, ba-20, ba-22)
+      - Net % > 200% (provável FP)
+    """
+    if all_listings.empty:
+        return all_listings
+    df = all_listings.copy()
+    mask = pd.Series(False, index=df.index)
+    # TG##
+    if "Nº" in df.columns:
+        mask = mask | df["Nº"].astype(str).str.match(r"^TG\d+", case=False, na=False)
+    # Validation flags
+    if "Validação" in df.columns:
+        val_up = df["Validação"].astype(str).str.upper()
+        mask = mask | val_up.isin({"STALE", "PRICE_CHANGED", "API_ERROR"})
+    # Vintage suspect set
+    if "Set" in df.columns:
+        codes = df["Set"].astype(str).apply(_extract_set_code_from_label)
+        mask = mask | codes.isin(VINTAGE_SUSPECT_SETS)
+    # Net% extremo
+    if "Net %" in df.columns:
+        nm = pd.to_numeric(df["Net %"], errors="coerce")
+        mask = mask | nm.gt(2.0)
+    return df[mask].sort_values("Net %", ascending=False) if "Net %" in df.columns else df[mask]
+
+
+def build_tcg_suspect_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
+    """PR-K: listings cujo preço TCG parece inflado (provável per-expansion bug ou
+    vintage reverseHolofoil inflation):
+      - TCG (R$) > 10× mediana TCG do mesmo Set (proxy de inflação per-blueprint)
+      - Set vintage não-coberto bem por pokemontcg.io (mesmo critério)
+    """
+    if all_listings.empty or "TCG (R$)" not in all_listings.columns:
+        return all_listings.head(0)
+    df = all_listings.copy()
+    tcg = pd.to_numeric(df["TCG (R$)"], errors="coerce")
+    mask = pd.Series(False, index=df.index)
+    # 10× mediana por Set
+    if "Set" in df.columns:
+        med = tcg.groupby(df["Set"]).transform("median")
+        mask = mask | (tcg > med * 10)
+        # Vintage set heuristic
+        codes = df["Set"].astype(str).apply(_extract_set_code_from_label)
+        mask = mask | codes.isin(VINTAGE_SUSPECT_SETS)
+    return df[mask].sort_values("Net %", ascending=False) if "Net %" in df.columns else df[mask]
+
 
 def build_summary(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     decisions = df.apply(lambda r: classify_decision(r, cfg), axis=1)
@@ -632,6 +751,22 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
             for ci, val in enumerate(row, 1):
                 ws.cell(row=ri, column=ci, value=_safe_val(val) if ri > 1 else val)
         style_sheet(ws, all_l, decisao_col="Decisão", chase_col="Chase Tier")
+
+    # ─── PR-K: 3 sheets MYP-style adicionais ────────────────────────────────
+    # Derivadas de All Listings — preservam mesmas colunas, só mudam filtro/sort.
+    def _write_styled(sheet_name: str, sheet_df: pd.DataFrame):
+        ws = wb.create_sheet(sheet_name)
+        if sheet_df.empty:
+            ws.cell(row=1, column=1, value="Nenhum listing nesta categoria.")
+            return
+        for ri, row in enumerate([sheet_df.columns.tolist()] + sheet_df.values.tolist(), 1):
+            for ci, val in enumerate(row, 1):
+                ws.cell(row=ri, column=ci, value=_safe_val(val) if ri > 1 else val)
+        style_sheet(ws, sheet_df, decisao_col="Decisão", chase_col="Chase Tier")
+
+    _write_styled("Top 50 Margin", build_top50_margin_sheet(all_l))
+    _write_styled("Validate Manually", build_validate_manually_sheet(all_l))
+    _write_styled("TCG Suspect", build_tcg_suspect_sheet(all_l))
 
     summary = build_summary(df, cfg)
     ws = wb.create_sheet("Summary")
