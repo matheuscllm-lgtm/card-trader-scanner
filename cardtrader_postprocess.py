@@ -114,6 +114,7 @@ CT_SET_TOTAL: dict[str, int] = {
     "jtg": 159,
     "dri": 182,
     "asc": 217,
+    "me2pt5": 217,  # PR-L CT-LOW-a: alias do code pokemontcg.io (= asc)
     "blk": 86,
 }
 
