@@ -1,14 +1,42 @@
 # Session Handoff — CT Scanner
 
 > Estado atual + retomada rápida pra próxima sessão.
-> **Última atualização:** 2026-05-16 (release v2 oficial).
+> **Última atualização:** 2026-05-29 (PR-G mergeado + merge_myp_ct fix + daily).
+
+---
+
+## 2026-05-29 — PR-G (BOM fix) + merge_myp_ct fix + daily run
+
+- **PR-G mergeado em main** @ `39089d3` (local, **não pushed** — aguarda OK). `_read_skip_file_locked` (L1217) lê skip-list com `utf-8-sig` → tolerante a BOM. 6 testes novos + 23 suite. Worktree/branch limpos. Motivo: `Set-Content -Encoding utf8` no PS 5.1 grava BOM (EF BB BF) que crashava o scan na largada (`json.loads` rejeita BOM).
+- **merge_myp_ct.py corrigido** (cópias `Scripts/` + `Documents/tcg-arbitrage-scanners/`): reconhece schema v2 "Deals" (`Preço CT`/`TCG`/`Net %`/`Lucro Líq`/`Validação`/`Link CT`), default `--ct-sheet`=Deals, aliases legados preservados. Testado contra dados reais.
+- **PR-H mergeado+pushed** @ `a209bdd`: review de coerência (/gsd-review) — FIX1 conditional-format `Q2:Q`→`R2:R` (verde na margem REAL, não scan); FIX2 `number_format` indices +1 (eram off-by-one pré-coluna "Idioma" → `Net Margin REAL` saía como R$/`LIVE R$` como %); FIX3 recovery preserva `price_variant_used`. 5 testes novos + 28 suite.
+- **Daily `CT_Daily_2026-05-29` COMPLETO** (exit=0, ~61min, 10 sets modernos, state-dir `%LOCALAPPDATA%`): **6 deals** (1 COMPRA Plusle#193 par net30%/R$81 [ground-truth validado]; 5 REVISAR — Minccino#182 tef ×2, Milcery#152 scr ×2, Shinx#135 paf — todos lucro<R$50). `outputs\daily_2026-05-29.xlsx`. Task unregistered.
+- **PR-I mergeado+pushed** @ `ae137c3`: célula "Carta" agora traz nome+número juntos ("Minccino 182") nas sheets Deals+All Listings (postprocess `_combine_name_number`) — operador copia-e-cola no site de busca. Nº preservado, hyperlink mantido. 6 testes novos, suite 34.
+- **Push:** `origin/main` @ `ae137c3` (PR-F + PR-G + PR-H + PR-I todos pushed). ✅
+- **~~A verificar~~ RESOLVIDO 2026-05-30:** flag "Threshold COMPRA 20% vs 25%" era falso alarme. `build_summary` mostra `min_net_margin` (default 0.25, regra COMPRA) e `revisar_min_net` (default 0.20, zona cinza REVISAR) em LINHAS SEPARADAS — não há bug, confusão de leitura entre as 2 linhas.
+
+---
+
+## 2026-05-28 — PR-F mergeado em main + lições
+
+**Estado de fechamento:**
+- **PR-F mergeado e PUSHED** em `main` @ `47e10d4` (fast-forward de `4541fc3`). `origin/main` atualizado 2026-05-28 após gate de validação cumprido + OK explícito do operador.
+- **PR-F = state-dir + heartbeat + flush per-listing (commit `0e46a73`) + skip-list TTL (commit `47e10d4`).** Tira estado mutável (cache.db, checkpoint, heartbeat, skip-list) do Google Drive → `%LOCALAPPDATA%\CardTraderScanner`. XLSX final continua no Drive.
+- **Infra VALIDADA end-to-end** num scan real (`scr`/`sfa`, 2026-05-28): state-dir, heartbeat ao vivo, flush per-listing (`set_progress`), skip-list TTL formato `{reason, added_at}`, recovery set_progress-safe, Drive intocado. 17/17 unit tests + não-regressão.
+- **LACUNA FECHADA (2026-05-28 22:30):** validação menor `--sets scr` completou ponta-a-ponta (`scanner=0 post=0`) e gerou `outputs\validate2_F_2026-05-28.xlsx` — 2 deals Milcery #152 scr (REVISAR, net 33-34%, lucro <R$50), todas as colunas do postprocess preenchidas (Decisão/Net%/Hub 6%/Validação), math conferida. **Gate p/ push CUMPRIDO.** Push aguarda apenas OK explícito do operador (salvaguarda auto-mode bloqueia push direto a main sem confirmação).
+
+**Lições registradas:**
+1. **Kill prematuro = erro de execução do sub-agente, NÃO evidência contra o patch.** O scan de validação estava saudável (heartbeat avançando `scr i=75/186`) quando um sub-agente interpretou mal um heartbeat momentaneamente parado como "travado" e matou. O F estava funcionando; a lacuna do postprocess é consequência do kill, não de bug do patch.
+2. **Path com acento quebra `.ps1` em PowerShell 5.1.** O dir tem "Exportação" (ç/ã); embutir o path literal num `.ps1` lido por PS 5.1 corrompe os bytes → path inválido → task falha (`0xFFFD0000`) sem lançar python. Workaround: construir o segmento via `[char]0xE7 + [char]0xE3`, OU `New-ScheduledTaskPrincipal -LogonType Interactive`. (Também em memória `ct_scan_long_run_detached`.)
+3. **Scans longos SEMPRE via Task Scheduler detached, trigger ONE-SHOT** (sem `-RepetitionInterval`). Crash silencioso 2026-05-27 (inline, terminal-pai morto) + re-disparo indevido da task recover (trigger recorrente). Ver `logs/INCIDENT-silent-crash-2026-05-27.md`.
 
 ---
 
 ## Estado atual
 
-- **Repo:** `matheuscllm-lgtm/card-trader-scanner` `main` @ `e0281ba` — working tree limpo
-- **Scanner:** **v2.5** (per-set timeout + auto skip-list + Rarity persist) — `cardtrader_scanner.py`
+- **Repo:** `matheuscllm-lgtm/card-trader-scanner` `main` @ `4713249` (pushed) — PR-F→PR-L aplicados
+- **Scanner:** **v2.10** + PR-F (state-dir/heartbeat/flush/skip-list-TTL) + PR-G (utf-8-sig BOM) + PR-H (number_format off-by-one + cond-format R2:R + recovery variant)
+- **Postprocess:** **v2.x** + PR-I (Carta=nome+número) + PR-J (price hyperlinks) + PR-K (formato `(NNN/MMM)` MYP-style + 3 sheets novas: Top 50 Margin / Validate Manually / TCG Suspect) + PR-L (EXTREME_NET_PCT constant, _combine docstring, header docstring 6 sheets)
 - **Postprocess:** **v2.0** (Chase Tier objetivo + Decisão mecânica + 3 sheets) — `cardtrader_postprocess.py`
 - **Legacy preservado:** `cardtrader_postprocess_legacy_v1.5.py` (rollback se v2 mostrar regressão)
 - **Hub fee paridade:** scanner ↔ postprocess intacta (6%)
