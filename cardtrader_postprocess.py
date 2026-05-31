@@ -728,23 +728,23 @@ def style_sheet(ws, df, decisao_col=None, chase_col=None):
     # Hyperlinks na coluna Carta
     apply_card_hyperlinks(ws, df)
 
+def _safe_val(val):
+    """Módulo-level (PR-L 2026-05-30, CT-M4): NaN/None → None (openpyxl
+    escreve célula vazia, evita 'nan' literal). Aplicado em TODAS as
+    sheets (Deals/All Listings/PR-K/Summary) pra uniformidade defensiva."""
+    try:
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return None
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return val
+
+
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     df = enrich_df(df)
     wb = Workbook(); wb.remove(wb.active)
-
-    # v2.7.1: helper pra escrever NaN/None como célula vazia em vez de "nan".
-    # Pandas serializa None em coluna object via NaN; openpyxl escreve "nan"
-    # se passar pd.NA/float('nan') sem tratamento. Importa especialmente pra
-    # nova coluna Link TCG (None aceitável quando provider != pokemontcg).
-    def _safe_val(val):
-        try:
-            if val is None or (isinstance(val, float) and pd.isna(val)):
-                return None
-            if pd.isna(val):
-                return None
-        except (TypeError, ValueError):
-            pass
-        return val
 
     deals = build_deals_sheet(df, cfg)
     ws = wb.create_sheet("Deals")
@@ -786,7 +786,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     ws = wb.create_sheet("Summary")
     for ri, row in enumerate([summary.columns.tolist()] + summary.values.tolist(), 1):
         for ci, val in enumerate(row, 1):
-            ws.cell(row=ri, column=ci, value=val)
+            ws.cell(row=ri, column=ci, value=_safe_val(val) if ri > 1 else val)
     # Style summary
     for ci in range(1, len(summary.columns) + 1):
         c = ws.cell(row=1, column=ci)
