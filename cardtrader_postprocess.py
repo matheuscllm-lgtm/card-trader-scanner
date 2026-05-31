@@ -9,7 +9,8 @@ Mudancas vs v1.5:
 - ADICIONA Fundamental Score (0-100) derivado de metricas OBJETIVAS (chase + margin + lucro + validation)
 - ADICIONA Decisao (COMPRA/REVISAR/NAO) via regra MECANICA (nao opiniao Claude)
 - ADICIONA Porque (1 linha factual)
-- REDUZ de 10 sheets pra 3 (Deals, All Listings, Summary)
+- REDUZ de 10 sheets pra 3 (Deals, All Listings, Summary). Expandido pra 6
+  desde PR-K (+ Top 50 Margin, Validate Manually, TCG Suspect — modelo MYP)
 - MANTEM: Hub fee 6% paridade, TG## auto-filter, hyperlinks, alias fixes
 - MANTEM: ct_margin_formula (sem shipping; custo = preco_pagina × 1.06)
 
@@ -74,6 +75,12 @@ except (AttributeError, ValueError):
 
 # ─── Hub fee canônico (ct_margin_formula): custo = preço_CT × 1.06 ───────────
 HUB_FEE_RATE = 0.06
+
+# ─── Net % threshold pra Validate Manually (PR-L 2026-05-30) ─────────────────
+# Net % chega em fração (0.30 = 30%). EXTREME_NET_PCT = 2.0 significa 200% —
+# margens dessa magnitude são quase sempre falso positivo (provider error,
+# inflação reverseHolofoil vintage, etc.) e vão pra revisão manual.
+EXTREME_NET_PCT = 2.0
 
 # ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
 TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
@@ -506,6 +513,13 @@ def _combine_name_number(df: pd.DataFrame) -> pd.DataFrame:
     PR-K (2026-05-29) — alinhamento com MYP scanner:
       - Com total mapeado: "Plusle (193/197)" (parens + total do set)
       - Sem total mapeado: "Plusle (193)" (parens só, sem total)
+
+    ⚠️ CONTRATO IMPORTANTE (PR-L 2026-05-30): chamado em build_deals_sheet
+    e build_all_listings_sheet ANTES do rename. Sheets derivadas (Top 50
+    Margin / Validate Manually / TCG Suspect) recebem o df JÁ TRANSFORMADO
+    — card_name é "Plusle (193/182)", card_number=193 fica preservado
+    separado. Filtros nessas sheets usam Nº ou Set crus, NÃO Carta texto;
+    se mudar essa convenção verifique todos os build_*_sheet PR-K.
       - Sem número: "Plusle" (só nome)
 
     set_code é extraído da coluna 'set_code' (string como "Stellar Crown (scr)"
@@ -624,7 +638,7 @@ def build_validate_manually_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
     # Net% extremo
     if "Net %" in df.columns:
         nm = pd.to_numeric(df["Net %"], errors="coerce")
-        mask = mask | nm.gt(2.0)
+        mask = mask | nm.gt(EXTREME_NET_PCT)
     return df[mask].sort_values("Net %", ascending=False) if "Net %" in df.columns else df[mask]
 
 
