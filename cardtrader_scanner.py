@@ -2336,6 +2336,11 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--sets", nargs="*", help="Códigos de expansão CT (ex: sv1 sv3pt5). Default: todas do config.yaml")
+    p.add_argument("--all-sets", action="store_true",
+                   help=("Escaneia TODAS as expansões Pokemon do CardTrader (~832), "
+                         "ignorando tanto --sets quanto a lista 'sets' do config.yaml. "
+                         "Use para o scan COMPLETO (weekly). Sem esta flag e sem --sets, "
+                         "o escopo cai na lista do config.yaml."))
     p.add_argument("--threshold", type=float, default=MARGIN_THRESHOLD,
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
@@ -2495,7 +2500,9 @@ def main():
     all_expansions = ct.list_expansions(CT_POKEMON_GAME_ID)
     log.info(f"Total: {len(all_expansions)} expansões")
 
-    sets_cfg = args.sets or cfg.get("sets")
+    # --all-sets força o escopo COMPLETO: ignora --sets E a lista do config.yaml,
+    # caindo no branch `else` abaixo (expansions = all_expansions ~832).
+    sets_cfg = None if args.all_sets else (args.sets or cfg.get("sets"))
     if sets_cfg:
         wanted = {s.lower() for s in sets_cfg}
         expansions = [e for e in all_expansions if e.get("code", "").lower() in wanted]

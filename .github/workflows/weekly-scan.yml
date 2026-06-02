@@ -1,8 +1,15 @@
-name: Weekly CT Scan (full)
+name: Weekly CT Scan (full + live partials)
 
-# Scan COMPLETO — todas as ~832 expansões Pokemon no CardTrader.
-# Sem schedule: dispatch manual apenas (decisão operador 2026-05-16). Roda
-# LOCAL preferencialmente; GH Actions só quando quota free tier permite.
+# Scan COMPLETO — TODAS as ~832 expansões Pokemon no CardTrader (--all-sets).
+# Sem schedule: dispatch manual apenas.
+#
+# Entrega de PARCIAIS AO VIVO: enquanto o scan corre, a cada ~10min este job
+# gera uma lista dos deals (candidatos) encontrados até então e faz commit/push
+# pro branch `scan-live`. Assim:
+#   - você acompanha os deals e já vai fazendo a verificação manual; e
+#   - se o job for cancelado / estourar o timeout de 6h, NADA do que foi
+#     pesquisado se perde (fica persistido no git em `scan-live`).
+# Veja `scan-live/partials/PARTIAL_DEALS.md` (renderiza direto no GitHub).
 
 on:
   workflow_dispatch:
@@ -16,28 +23,31 @@ on:
         required: false
         default: '0.20'
       validate_top:
-        description: 'Quantos candidatos validar per-blueprint (full scope: bump pra 100+)'
+        description: 'Quantos candidatos validar per-blueprint (full scope: 100+)'
         required: false
         default: '100'
       per_set_timeout:
-        description: 'v2.4 timeout per-set (min). Default 8. Sets que estourarem vão pra skip-list.'
+        description: 'Timeout per-set (min). Sets que estourarem vão pra skip-list.'
         required: false
         default: '8'
+      partial_interval_sec:
+        description: 'Intervalo entre commits de parciais no scan-live (segundos)'
+        required: false
+        default: '600'
 
 concurrency:
   group: ct-scan
   cancel-in-progress: false
 
 permissions:
-  contents: read
-  issues: write
+  contents: write   # precisa escrever no branch scan-live (parciais ao vivo)
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # Full scan ~832 expansões × pricing rate variável = potencialmente horas.
-    # GH Actions free tier job max = 360min (6h). v2.4 per-set timeout + skip-list
-    # protegem contra sets travados queimarem todo o budget.
+    # Full scan ~832 expansões. GH Actions free tier job max = 360min (6h).
+    # per-set timeout + skip-list protegem contra sets travados. Se estourar,
+    # os parciais já commitados no scan-live preservam tudo que foi achado.
     timeout-minutes: 350
 
     steps:
@@ -55,38 +65,122 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scanner (full scope, no --sets)
+      - name: Configure git (commits de parciais)
+        run: |
+          git config user.name  "ct-scan-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Run scanner (full scope) + live partial commits
+        id: scan
         env:
           CT_JWT: ${{ secrets.CT_JWT }}
           POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: |
+          set -uo pipefail
           THRESHOLD="${{ github.event.inputs.threshold || '0.30' }}"
           MIN_NET="${{ github.event.inputs.min_net_margin || '0.20' }}"
           VAL_TOP="${{ github.event.inputs.validate_top || '100' }}"
           PER_SET_TIMEOUT="${{ github.event.inputs.per_set_timeout || '8' }}"
-          # Sem --sets → scanner pega TODAS as expansões via list_expansions
+          INTERVAL="${{ github.event.inputs.partial_interval_sec || '600' }}"
+          STAMP=$(date +%Y%m%d_%H%M)
+          OUT="cardtrader_scan_weekly_${STAMP}.xlsx"
+          echo "$OUT" > .scan_output_name
+          echo "out_name=$OUT" >> "$GITHUB_OUTPUT"
+          CKPT="scan-state/${OUT}.checkpoint.jsonl"
+          mkdir -p scan-state partials
+
+          commit_partials () {
+            python scripts/checkpoint_to_partial.py \
+              --checkpoint "$CKPT" \
+              --out-md   partials/PARTIAL_DEALS.md \
+              --out-csv  partials/partial_deals.csv || true
+            # snapshots auxiliares (checkpoint p/ recovery, heartbeat, tail do log)
+            cp -f "$CKPT" partials/checkpoint.jsonl 2>/dev/null || true
+            cp -f scan-state/heartbeat.txt partials/heartbeat.txt 2>/dev/null || true
+            tail -c 60000 scan-state/scanner_run.log > partials/scanner_run.tail.txt 2>/dev/null || true
+            git add -A partials 2>/dev/null || true
+            git add -f partials/checkpoint.jsonl 2>/dev/null || true
+            if ! git diff --cached --quiet; then
+              git commit -q -m "scan partial $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]" || true
+              git push -f origin HEAD:scan-live 2>&1 | tail -2 || true
+            fi
+          }
+
+          # --all-sets = escopo COMPLETO (~832). --state-dir = checkpoint no
+          # workspace. --checkpoint-every 1 = flush por set (parciais frescos).
           python cardtrader_scanner.py \
-            --threshold $THRESHOLD \
-            --validate-top $VAL_TOP \
-            --min-net-margin $MIN_NET \
-            --per-set-timeout $PER_SET_TIMEOUT \
-            --output "cardtrader_scan_weekly_$(date +%Y%m%d_%H%M).xlsx"
+            --all-sets \
+            --threshold "$THRESHOLD" \
+            --validate-top "$VAL_TOP" \
+            --min-net-margin "$MIN_NET" \
+            --per-set-timeout "$PER_SET_TIMEOUT" \
+            --checkpoint-every 1 \
+            --state-dir scan-state \
+            --output "$OUT" > scan-state/scanner_run.log 2>&1 &
+          SCAN_PID=$!
+          echo "Scanner rodando (PID=$SCAN_PID). Parciais a cada ${INTERVAL}s → branch scan-live."
+
+          # Commit inicial (placeholder) pra criar scan-live cedo.
+          sleep 30
+          commit_partials
+
+          while kill -0 "$SCAN_PID" 2>/dev/null; do
+            sleep "$INTERVAL"
+            commit_partials
+          done
+
+          wait "$SCAN_PID"
+          SCAN_RC=$?
+          echo "Scanner finalizou (exit=$SCAN_RC)."
+          commit_partials                       # commit final dos parciais
+          echo "SCAN_RC=$SCAN_RC" >> "$GITHUB_ENV"
+          # Não falha aqui: deixamos postprocess + upload + commit-final rodarem.
+          exit 0
 
       - name: Run postprocess (v2 — Decisão mecânica + Chase Tier)
+        if: always()
         env:
           PYTHONIOENCODING: utf-8
         run: |
           XLSX=$(ls -t cardtrader_scan_weekly_*.xlsx 2>/dev/null | head -1)
           if [ -z "$XLSX" ]; then
-            echo "Nenhum XLSX gerado pelo scanner — pulando postprocess"
+            echo "Nenhum XLSX final gerado (scan incompleto/cancelado) — pulando postprocess."
             exit 0
           fi
           python cardtrader_postprocess.py \
             --input "$XLSX" \
-            --output "cardtrader_relatorio_weekly_$(date +%Y-%m-%d).xlsx"
+            --output "cardtrader_relatorio_weekly_$(date +%Y-%m-%d).xlsx" || true
 
-      - name: Upload scan outputs
+      - name: Commit final results to scan-live
+        if: always()
+        env:
+          OUT_NAME: ${{ steps.scan.outputs.out_name }}
+        run: |
+          mkdir -p partials/final
+          # Regenera parciais com o estado MAIS RECENTE do checkpoint — crucial
+          # se o job foi cancelado por timeout mid-scan (pega tudo do disco, não
+          # apenas o último commit de 10min).
+          CKPT="scan-state/${OUT_NAME}.checkpoint.jsonl"
+          if [ -f "$CKPT" ]; then
+            python scripts/checkpoint_to_partial.py \
+              --checkpoint "$CKPT" \
+              --out-md partials/PARTIAL_DEALS.md \
+              --out-csv partials/partial_deals.csv || true
+            cp -f "$CKPT" partials/checkpoint.jsonl 2>/dev/null || true
+          fi
+          tail -c 200000 scan-state/scanner_run.log > partials/scanner_run.tail.txt 2>/dev/null || true
+          cp -f cardtrader_scan_weekly_*.xlsx partials/final/ 2>/dev/null || true
+          cp -f cardtrader_relatorio_weekly_*.xlsx partials/final/ 2>/dev/null || true
+          # XLSX e *.checkpoint.jsonl são git-ignored → força a inclusão.
+          git add -f partials/checkpoint.jsonl partials/final/*.xlsx 2>/dev/null || true
+          git add -A partials 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -q -m "scan final/snapshot $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]" || true
+            git push -f origin HEAD:scan-live 2>&1 | tail -2 || true
+          fi
+
+      - name: Upload scan outputs (artifacts)
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -94,16 +188,18 @@ jobs:
           path: |
             cardtrader_scan_weekly_*.xlsx
             cardtrader_relatorio_weekly_*.xlsx
-            cardtrader_scanner.log
-            scanner_skip_list.json
+            scan-state/scanner_run.log
+            scan-state/*.checkpoint.jsonl
+            partials/**
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn
 
-      - name: Notify on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Surface scanner status
+        if: always()
         run: |
-          gh issue create \
-            --title "Weekly CT scan failed: run ${{ github.run_id }}" \
-            --body "Weekly full scan failed at $(date -u +'%Y-%m-%d %H:%M UTC'). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RC="${SCAN_RC:-unknown}"
+          echo "Scanner exit code: $RC"
+          if [ "$RC" != "0" ] && [ "$RC" != "unknown" ]; then
+            echo "::error::Scanner terminou com erro (exit=$RC). Veja scan-live/partials/scanner_run.tail.txt"
+            exit "$RC"
+          fi
