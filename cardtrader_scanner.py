@@ -2402,6 +2402,20 @@ def parse_args():
     return p.parse_args()
 
 
+# Sets de MAIOR PRIORIDADE (era Scarlet & Violet + curados do daily). No modo
+# --all-sets, estes são escaneados PRIMEIRO — o catálogo CT vem em ordem
+# old→new, e sem reordenar os sets modernos (foco da operação) ficariam no fim
+# da fila, sob risco de serem cortados pelo timeout. Códigos que não existirem
+# no catálogo simplesmente não casam (inócuo). Ordem aqui = ordem de scan.
+PRIORITY_SET_CODES = [
+    # Curados (daily) — códigos CardTrader
+    "sfa", "scr", "par", "paf", "tef", "twm", "ssp", "dri", "blk", "jtg", "asc",
+    # Scarlet & Violet (config.yaml) — sv1..sv10 + meio-sets
+    "sv1", "sv2", "sv3", "sv3pt5", "sv4", "sv4pt5", "sv5", "sv6", "sv6pt5",
+    "sv7", "sv8", "sv8pt5", "sv9", "sv10", "zsv10pt5", "me2pt5",
+]
+
+
 def load_config() -> dict:
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -2511,6 +2525,19 @@ def main():
             log.warning(f"Sets não encontrados: {missing}")
     else:
         expansions = all_expansions
+
+    # Reordena no escopo COMPLETO: sets de maior valor (SV/curados) PRIMEIRO.
+    # O catálogo CT vem old→new; sem isso, os sets modernos (foco) ficariam no
+    # fim e poderiam ser cortados pelo timeout. sort é estável → o resto mantém
+    # a ordem do catálogo. Só afeta --all-sets (em --sets a ordem é do usuário).
+    if args.all_sets:
+        prio = {c.lower(): i for i, c in enumerate(PRIORITY_SET_CODES)}
+        expansions.sort(key=lambda e: prio.get((e.get("code") or "").lower(), 10_000))
+        matched = [e.get("code") for e in expansions if (e.get("code") or "").lower() in prio]
+        log.info(
+            f"Prioridade --all-sets: {len(matched)} sets curados/SV primeiro"
+            + (f" ({', '.join(matched[:25])})" if matched else "")
+        )
 
     if args.max_expansions:
         expansions = expansions[: args.max_expansions]

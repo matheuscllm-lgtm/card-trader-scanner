@@ -42,7 +42,7 @@ on:
 
 concurrency:
   group: ct-scan
-  cancel-in-progress: false
+  cancel-in-progress: true   # um novo run cancela o anterior (evita scans duplicados)
 
 permissions:
   contents: write   # precisa escrever no branch scan-live (parciais ao vivo)
