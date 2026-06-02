@@ -12,6 +12,11 @@ name: Weekly CT Scan (full + live partials)
 # Veja `scan-live/partials/PARTIAL_DEALS.md` (renderiza direto no GitHub).
 
 on:
+  # Push num branch dedicado `run-scan` LANÇA o scan completo (autônomo, não
+  # depende de permissão de dispatch via API). Sem inputs → usa os defaults.
+  push:
+    branches:
+      - run-scan
   workflow_dispatch:
     inputs:
       threshold:
