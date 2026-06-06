@@ -4,6 +4,39 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-06 — Scanner v2.12 + Postprocess: margem BRUTA (remove Hub fee do cálculo)
+
+Decisão do operador (regra cross-scanner): o scanner deve reportar **apenas
+margem bruta** = `(tcg − preço_página) / tcg`, threshold 30%, **SEM nenhuma taxa
+embutida**. O operador calcula Hub fee/frete/cartão/IOF por fora, manualmente.
+Isso **SUPERSEDE a fórmula antiga do `× 1.06`** (v2.3, 2026-05-12).
+
+### Scanner (`cardtrader_scanner.py`)
+- `--hub-fee` default `0.06` → **`0.0`**. A constante `HUB_FEE_RATE = 0.06`
+  permanece apenas como referência histórica / opt-in.
+- Construtor `Scanner(hub_fee_rate=...)` default `0.06` → **`0.0`** (paridade
+  programática com a CLI).
+- Margem inicial e recalc per-blueprint: `custo = live_brl × (1 + hub_fee_rate)`;
+  com `0.0`, `custo = preço do site` → margem bruta `(tcg − preço)/tcg`.
+- Stats sheet do XLSX agora grava o `hub_fee_rate` **realmente aplicado** (não
+  mais a constante) + nova linha `margin_basis` ("BRUTA (sem taxa)").
+- Log de startup distingue margem bruta (`--hub-fee 0.0`) de líquida.
+
+### Postprocess (`cardtrader_postprocess.py`)
+- `HUB_FEE_RATE` módulo-level `0.06` → **`0.0`**.
+- `DecisionConfig.hub_fee_rate` novo campo (default `0.0`), threaded por
+  `write_report` → `enrich_df` → `_recompute_margin_with_fee`.
+- Recompute de margem: `(tcg − live × (1 + hub_fee_rate)) / tcg`; com `0.0`
+  vira margem bruta pura. Paridade scanner ↔ postprocess mantida.
+- Nova flag `--hub-fee` (default `0.0`) com auto-conversão `>1.0` (aceita `6`
+  ou `0.06`), igual ao scanner.
+- Summary sheet ("Math: custo total") reflete a base bruta dinamicamente.
+
+### Inalterado (confirmado)
+- `--threshold` segue **fração** `0.30` (=30%). Convenção NÃO mexida.
+- `--shipping-brl` segue default `0.0`.
+- Piso de preço `$10` (~R$50) MANTIDO — é filtro, não taxa.
+
 ## 2026-05-18 — Scanner v2.8 Layer 4 + Postprocess v2.3 Layer 5
 
 Motivação: validação manual dos 10 deals do weekly v2.6 (operador, 2026-05-18)

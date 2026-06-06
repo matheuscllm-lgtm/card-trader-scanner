@@ -11,8 +11,9 @@ Mudancas vs v1.5:
 - ADICIONA Porque (1 linha factual)
 - REDUZ de 10 sheets pra 3 (Deals, All Listings, Summary). Expandido pra 6
   desde PR-K (+ Top 50 Margin, Validate Manually, TCG Suspect — modelo MYP)
-- MANTEM: Hub fee 6% paridade, TG## auto-filter, hyperlinks, alias fixes
-- MANTEM: ct_margin_formula (sem shipping; custo = preco_pagina × 1.06)
+- MANTEM: TG## auto-filter, hyperlinks, alias fixes
+- v2.12 (2026-06-06): margem BRUTA — custo = preco_pagina, SEM taxa (default
+  --hub-fee 0.0). SUPERSEDE o × 1.06. Operador soma fees por fora.
 
 v2.1 (bug-hunt 2026-05-17):
 - #2 Defensive recompute de net_margin/lucro_liq via fórmula 1.06 quando o
@@ -45,7 +46,8 @@ Decisao mecanica (thresholds configuraveis via CLI):
   REVISAR: else (zona cinza — margem 20-25% OU chase MODEST com margem alta)
 
 Memorias relevantes respeitadas:
-  - ct_margin_formula: frete=0 (Hub depot consolida ~100 cards), custo = preco × 1.06
+  - margem BRUTA (operador 2026-06-06): custo = preco do site, sem taxa;
+    fees calculados FORA do scanner. SUPERSEDE ct_margin_formula (× 1.06).
   - feedback_no_purchase_decisions: Decisao e REGRA mecanica, nao opiniao Claude
   - cardtrader_trainer_gallery_bug: TG## auto-filter mantido
 """
@@ -73,8 +75,12 @@ except (AttributeError, ValueError):
     # Python <3.7 ou stdout não-reconfigurável (raro). Fallback silencioso.
     pass
 
-# ─── Hub fee canônico (ct_margin_formula): custo = preço_CT × 1.06 ───────────
-HUB_FEE_RATE = 0.06
+# ─── Margem BRUTA (decisão do operador 2026-06-06 — v2.12) ───────────────────
+# SUPERSEDE a fórmula `× 1.06`. O postprocess NÃO embute mais nenhuma taxa por
+# default: custo = preço do site, margem = (tcg − preço)/tcg. O operador soma
+# Hub fee/frete/cartão/IOF por fora, manualmente. Para reembutir os 6% históricos
+# passe `--hub-fee 0.06` (mantém paridade com o scanner, que também aceita).
+HUB_FEE_RATE = 0.0
 
 # ─── Net % threshold pra Validate Manually (PR-L 2026-05-30) ─────────────────
 # Net % chega em fração (0.30 = 30%). EXTREME_NET_PCT = 2.0 significa 200% —
@@ -241,6 +247,7 @@ class DecisionConfig:
     min_lucro_liq: float = 50.0          # R$50 lucro minimo pra COMPRA
     revisar_min_net: float = 0.20        # 20-25% → REVISAR
     revisar_chase_modest_min_net: float = 0.30  # MODEST com >=30% → REVISAR
+    hub_fee_rate: float = 0.0            # v2.12: margem BRUTA (sem taxa). Override --hub-fee 0.06
 
 def classify_decision(row, cfg: DecisionConfig):
     """Aplica regra mecanica. Retorna (decisao, porque)."""
@@ -433,14 +440,17 @@ CHASE_FILL = {
     "BULK":   PatternFill("solid", fgColor="D9D9D9"),
 }
 
-def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.005) -> pd.DataFrame:
-    """v2.1 #2: defensivamente recomputa net_margin + lucro_liq via fórmula 1.06.
+def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.005,
+                               hub_fee_rate: float = HUB_FEE_RATE) -> pd.DataFrame:
+    """v2.1 #2 / v2.12: defensivamente recomputa net_margin + lucro_liq.
 
-    Antes confiávamos cegamente no input. Se o XLSX vier de scanner antigo
-    (pre v2.6) ou raw sem hub fee, o postprocess mentia sobre a fórmula que
-    o Summary documenta. Agora:
+    v2.12 (2026-06-06): a fórmula passou a ser BRUTA por default
+    (`hub_fee_rate` default 0.0 → custo = live_brl). Antes embutia `× 1.06`.
+    Se o XLSX vier de scanner antigo com a taxa já aplicada, o drift é
+    detectado e a margem é reescrita para a base bruta (mantendo o relatório
+    coerente com a decisão do operador).
       1. Se `live_brl` + `reference_price_brl` válidos → recomputa
-         `recomputed_net = (tcg - live*1.06) / tcg`
+         `recomputed_net = (tcg - live*(1+hub_fee_rate)) / tcg`
       2. Compara com `net_margin` do input
       3. Se drift > 0.5pp → log WARNING, sobrescreve com recomputado
       4. Marca `margin_source = "input" | "recomputed"`
@@ -456,7 +466,7 @@ def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.0
     tcg = pd.to_numeric(df["reference_price_brl"], errors="coerce")
     valid = live.notna() & tcg.notna() & (tcg > 0) & (live > 0)
 
-    custo = live * (1.0 + HUB_FEE_RATE)
+    custo = live * (1.0 + hub_fee_rate)
     recomputed_net = (tcg - custo) / tcg
     recomputed_lucro = tcg - custo
 
@@ -475,9 +485,10 @@ def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.0
     if drifting.any():
         n_drift = int(drifting.sum())
         max_drift_pp = float(drift[drifting].max()) * 100
+        basis = "BRUTA (sem taxa)" if hub_fee_rate <= 0 else f"+{hub_fee_rate:.0%} hub fee"
         print(
-            f"[postprocess v2.1] WARNING: net_margin do input diverge da fórmula "
-            f"1.06 em {n_drift}/{int(valid.sum())} rows (drift máx {max_drift_pp:.2f}pp). "
+            f"[postprocess v2.12] WARNING: net_margin do input diverge da fórmula "
+            f"{basis} em {n_drift}/{int(valid.sum())} rows (drift máx {max_drift_pp:.2f}pp). "
             f"Sobrescrevendo com recomputado."
         )
         # Substitui apenas onde driftando
@@ -489,10 +500,11 @@ def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.0
     return df
 
 
-def enrich_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float = HUB_FEE_RATE) -> pd.DataFrame:
     df = normalize_columns(raw_df).copy()
     # v2.1 #2 fix: defensive recompute ANTES de classify_decision consumir.
-    df = _recompute_margin_with_fee(df)
+    # v2.12: hub_fee_rate default 0.0 → margem BRUTA.
+    df = _recompute_margin_with_fee(df, hub_fee_rate=hub_fee_rate)
     # TG## flag
     if "card_number" in df.columns:
         df["trainer_gallery_potential_fp"] = df["card_number"].astype(str).str.match(r"^TG\d+", case=False, na=False)
@@ -688,7 +700,10 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
         ("Threshold REVISAR — net margin", f"≥ {cfg.revisar_min_net:.0%}"),
         ("Threshold MODEST → REVISAR", f"net ≥ {cfg.revisar_chase_modest_min_net:.0%}"),
         ("", ""),
-        ("Math: custo total", "preço_CT × 1.06 (Hub fee, sem shipping)"),
+        ("Math: custo total",
+         "preço_CT (margem BRUTA — sem taxa; operador soma fees por fora)"
+         if cfg.hub_fee_rate <= 0
+         else f"preço_CT × {1 + cfg.hub_fee_rate:.2f} (hub fee {cfg.hub_fee_rate:.0%})"),
         ("Math: lucro líquido", "TCG_BRL − custo_total"),
         ("Math: net margin", "lucro_líquido / TCG_BRL"),
     ]
@@ -744,7 +759,7 @@ def _safe_val(val):
 
 
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
-    df = enrich_df(df)
+    df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
     wb = Workbook(); wb.remove(wb.active)
 
     deals = build_deals_sheet(df, cfg)
@@ -811,13 +826,24 @@ def main():
                    help="Net margin minimo pra zona REVISAR (default 0.20)")
     p.add_argument("--revisar-modest-min", type=float, default=0.30,
                    help="MODEST so vai REVISAR se net >= X (default 0.30)")
+    p.add_argument("--hub-fee", type=float, default=0.0,
+                   help=("v2.12: DEFAULT 0.0 — margem BRUTA (custo = preço do "
+                         "site, SEM taxa). Operador soma Hub fee/frete/cartão/IOF "
+                         "por fora. Passe 0.06 pra reembutir os 6% históricos."))
     args = p.parse_args()
+
+    # Paridade com o scanner: aceita `6` ou `0.06` (auto-converte percentual).
+    if args.hub_fee > 1.0:
+        print(f"[postprocess v2.12] --hub-fee {args.hub_fee} > 1.0 parece "
+              f"percentual; convertendo para fração: {args.hub_fee/100}")
+        args.hub_fee = args.hub_fee / 100.0
 
     cfg = DecisionConfig(
         min_net_margin=args.min_net_margin,
         min_lucro_liq=args.min_lucro,
         revisar_min_net=args.revisar_min_net,
         revisar_chase_modest_min_net=args.revisar_modest_min,
+        hub_fee_rate=args.hub_fee,
     )
     df = pd.read_excel(args.input)
     print(f"Carregado: {args.input} | {len(df)} rows | cols: {len(df.columns)}")

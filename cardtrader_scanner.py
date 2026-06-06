@@ -15,17 +15,15 @@ Por que CardTrader em vez de MYP?
     cartas valorizadas no mercado US que estão desatualizadas na UE.
     Setup inverso, mesma tese.
 
-Modelo operacional (2026-05-12, confirmado por Matheus):
-    Cartas compradas vão pro depósito Hub da CardTrader na Europa,
-    acumulam ~100 unidades, e só então são enviadas pro Brasil em
-    consolidação única. O frete daquele envio dilui per-card a ~R$0.30,
-    desprezível. Logo:
+Modelo operacional (2026-06-06, decisão do operador — SUPERSEDE o × 1.06):
+    A margem reportada é BRUTA. Nenhuma taxa é embutida pelo scanner:
 
-        custo final por carta = preço CT * 1.06  (só Hub fee da CT)
+        margem bruta = (preço de referência TCG − preço do site CT) / TCG
 
-    Scanner zera frete por default. Hub fee 6% já vem embutido em
-    `live_price_brl` via per-blueprint validation (tier "Hub +6%").
-    Override pra cenários sem consolidação: `--shipping-brl X`.
+    O operador calcula Hub fee, frete, cartão e IOF POR FORA, manualmente.
+    Por isso `--hub-fee` agora tem DEFAULT 0.0 e `--shipping-brl` segue 0.0.
+    (Histórico: até v2.11 o scanner embutia 6% de Hub fee — `custo = preço × 1.06`.
+    Quem quiser reproduzir aquele comportamento passa `--hub-fee 0.06`.)
 
 Uso:
     python cardtrader_scanner.py                          # Scan padrão
@@ -46,10 +44,21 @@ Requisitos:
 Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
-      | 2026-06-02 (v2.11)
-Versão: v2.11
+      | 2026-06-02 (v2.11) | 2026-06-06 (v2.12)
+Versão: v2.12
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.12 (2026-06-06 — margem BRUTA pura; remove Hub fee do cálculo):
+  - Decisão do operador (cross-scanner): scanner reporta APENAS margem bruta
+    `(tcg − preço_site) / tcg`, threshold 30%, SEM nenhuma taxa embutida.
+    Hub fee/frete/cartão/IOF passam a ser calculados FORA, pelo operador.
+    SUPERSEDE a fórmula `× 1.06` (v2.3).
+  - --hub-fee default 0.06 → 0.0 (constante HUB_FEE_RATE mantida só como
+    referência histórica / opt-in via --hub-fee 0.06).
+  - Construtor Scanner: hub_fee_rate default 0.06 → 0.0 (paridade programática).
+  - --shipping-brl segue default 0.0; piso de preço $10 MANTIDO (é filtro).
+  - --threshold segue fração 0.30 (=30%) — convenção inalterada.
 
 Changelog v2.11 (2026-06-02 — scan completo + parciais ao vivo; integrado ao
 main no saneamento 2026-06-05):
@@ -189,13 +198,14 @@ SHIPPING_EUR_HUB = 5.0           # Hub seller / zero_fee — CT centraliza envio
 SHIPPING_EUR_PROFESSIONAL = 10.0 # Professional seller — envia do país do seller
 SHIPPING_EUR_PRIVATE = 12.0      # Private seller — envio mais caro
 
-# Hub fee médio sobre preço do site (per-blueprint LIVE). Modelo operacional
-# do Matheus 2026-05-12: nem toda listing cobra fee explícita, mas no agregado
-# (Hub fee CT + marketplace fee + payment processing variáveis) a média
-# converge ~6% sobre o preço exibido na página. Aplicado em validate_per_blueprint
-# pra alinhar com cardtrader_postprocess.py (mesma taxa default).
-# Custo real da carta = live_brl × (1 + HUB_FEE_RATE).
-HUB_FEE_RATE = 0.06              # 6% médio sobre site price (v2.3 fix)
+# Hub fee médio sobre preço do site (per-blueprint LIVE).
+# v2.12 (2026-06-06 — decisão do operador): margem reportada agora é BRUTA.
+# O DEFAULT efetivo aplicado é 0.0 (--hub-fee default 0.0): custo = preço do
+# site, sem nenhuma taxa embutida. O operador calcula Hub fee/frete/cartão/IOF
+# por fora, manualmente. Isso SUPERSEDE a fórmula antiga `× 1.06`.
+# A constante abaixo permanece apenas como valor de referência histórico/opt-in:
+# passe `--hub-fee 0.06` para reembutir os 6% (custo = live_brl × (1 + hub_fee)).
+HUB_FEE_RATE = 0.06              # referência histórica — NÃO é mais o default (v2.12)
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1545,7 +1555,7 @@ class Scanner:
                  min_price_usd: float = MIN_PRICE_USD,
                  exclude_graded: bool = EXCLUDE_GRADED,
                  shipping_brl_override: float = 0.0,
-                 hub_fee_rate: float = HUB_FEE_RATE,
+                 hub_fee_rate: float = 0.0,
                  per_set_timeout_s: float = DEFAULT_PER_SET_TIMEOUT_MIN * 60,
                  ignore_skip_list: bool = False):
         self.ct = ct
@@ -1559,9 +1569,10 @@ class Scanner:
         # enviadas em consolacao unica → frete dilui pra ~R$0.30/card).
         # Override via CLI --shipping-brl X pra simular envio direto.
         self.shipping_brl_override = shipping_brl_override
-        # v2.3 fix: hub fee médio aplicado sobre live_brl no recalc REAL.
-        # Default 0.06 (paridade com cardtrader_postprocess.py). Override via
-        # --hub-fee X pra recalibrar quando taxas CT mudarem.
+        # v2.12 (2026-06-06): hub fee aplicado sobre live_brl no recalc REAL.
+        # DEFAULT 0.0 → margem reportada é BRUTA (custo = preço do site, sem
+        # taxa). Operador calcula Hub fee/frete/cartão/IOF por fora. Override
+        # via --hub-fee 0.06 pra reembutir os 6% históricos, se quiser.
         self.hub_fee_rate = hub_fee_rate
         # v2.4 (2026-05-15): per-set wall-clock timeout (segundos). Default 8min.
         # Quando excedido, scan_expansion aborta + adiciona o set à skip-list.
@@ -1927,11 +1938,10 @@ class Scanner:
 
             # Margem calculada em BRL (a verdade operacional pro Matheus).
             # TCGPlayer market vem em USD → converte via Frankfurter.
-            # v2.6 (bug-hunt 2026-05-17 #1): custo inclui Hub fee 6% mesmo
-            # quando --validate-top=0. Antes a margem inicial era 6pp otimista
-            # vs a fórmula canônica `custo = preço_CT × 1.06`. Mantém
-            # ct_price_brl como preço cru de página (Scan R$ raw); margens
-            # e net_margin já refletem o custo real.
+            # v2.12 (2026-06-06): custo = preço do site × (1 + hub_fee_rate).
+            # Com hub_fee_rate default 0.0, custo = preço do site → margem BRUTA
+            # `(tcg − preço)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
+            # (Passe --hub-fee 0.06 pra reembutir os 6% históricos.)
             tcg_brl = tcg_market * self.usd_brl
             ct_brl = l.price_brl
             custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
@@ -2151,11 +2161,11 @@ class Scanner:
                 o.markup_tier = f"Anômalo ({markup*100:+.0f}%)"
                 o.validation_status = "PRICE_CHANGED"
 
-            # Recalc margens com preço LIVE + Hub fee médio (v2.3 fix 2026-05-12).
-            # Custo real = live_brl × (1 + hub_fee_rate). Modelo: site price é o
-            # que o operador vê na página, mas fees CT (Hub fee + marketplace +
-            # payment) somam ~6% em média no checkout. Sem esse ajuste, scanner
-            # ficava 6pp otimista vs realidade. Alinha com postprocess.
+            # Recalc margens com preço LIVE (per-blueprint, preço de checkout).
+            # v2.12 (2026-06-06): custo real = live_brl × (1 + hub_fee_rate). Com
+            # hub_fee_rate default 0.0, custo = live_brl → margens REAIS são BRUTAS
+            # `(tcg − live)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
+            # (--hub-fee 0.06 reembute os 6% históricos.) Alinha com postprocess.
             hub_fee_brl = live_brl * self.hub_fee_rate
             custo_real = live_brl + hub_fee_brl
             o.real_margin_pct = (o.tcg_market_brl - custo_real) / o.tcg_market_brl
@@ -2180,7 +2190,7 @@ class Scanner:
 # ══════════════════════════════════════════════════════════════════════
 def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 out_path: Path, usd_brl: float, eur_brl: float,
-                threshold: float) -> Path:
+                threshold: float, hub_fee_rate: float = 0.0) -> Path:
     wb = Workbook()
 
     # Aba 1: Oportunidades
@@ -2328,7 +2338,8 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     ws2.append(["usd_brl_rate", round(usd_brl, 4)])
     ws2.append(["eur_brl_rate", round(eur_brl, 4)])
     ws2.append(["threshold_margin", f"{threshold:.0%}"])
-    ws2.append(["hub_fee_rate", f"{HUB_FEE_RATE:.0%}"])
+    ws2.append(["hub_fee_rate", f"{hub_fee_rate:.0%}"])
+    ws2.append(["margin_basis", "BRUTA (sem taxa)" if hub_fee_rate <= 0 else f"líquida (+{hub_fee_rate:.0%} hub fee)"])
     ws2.append(["scanned_at", datetime.now().isoformat(timespec="seconds")])
     ws2.column_dimensions["A"].width = 30
     ws2.column_dimensions["B"].width = 20
@@ -2379,11 +2390,12 @@ def parse_args():
                    help="Frete fixo per-listing em BRL (default 0 — modelo de "
                         "consolidacao no Hub depot, frete dilui per-card). "
                         "Override pra simular envio direto: ex --shipping-brl 28.84")
-    p.add_argument("--hub-fee", type=float, default=HUB_FEE_RATE,
-                   help=("Taxa media sobre preco do site (Hub fee + marketplace + "
-                         "payment processing) aplicada no recalc REAL. Default "
-                         f"{int(HUB_FEE_RATE*100)}%%. Paridade com cardtrader_postprocess.py. "
-                         "Custo real = live_brl x (1 + hub_fee)."))
+    p.add_argument("--hub-fee", type=float, default=0.0,
+                   help=("v2.12: DEFAULT 0.0 — margem reportada e BRUTA "
+                         "(custo = preco do site, SEM taxa). Operador calcula "
+                         "Hub fee/frete/cartao/IOF por fora, manualmente. "
+                         "Para reembutir a taxa antiga de 6%%, passe --hub-fee 0.06 "
+                         "(custo real = live_brl x (1 + hub_fee))."))
     # v2.4: per-set timeout + skip-list controls
     p.add_argument("--per-set-timeout", type=float, default=DEFAULT_PER_SET_TIMEOUT_MIN,
                    help=(f"v2.4: wall-clock timeout per set (minutos). Default "
@@ -2607,7 +2619,11 @@ def main():
         checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
         checkpoint.close()
     log.info(f"Scan completo em {dt:.1f}s — {len(opps)} oportunidades ≥ {args.threshold:.0%}")
-    log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
+    if args.hub_fee > 0:
+        log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
+    else:
+        log.info("Margem BRUTA (--hub-fee 0.0): custo = preço do site, SEM taxa. "
+                 "Operador calcula Hub fee/frete/cartão/IOF por fora (v2.12).")
 
     # v2.0 — validação per-blueprint dos top N
     if args.validate_top > 0 and opps:
@@ -2644,7 +2660,7 @@ def main():
     # pra calcular .checkpoint.jsonl sidecar)
     export_xlsx(opps, scanner.stats, out_path,
                 usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
-                threshold=args.threshold)
+                threshold=args.threshold, hub_fee_rate=args.hub_fee)
 
     # Top 5 por margem líquida REAL se validado, senão líquida estimada
     def net_key(o: Opportunity) -> float:

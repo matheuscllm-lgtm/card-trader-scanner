@@ -36,34 +36,45 @@ preço mínimo de **$10**.
 
 ## 📐 Fórmula canônica da margem (padrão único)
 
-**Decisão operacional 2026-05-12 (reafirmada 2026-05-14):** o cálculo de margem é simples e inequívoco. Sem variações condicionais, sem caso-a-caso por seller.
+**Decisão operacional 2026-06-06 (SUPERSEDE o × 1.06 de 2026-05-12):** o scanner
+reporta **apenas margem BRUTA**. Ele não embute mais nenhuma taxa. A conta é a mais
+simples possível:
 
 ```
-custo  = preço_da_página × 1.06          ← 6% Hub fee médio (constante)
-lucro  = TCG_market − custo
-margem = lucro ÷ TCG_market              ← divide por preço de venda (revenue basis)
-frete  = 0                                ← modelo Hub depot consolida ~100 cards
+margem = (TCG_market − preço_da_página) ÷ TCG_market
+frete  = 0
 ```
+
+Ou seja: pega o preço que aparece na ficha do CardTrader, compara com o preço de
+referência do TCGPlayer (EUA), e mostra o desconto puro. **Nenhuma porcentagem de
+Hub fee, frete, cartão ou IOF é descontada aqui.**
+
+> **Por que mudou:** antes o scanner já tirava 6% de "Hub fee" sozinho (`preço × 1.06`).
+> A partir de agora **você (Matheus) faz essa conta por fora, manualmente**, somando
+> Hub fee + frete + taxa do cartão + IOF do seu jeito. O scanner só te entrega o número
+> cru pra você decidir. Isso deixa a margem que aparece na planilha mais fácil de
+> conferir contra o que você vê no site.
 
 **Variáveis:**
 - **preço_da_página** = exatamente o que aparece na ficha do produto no CardTrader (validado per-blueprint, não per-expansion RAW). É o que o comprador paga no checkout, sem deduções.
-- **6% Hub fee** = constante assumida como média de fees variáveis CT (Hub fee + marketplace + payment processing). Alguns sellers cobram, outros não. Em vez de modelar caso a caso (instável), assume-se 6% flat.
 - **TCG_market** = preço Market do TCGPlayer (em USD, convertido pra BRL via câmbio Frankfurter do dia).
-- **frete = 0** porque o modelo operacional é consolidar ~100 cards no Hub depot CT antes do envio único pro Brasil; o frete dilui a ~R$0,30/card e é tratado como custo afundado fora deste cálculo.
+- **frete = 0** porque o modelo operacional é consolidar ~100 cards no Hub depot CT antes do envio único pro Brasil; o frete é tratado fora deste cálculo.
 
-**Aplicação no código (paridade alinhada em v2.3):**
-- Constante: `HUB_FEE_RATE = 0.06` em `cardtrader_scanner.py`
-- Função: `validate_per_blueprint()` linhas ~1067-1071 — `custo_real = live_brl × 1.06`; `real_margin_pct = (tcg_brl − custo_real) / tcg_brl`
-- Override (raro, debug): `--hub-fee 0` desativa o ajuste; produz margens ~6pp otimistas vs realidade.
-- Postprocess: `cardtrader_postprocess.py` aplica o mesmo `× 1.06` antes da classificação BUY NOW/REJECT (BucketConfig).
-- GH Actions: workflow herda default `HUB_FEE_RATE = 0.06` sem precisar passar flag.
+**Aplicação no código (v2.12 — margem bruta):**
+- Constante `HUB_FEE_RATE = 0.06` ainda existe nos dois scripts, mas **NÃO é mais o default aplicado**: é só referência histórica / opção.
+- O default efetivo é `--hub-fee 0.0` → `custo = preço_da_página` → margem bruta.
+- Quem quiser reproduzir o comportamento antigo (6% embutido) passa `--hub-fee 0.06` no scanner **e** no postprocess (a flag existe nos dois, com paridade).
+- Função `validate_per_blueprint()`: `custo_real = live_brl × (1 + hub_fee_rate)`; com hub_fee 0.0, `custo_real = live_brl`.
+- Postprocess: `_recompute_margin_with_fee()` usa o mesmo `hub_fee_rate` (default 0.0) → recompute = `(tcg − live) / tcg`. Paridade scanner ↔ postprocess mantida.
+- GH Actions: workflow herda o default 0.0 sem precisar passar flag.
 
-**O que NÃO entra no cálculo:**
-- ❌ Fee CT específica por seller (assumida no 6% médio)
-- ❌ Frete CT→Brasil (modelo Hub depot, custo afundado)
-- ❌ Taxas eBay/Amazon de revenda (são da etapa de venda no TCGPlayer, não do scanner de compra)
+**O que NÃO entra no cálculo (operador soma por fora):**
+- ❌ Hub fee CT
+- ❌ Frete CT→Brasil
+- ❌ Taxa do cartão / IOF
+- ❌ Taxas eBay/Amazon de revenda
 - ❌ Câmbio variável (já capturado em `usd_brl` do dia via Frankfurter)
-- ❌ Markup tier do seller (REAL/Hub+6%/non-VAT+20%) — esse é diagnóstico interno do scanner, não afeta a fórmula; serve só pra garantir que `preço_da_página` é o que o navegador mostra.
+- ❌ Markup tier do seller (REAL/Hub+6%/non-VAT+20%) — diagnóstico interno, não afeta a fórmula; serve só pra garantir que `preço_da_página` é o que o navegador mostra.
 
 **Diferença vs MYP scanner:** MYP usa `(tcg − custo) / custo` (ROI sobre capital). CT usa `(tcg − custo) / tcg` (gross margin sobre receita). Margens não são diretamente comparáveis: CT 15% gross ↔ MYP 17.6% ROI; CT 30% gross ↔ MYP 42.9% ROI. Equivalência: `roi = gross / (1 − gross)`.
 
@@ -90,7 +101,7 @@ A CT API tem **2 endpoints que retornam preços DIFERENTES pra mesma carta**:
 **Mitigação (v2.0+, integrada no scanner desde 2026-04):**
 1. Scan inicial via per-expansion → candidatos com margem bruta ≥ `--threshold`
 2. **Validação per-blueprint nos top-30** → pega `live_brl` real do checkout
-3. Recalc margem com `× 1.06` em cima do live_brl
+3. Recalc margem BRUTA em cima do live_brl: `(tcg − live_brl) / tcg` (v2.12, sem taxa)
 4. Filtro final `--min-net-margin`
 
 Função: `validate_per_blueprint()` em `cardtrader_scanner.py` linhas ~973-1080. Stats da sheet "Stats" do XLSX incluem `validated_real` vs `validated_markup` vs `stale`.
@@ -270,9 +281,9 @@ mas aí leva horas; rode em segundo plano.
 | Preço CT (EUR) | Preço do seller no CardTrader | Custo de aquisição antes de frete |
 | Preço CT (USD) | Convertido pelo câmbio do dia | Base de comparação |
 | **TCG Market (USD)** | Preço market do TCGPlayer | Referência de venda nos EUA |
-| **Margem %** | `(TCG - CT) / TCG` | Desconto em relação ao mercado US |
+| **Margem %** | `(TCG - CT) / TCG` | Desconto bruto em relação ao mercado US |
 | Margem $ | `TCG - CT` em dólares | Lucro bruto por unidade |
-| **Net Margin %** | Margem após frete estimado | Realidade pós-logística |
+| **Net Margin %** | v2.12: BRUTA (sem taxa; `--hub-fee` default 0.0) | Operador soma Hub fee/frete/cartão/IOF por fora |
 | Qtd | Estoque do seller | Escalabilidade da compra |
 | Foil | Se é holo/foil | Pode alterar precificação TCG |
 | Seller / Tipo / Hub | Reputação e envio | Hub = envio centralizado CT (+rápido) |
