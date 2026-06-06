@@ -22,7 +22,8 @@
 # Convencao: threshold e FRACAO (0.30 = 30 percent); Hub fee 6 percent paridade.
 
 param(
-    [string]$Stamp = '2026-05-16'
+    [string]$Stamp = '2026-05-16',
+    [int]$PerSetTimeout = 8
 )
 
 $env:PYTHONIOENCODING  = 'utf-8'
@@ -100,7 +101,7 @@ $scannerArgs = @(
     '--threshold', '0.30',
     '--validate-top', '100',
     '--min-net-margin', '0.20',
-    '--per-set-timeout', '8',
+    '--per-set-timeout', "$PerSetTimeout",
     '--hub-fee', '0.06',
     '--output', $rawOut,
     '--sets'

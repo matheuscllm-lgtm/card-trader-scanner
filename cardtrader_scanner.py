@@ -45,7 +45,10 @@ Requisitos:
 
 Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
-Versão: v2.3
+      | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
+Versão: v2.10
+    (= changelog inline mais recente: Layer 4 / batch v2.10. Manter em sync
+     ao adicionar novos blocos de changelog abaixo.)
 
 Changelog v2.3 (2026-05-12 — alinhamento Hub fee scanner ↔ postprocess):
   - HUB_FEE_RATE = 0.06 promovido a constante; CLI flag --hub-fee
