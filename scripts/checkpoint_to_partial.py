@@ -70,6 +70,17 @@ def card_label(lst: dict) -> str:
     return name or "(sem nome)"
 
 
+def is_suspect(row: dict) -> bool:
+    """Candidato com TCG possivelmente INFLADO por mismatch de variante.
+
+    Padrão confirmado (verificação manual 2026-06-02, ex. Hitmonlee lc 013/110):
+    cartas antigas non-foil casam `reverseHolofoil` (a variante mais cara) quando
+    a carta real é Holofoil/normal mais barata → margem falsa. reverseHolofoil é
+    a variante propensa a esse erro; sinalizamos pra conferência manual da
+    variante real no TCGplayer antes de confiar."""
+    return (row.get("variant") or "") == "reverseHolofoil"
+
+
 def parse_checkpoint(path: Path):
     """Parse tolerante do JSONL. Retorna (deals, meta)."""
     deals: list[dict] = []
@@ -111,6 +122,7 @@ def parse_checkpoint(path: Path):
                     "lucro_brl": best_lucro(o),
                     "validation": o.get("validation_status") or "NOT_VALIDATED",
                     "markup_tier": o.get("markup_tier") or "",
+                    "variant": o.get("price_variant_used") or "",
                     "seller": lst.get("seller_username") or "",
                     "hub": bool(lst.get("seller_can_sell_via_hub")),
                     "url": lst.get("cardtrader_url") or "",
@@ -153,9 +165,9 @@ def write_csv(deals: list[dict], out_csv: Path) -> None:
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     cols = [
         "rank", "net_pct", "margin_pct", "lucro_brl", "card", "set_code",
-        "set_name", "collector_number", "rarity", "foil", "quantity",
-        "language", "price_ct_brl", "tcg_brl", "tcg_usd", "validation",
-        "markup_tier", "seller", "hub", "url",
+        "set_name", "collector_number", "rarity", "foil", "variant", "suspect",
+        "quantity", "language", "price_ct_brl", "tcg_brl", "tcg_usd",
+        "validation", "markup_tier", "seller", "hub", "url",
     ]
     with open(out_csv, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
@@ -165,6 +177,7 @@ def write_csv(deals: list[dict], out_csv: Path) -> None:
                 i, round(r["net_pct"], 4), round(r["margin_pct"], 4),
                 round(r["lucro_brl"], 2), r["card"], r["set_code"],
                 r["set_name"], r["collector_number"], r["rarity"], r["foil"],
+                r["variant"], ("SIM" if is_suspect(r) else ""),
                 r["quantity"], r["language"], round(r["price_ct_brl"], 2),
                 round(r["tcg_brl"], 2), round(r["tcg_usd"], 2), r["validation"],
                 r["markup_tier"], r["seller"], r["hub"], r["url"],
@@ -196,6 +209,12 @@ def write_md(deals: list[dict], meta: dict, out_md: Path, top: int) -> None:
     lines.append(f"- **Sets concluídos:** {meta['sets_complete']} / {total_sets}")
     lines.append(f"- **Set em progresso:** {lp_txt}")
     lines.append(f"- **Candidatos (deals) até agora:** {meta['deals']}")
+    susp = sum(1 for d in deals if is_suspect(d))
+    if susp:
+        lines.append(
+            f"- **⚠️ Suspeitos de TCG inflado (variante `reverseHolofoil`):** {susp} "
+            f"— confira a variante REAL no TCGplayer antes de confiar (Holofoil ≠ Reverse Holofoil)."
+        )
     if meta["bad_lines"]:
         lines.append(f"- **Linhas inválidas no checkpoint (ignoradas):** {meta['bad_lines']}")
     lines.append("")
@@ -205,14 +224,15 @@ def write_md(deals: list[dict], meta: dict, out_md: Path, top: int) -> None:
     if not deals:
         lines.append("_Nenhum candidato ainda — scan recém começou ou sets iniciais sem deals._")
     else:
-        lines.append("| # | Margem | Lucro R$ | Carta | Set | CT R$ | TCG R$ | Valid. | Seller | Link |")
-        lines.append("|--:|--:|--:|---|---|--:|--:|---|---|---|")
+        lines.append("| # | Margem | Lucro R$ | Carta | Set | Variante | CT R$ | TCG R$ | Seller | Link |")
+        lines.append("|--:|--:|--:|---|---|---|--:|--:|---|---|")
         for i, r in enumerate(deals[:top], 1):
             link = f"[abrir]({r['url']})" if r["url"] else "—"
+            var = (("⚠️ " if is_suspect(r) else "") + (r["variant"] or "—"))
             lines.append(
                 f"| {i} | {r['net_pct']*100:.0f}% | {r['lucro_brl']:.0f} | "
-                f"{r['card']} | {r['set_code']} | {r['price_ct_brl']:.0f} | "
-                f"{r['tcg_brl']:.0f} | {r['validation']} | {r['seller']} | {link} |"
+                f"{r['card']} | {r['set_code']} | {var} | {r['price_ct_brl']:.0f} | "
+                f"{r['tcg_brl']:.0f} | {r['seller']} | {link} |"
             )
         if len(deals) > top:
             lines.append("")
