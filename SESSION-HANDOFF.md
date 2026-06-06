@@ -1,7 +1,23 @@
 # Session Handoff — CT Scanner
 
 > Estado atual + retomada rápida pra próxima sessão.
-> **Última atualização:** 2026-05-29 (PR-G mergeado + merge_myp_ct fix + daily).
+> **Última atualização:** 2026-06-05 (saneamento estrutural + run-ready local).
+
+---
+
+## 2026-06-05 — Saneamento estrutural (PR #5 + docs fix)
+
+- **Repo migrado pra disco local:** `C:\Users\mathe\card-trader-scanner` (clone
+  limpo do GitHub). A pasta antiga no Google Drive foi **deletada** — o `.git`
+  sincronizado corrompia refs (`desktop.ini` em 8 refs). **Não rode mais nada do
+  Drive.** Ver memória `cardtrader_scanner_location` + `CLAUDE.md` na raiz.
+- **PR #5 merged** @ `a3f152a`: `CLAUDE.md` (front door), `.gitignore` preventivo
+  (`outputs/`, `logs/`, scratch `_*`), header `Versão v2.3 → v2.10`,
+  `run_weekly_local.ps1 --per-set-timeout` parametrizado.
+- **Worktree stale removido**, cópias soltas do `postprocess` deletadas (sobra
+  canônico + a do monorepo como ref).
+- **`.venv` recriado** (Python 3.12.10, deps de `requirements.txt`). Smoke-test
+  OK (`scanner --help` exit 0, `postprocess --help`, imports OK). **Run-ready.**
 
 ---
 
@@ -65,7 +81,7 @@ Chase Tier de `rarity` (PokemonTCG oficial):
 ## Quick-start retomada
 
 ```bash
-cd "C:/Users/mathe/Meu Drive/OBSIDIAN/01 - Projetos/TCG & Exportação/CardTrader Scanner"
+cd /c/Users/mathe/card-trader-scanner   # repo local desde 2026-06-05 (não mais no Drive)
 set -a; source .env; set +a
 export PYTHONIOENCODING=utf-8
 TS=$(date +%Y%m%d_%H%M)
@@ -75,12 +91,12 @@ TS=$(date +%Y%m%d_%H%M)
   --sets sfa scr par paf tef twm ssp dri blk jtg asc \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
   --per-set-timeout 8 \
-  --output "cardtrader_scan_local_${TS}.xlsx"
+  --output "outputs/cardtrader_scan_local_${TS}.xlsx"
 
-# Postprocess v2 (CLI novo: --input único, sem --core/--hype/--dead)
+# Postprocess v2 (--input/--output OBRIGATÓRIOS, sem --core/--hype/--dead)
 .venv/Scripts/python.exe cardtrader_postprocess.py \
-  --input "cardtrader_scan_local_${TS}.xlsx" \
-  --output "cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
+  --input "outputs/cardtrader_scan_local_${TS}.xlsx" \
+  --output "outputs/cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
 ```
 
 **Weekly local (scan completo ~832 expansões, ~5-6h):** omitir `--sets`, bumpar `--validate-top 100`.
