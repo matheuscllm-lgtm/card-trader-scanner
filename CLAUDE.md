@@ -97,9 +97,14 @@ $env:PYTHONIOENCODING="utf-8"
 
 - `--sets` aceita codes CT (ex.: `scr`, `sfa`). Aliases CT↔pokemontcg.io estão
   mapeados no scanner (`SET_ALIAS_TO_PTCG`).
+- `--all-sets` (v2.11) = **scan COMPLETO** (~832 exp, ignora `--sets`/config),
+  com SV/curados escaneados primeiro (`PRIORITY_SET_CODES`, pra timeout não
+  cortar os de valor). É o modo do **weekly**.
 - `--threshold 0.20` destrava ~5× mais deals que `0.30` (mais ruído).
-- Scan largo (`--max-expansions` alto / weekly completo) pode passar de 1h. Para
-  runs longos, rode **detached/background** (Task Scheduler), nunca inline.
+- Scan largo (`--all-sets` / weekly completo) pode passar de horas. Para runs
+  longos, rode **detached/background** (Task Scheduler), nunca inline. No GH
+  Actions, o workflow `weekly-scan.yml` publica **parciais ao vivo** no branch
+  `scan-live` a cada ~10min (via `scripts/checkpoint_to_partial.py`).
 - `--dry-run` usa só cache; `--no-cache` força refetch.
 
 ## Falsos positivos conhecidos (verificar manual)

@@ -46,9 +46,20 @@ Requisitos:
 Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
-Versão: v2.10
-    (= changelog inline mais recente: Layer 4 / batch v2.10. Manter em sync
-     ao adicionar novos blocos de changelog abaixo.)
+      | 2026-06-02 (v2.11)
+Versão: v2.11
+    (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
+     de changelog abaixo.)
+
+Changelog v2.11 (2026-06-02 — scan completo + parciais ao vivo; integrado ao
+main no saneamento 2026-06-05):
+  - Flag --all-sets: escaneia TODAS as ~832 expansões (ignora --sets e config),
+    pro scan COMPLETO (weekly).
+  - PRIORITY_SET_CODES: no modo --all-sets, sets SV/curados são escaneados
+    PRIMEIRO (catálogo CT vem old→new; protege os modernos do corte por timeout).
+  - Companion `scripts/checkpoint_to_partial.py`: lê o .checkpoint.jsonl DURANTE
+    o scan e emite PARTIAL_DEALS.md + .csv (revisão incremental; stdlib puro).
+  - Validado em scan real de ~4h (2026-06-02, GH Actions, 832 exp).
 
 Changelog v2.3 (2026-05-12 — alinhamento Hub fee scanner ↔ postprocess):
   - HUB_FEE_RATE = 0.06 promovido a constante; CLI flag --hub-fee
@@ -2339,6 +2350,11 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--sets", nargs="*", help="Códigos de expansão CT (ex: sv1 sv3pt5). Default: todas do config.yaml")
+    p.add_argument("--all-sets", action="store_true",
+                   help=("Escaneia TODAS as expansões Pokemon do CardTrader (~832), "
+                         "ignorando tanto --sets quanto a lista 'sets' do config.yaml. "
+                         "Use para o scan COMPLETO (weekly). Sem esta flag e sem --sets, "
+                         "o escopo cai na lista do config.yaml."))
     p.add_argument("--threshold", type=float, default=MARGIN_THRESHOLD,
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
@@ -2398,6 +2414,20 @@ def parse_args():
                          "Distinto de --checkpoint-every (que é por SET). Permite "
                          "detectar stall mid-set. 0 = desativado."))
     return p.parse_args()
+
+
+# Sets de MAIOR PRIORIDADE (era Scarlet & Violet + curados do daily). No modo
+# --all-sets, estes são escaneados PRIMEIRO — o catálogo CT vem em ordem
+# old→new, e sem reordenar os sets modernos (foco da operação) ficariam no fim
+# da fila, sob risco de serem cortados pelo timeout. Códigos que não existirem
+# no catálogo simplesmente não casam (inócuo). Ordem aqui = ordem de scan.
+PRIORITY_SET_CODES = [
+    # Curados (daily) — códigos CardTrader
+    "sfa", "scr", "par", "paf", "tef", "twm", "ssp", "dri", "blk", "jtg", "asc",
+    # Scarlet & Violet (config.yaml) — sv1..sv10 + meio-sets
+    "sv1", "sv2", "sv3", "sv3pt5", "sv4", "sv4pt5", "sv5", "sv6", "sv6pt5",
+    "sv7", "sv8", "sv8pt5", "sv9", "sv10", "zsv10pt5", "me2pt5",
+]
 
 
 def load_config() -> dict:
@@ -2498,7 +2528,9 @@ def main():
     all_expansions = ct.list_expansions(CT_POKEMON_GAME_ID)
     log.info(f"Total: {len(all_expansions)} expansões")
 
-    sets_cfg = args.sets or cfg.get("sets")
+    # --all-sets força o escopo COMPLETO: ignora --sets E a lista do config.yaml,
+    # caindo no branch `else` abaixo (expansions = all_expansions ~832).
+    sets_cfg = None if args.all_sets else (args.sets or cfg.get("sets"))
     if sets_cfg:
         wanted = {s.lower() for s in sets_cfg}
         expansions = [e for e in all_expansions if e.get("code", "").lower() in wanted]
@@ -2507,6 +2539,19 @@ def main():
             log.warning(f"Sets não encontrados: {missing}")
     else:
         expansions = all_expansions
+
+    # Reordena no escopo COMPLETO: sets de maior valor (SV/curados) PRIMEIRO.
+    # O catálogo CT vem old→new; sem isso, os sets modernos (foco) ficariam no
+    # fim e poderiam ser cortados pelo timeout. sort é estável → o resto mantém
+    # a ordem do catálogo. Só afeta --all-sets (em --sets a ordem é do usuário).
+    if args.all_sets:
+        prio = {c.lower(): i for i, c in enumerate(PRIORITY_SET_CODES)}
+        expansions.sort(key=lambda e: prio.get((e.get("code") or "").lower(), 10_000))
+        matched = [e.get("code") for e in expansions if (e.get("code") or "").lower() in prio]
+        log.info(
+            f"Prioridade --all-sets: {len(matched)} sets curados/SV primeiro"
+            + (f" ({', '.join(matched[:25])})" if matched else "")
+        )
 
     if args.max_expansions:
         expansions = expansions[: args.max_expansions]
