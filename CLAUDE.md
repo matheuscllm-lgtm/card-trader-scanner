@@ -1,129 +1,186 @@
-# CLAUDE.md — instruções para agentes (Claude Code) neste repo
+# CLAUDE.md — guia do scanner CardTrader
 
-> Objetivo: "rodar o CardTrader scanner" tem **um caminho só**. Siga este
-> arquivo e evite re-descobrir coisas que já estão resolvidas no código.
+> **Este arquivo tem dois leitores:**
+> 1. **Você, Matheus** — pra entender o que o scanner faz e como rodá-lo.
+> 2. **O assistente de IA (Claude Code)** — que lê este arquivo no começo de
+>    cada sessão pra saber como trabalhar neste projeto sem re-descobrir tudo.
+>
+> Por isso ele mistura linguagem simples com alguns termos técnicos. **Toda
+> palavra técnica é explicada entre parênteses na primeira vez que aparece**, e
+> há um **glossário no fim**. Vá no seu ritmo — com o tempo os termos ficam
+> familiares.
 
-## Este é o repo canônico
+---
 
-`matheuscllm-lgtm/card-trader-scanner` é a **fonte de verdade única** do
-CardTrader scanner. Se você encontrar um `cardtrader_scanner.py` ou
-`cardtrader_postprocess.py` em qualquer outro lugar (monorepo
-`tcg-arbitrage-scanners`, `Scripts/`, cópia solta em Drive/Obsidian, scratch de
-sessão de agente), é **STALE** — não rode. Confira o cabeçalho do scanner:
-`Versão: v2.10` (ou superior). O `cardtrader_postprocess.py` canônico tem ~40k.
+## Em uma frase
 
-> **Nota de localização (2026-06-05):** o repo canônico mora em **disco local**
-> (`~/card-trader-scanner`), fora do Google Drive. A pasta antiga no Drive
-> (`…\TCG & Exportação\CardTrader Scanner\`) tinha o `.git` dentro do Drive
-> sincronizado, o que corrompia refs (`desktop.ini`). Ela foi aposentada como
-> repo — se ainda existir, é só arquivo de outputs, **não** rode git lá.
+Este programa compara o **preço de cartas Pokémon** (avulsas, em inglês, estado
+Near Mint / "quase perfeita") no site europeu **cardtrader.com** contra o preço
+de referência dos EUA (**TCG Player**), e aponta onde dá pra comprar barato na
+Europa e revender caro. É o caminho **inverso** do scanner MYP (que garimpa
+barato no Brasil).
 
-## O que é (e por que CardTrader, não MYP)
+---
 
-Compara singles Pokémon (EN, Near Mint, não-graded) no **cardtrader.com**
-(marketplace europeu, EUR) vs **preço TCG Player** (market price US). Tese:
-cartas valorizadas no mercado US desatualizadas na UE. É o setup **inverso** do
-MYP (que compra barato no Brasil em BRL). Acesso via **JWT API** (`CT_JWT`),
-**não** scraping → sem problema de Cloudflare.
+## Onde mora o programa (importante)
 
-## Setup (env novo)
+- **Pasta oficial:** `C:\Users\mathe\card-trader-scanner` — no **disco do seu
+  computador** (HD local), fora do Google Drive.
+- Existe uma **cópia na nuvem** no GitHub (um site que guarda código), no
+  endereço `github.com/matheuscllm-lgtm/card-trader-scanner`. As duas se
+  espelham.
+
+> **Por que saiu do Google Drive (junho/2026):** o Drive ficava mexendo nos
+> arquivos internos de controle do programa e corrompia coisas. Mudamos pro HD
+> local e **apagamos a pasta antiga do Drive**. Se você vir uma pasta
+> "CardTrader Scanner" no Drive, ela é lixo antigo — não use.
+
+---
+
+## Como preparar o computador (só na primeira vez)
+
+São três passos, feitos uma vez por máquina. *"venv" = ambiente virtual: uma
+caixinha isolada onde o programa instala as ferramentas que precisa, sem
+bagunçar o resto do Windows.*
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate              # PowerShell;  bash: source .venv/bin/activate
-pip install -r requirements.txt     # requests, openpyxl, python-dotenv, PyYAML, pandas, numpy, portalocker
+python -m venv .venv                 # cria a caixinha
+.venv\Scripts\activate               # entra na caixinha
+pip install -r requirements.txt      # instala as ferramentas listadas
 ```
 
-`.env` na raiz do repo (NÃO commitar — é gitignored):
+Depois, crie um arquivo chamado `.env` (texto simples) na pasta, com a sua
+**senha de acesso ao CardTrader** (chamada de "token" — uma senha longa que o
+site gera pra você). Ele fica assim:
 
 ```
-CT_JWT=<CardTrader: Settings → API Access → Create New Token>   # obrigatório
+CT_JWT=<seu token do CardTrader: no site, Settings → API Access → Create New Token>
 POKEMONTCG_API_KEY=<opcional, grátis em pokemontcg.io/dev>
-JUSTTCG_API_KEY=<opcional, se usar --provider justtcg>
 ```
 
-`pandas`/`numpy` são pro **postprocess**; rode-o sempre pelo `.venv` do scanner.
+> ⚠️ O `.env` **nunca** vai pra nuvem (tem sua senha dentro). O programa já está
+> configurado pra ignorá-lo.
 
-## ⚠️ Gotcha #1 — `--threshold` é FRAÇÃO (oposto do MYP)
+---
 
-No CardTrader, `--threshold 0.25` = 25%. Passar `--threshold 25` significa
-**2500%** → zero deals. Mesma convenção fracionária vale pra `--min-net-margin`
-(`0.20` = 20%). O scanner auto-converte `> 1.0` com warning desde a v2.2, mas
-**não conte com isso** — passe sempre a fração.
+## ⚠️ A pegadinha nº 1 — a "margem mínima" é em fração
 
-> O scanner **irmão MYP** (repo `myp-arbitrage-scanner`) usa o oposto:
-> `--threshold` é **percent integer** (`25` = 25%). Não misture os dois.
+Quando você manda o programa procurar deals, define uma **margem mínima de lucro**
+(`--threshold`, lê-se "thréshould" = limiar). Aqui ela é escrita como **fração**:
 
-## Modelo de custo (Hub fee 6%)
+- `--threshold 0.25` quer dizer **25%**.
+- Se você escrever `--threshold 25`, o programa entende **2.500%** → não acha
+  nada.
 
-Operador acumula ~100 cards no **depósito Hub da CardTrader** na UE antes de
-enviar consolidado pro Brasil → frete dilui per-card (~R$0,30, desprezível).
-Logo:
+> O scanner irmão (MYP) faz o **oposto** (lá `25` = 25%). Não confunda os dois.
+
+---
+
+## A conta do lucro (a "taxa do depósito")
+
+As cartas que você compra vão pro **depósito da CardTrader na Europa** (o "Hub"),
+acumulam ~100 unidades, e só então são enviadas ao Brasil de uma vez — o que faz
+o frete por carta virar quase nada. Por isso a conta é:
 
 ```
-custo final por carta = preço CT × 1.06   (só Hub fee 6%)
-margem = (tcg − custo) / tcg              frete = 0 por default
+custo da carta = preço no site × 1,06    (os 6% são a taxa do Hub)
+lucro = (preço de referência TCG − custo) ÷ preço TCG     (sem frete)
 ```
 
-O scanner aplica o `× 1.06` via **validação per-blueprint** (preço REAL com
-markup CT), e o `cardtrader_postprocess.py` aplica o **mesmo** `× 1.06` antes da
-classificação BUY NOW/REJECT (paridade scanner ↔ postprocess). Override pra
-cenário sem consolidação: `--shipping-brl X`.
+O programa já aplica esses 6% sozinho, **e** o relatório final (o "postprocess",
+explicado abaixo) aplica os mesmos 6% — pra os dois baterem.
 
-> **per-expansion vs per-blueprint:** o scan inicial usa preço per-expansion
-> (RAW, sem markup); a validação (`--validate-top N`) refaz per-blueprint (preço
-> final com tier markup +6%/+20%). **Sempre valide** — sem isso o histórico teve
-> ~76% de falsos positivos.
+> **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
+> (*per-expansion*); a conferência (`--validate-top`) refaz com o preço **real
+> de checkout** (*per-blueprint*, já com a taxa). **Sempre conferir** — sem isso,
+> no passado ~76% dos "achados" eram falsos.
 
-## Rodar
+---
+
+## Como rodar (o dia a dia)
+
+Um comando tem três partes: **o programa** · **as opções** (começam com `--`,
+chamadas "flags") · **os valores**. Exemplo comentado:
 
 ```bash
-# Scan + validação:
+# 1) Rastrear alguns sets e já conferir os melhores candidatos:
 .venv\Scripts\python.exe cardtrader_scanner.py \
-  --sets sfa scr par paf tef twm ssp dri blk jtg \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --hub-fee 0.06 --output outputs/scan_<stamp>.xlsx
+  --sets sfa scr par paf tef twm ssp dri blk jtg \   # quais coleções (códigos CardTrader)
+  --threshold 0.30 \                                  # margem mínima 30%
+  --validate-top 30 \                                 # confere os 30 melhores de verdade
+  --min-net-margin 0.20 \                             # descarta lucro líquido < 20%
+  --output outputs/scan_da_vez.xlsx                   # onde salvar a planilha
 
-# Depois postprocess (relatório classificado) — --input e --output OBRIGATÓRIOS:
-$env:PYTHONIOENCODING="utf-8"
+# 2) Gerar o relatório organizado (decisão COMPRA/REVISAR/NÃO):
+#    Aqui --input e --output são OBRIGATÓRIOS (não dá pra omitir).
 .venv\Scripts\python.exe cardtrader_postprocess.py \
-  --input outputs/scan_<stamp>.xlsx \
-  --output outputs/relatorio_<stamp>.xlsx
+  --input outputs/scan_da_vez.xlsx \
+  --output outputs/relatorio_da_vez.xlsx
 ```
 
-> O postprocess v2 **não** aceita argumento posicional: passe `--input`/`-i` e
-> `--output`/`-o`. Knobs de classificação (defaults): `--min-net-margin 0.25`
-> (COMPRA), `--min-lucro 50`, `--revisar-min-net 0.20`, `--revisar-modest-min 0.30`.
+Opções úteis:
+- `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),
+  começando pelas mais valiosas — é o modo do rastreio **semanal**. Esse modo é
+  demorado (horas).
+- `--threshold 0.20` acha ~5× mais deals que `0.30`, mas com mais ruído (mais
+  falso positivo pra você filtrar).
+- Rastreios longos: rode **em segundo plano** (sem travar o terminal). Nunca
+  deixe rodando "preso" numa janela que você pode fechar sem querer.
 
-- `--sets` aceita codes CT (ex.: `scr`, `sfa`). Aliases CT↔pokemontcg.io estão
-  mapeados no scanner (`SET_ALIAS_TO_PTCG`).
-- `--all-sets` (v2.11) = **scan COMPLETO** (~832 exp, ignora `--sets`/config),
-  com SV/curados escaneados primeiro (`PRIORITY_SET_CODES`, pra timeout não
-  cortar os de valor). É o modo do **weekly**.
-- `--threshold 0.20` destrava ~5× mais deals que `0.30` (mais ruído).
-- Scan largo (`--all-sets` / weekly completo) pode passar de horas. Para runs
-  longos, rode **detached/background** (Task Scheduler), nunca inline. No GH
-  Actions, o workflow `weekly-scan.yml` publica **parciais ao vivo** no branch
-  `scan-live` a cada ~10min (via `scripts/checkpoint_to_partial.py`).
-- `--dry-run` usa só cache; `--no-cache` força refetch.
+---
 
-## Falsos positivos conhecidos (verificar manual)
+## Cuidados — "achados" que costumam ser falsos
 
-- **Trainer Gallery (`TG##`)**: preço pokemontcg.io infla 5-10×. O postprocess já
-  manda esses pra MANUAL REVIEW automático (regex `^TG\d+`), mas confira.
-- **Sets novos**: cobertura ruim do pokemontcg.io em expansões recentes → pode
-  faltar preço ou casar set errado (Layer 1 strict + aliases mitigam).
+- **Cartas "Trainer Gallery" (código começa com `TG`)**: o preço de referência
+  vem inflado (5 a 10×). O relatório já manda essas pra conferência manual, mas
+  desconfie.
+- **Coleções muito novas**: a base de preços de referência ainda é fraca nelas →
+  pode faltar preço ou casar com a coleção errada.
 
-## Saída e commit
+---
 
-- Outputs vão pra `outputs/` (gitignored — é dado, não código). O que entra no
-  repo é o **código** + eventualmente um resumo `.md`. Não commite `.xlsx`,
-  logs, skip-list backups, nem scripts scratch `_*.ps1`/`_*.py`.
-- `scanner_skip_list.json` é **estado operacional local** (gitignored): cada
-  máquina tem cobertura/rede diferente.
-- Workflow = **branch + PR**. Não dê push direto em `main` (gateado).
+## Quando algo é alterado no código
 
-## Não confundir
+- Os resultados (planilhas `.xlsx`, registros de execução) **não** vão pra nuvem
+  — são dados, não programa.
+- Toda mudança no programa segue um ritual de segurança: cria-se uma **cópia de
+  trabalho** ("branch"), faz-se a alteração lá, abre-se um **pedido de revisão**
+  ("PR" = pull request) e só então junta-se ao oficial ("main"). O assistente de
+  IA nunca altera o oficial direto. *(Você não precisa fazer isso à mão — é como
+  o trabalho técnico é organizado.)*
 
-Existe um scanner irmão de **MYP** (repo `myp-arbitrage-scanner`, usa
-`cloudscraper`/Cloudflare, threshold **percent integer**). É outro projeto.
+---
+
+## Não confundir com o outro scanner
+
+Existe um programa **irmão**, o **MYP** (pasta `myp-arbitrage-scanner`), que
+garimpa cartas baratas no **Brasil**. Ele é um projeto **separado**, com regras
+diferentes (inclusive a margem mínima, que lá é em número inteiro). São dois
+programas distintos.
+
+---
+
+## Glossário (as palavras técnicas que aparecem aqui)
+
+| Palavra | O que é, em simples |
+|---|---|
+| **scanner** | o programa que "varre" os preços procurando oportunidades |
+| **repositório / repo** | a pasta do projeto, com todo o código e histórico |
+| **GitHub** | site que guarda o código na nuvem e seu histórico de versões |
+| **clone** | uma cópia do projeto baixada do GitHub pro seu computador |
+| **branch** | uma "cópia de trabalho" paralela, pra mexer sem afetar o oficial |
+| **main** | a versão **oficial** do código |
+| **commit** | um "salvar com etiqueta" — registra uma mudança no histórico |
+| **push** | enviar suas mudanças pro GitHub (nuvem) |
+| **PR (pull request)** | pedido pra juntar uma branch ao oficial, depois de revisar |
+| **venv** | a "caixinha" isolada com as ferramentas do programa |
+| **flag / opção** | um ajuste no comando, começa com `--` (ex.: `--threshold`) |
+| **token** | uma senha longa que um site gera pra programas acessarem sua conta |
+| **threshold** | a margem mínima de lucro pra um deal aparecer (aqui em **fração**) |
+| **postprocess** | a etapa que pega o rastreio cru e gera o relatório organizado |
+| **outputs/** | a pasta onde as planilhas de resultado são salvas |
+
+---
+
+*Versão do scanner: v2.11. Este guia foi reescrito em linguagem acessível em
+2026-06-05 — termos técnicos explicados pra leitura do operador (Matheus).*
