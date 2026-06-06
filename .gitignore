@@ -44,6 +44,21 @@ scanner_skip_list.json
 # v2.7 portalocker sidecar
 scanner_skip_list.json.lock
 scanner_skip_list.json.tmp*
+# skip-list backups manuais (data, não código)
+scanner_skip_list*.bak*
+scanner_skip_list.backup*
+
+# Outputs e logs — dados, não código (saneamento 2026-06-05)
+outputs/
+logs/
+
+# Scratch de sessão/ad-hoc (diag, audits one-shot) — não versionar.
+# Os scripts canônicos em scripts/ usam prefixos launch_/run_/test_/peek_,
+# nunca "_". O "_" é a convenção de scratch.
+_*.py
+_*.ps1
+_*.csv
+AUDIT_overnight_*.md
 
 # Firecrawl scrapes (validation cache)
 .firecrawl/
