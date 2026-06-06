@@ -1,7 +1,31 @@
-# Session Handoff — CT Scanner
+# Session Handoff — CT Scanner (diário de bordo)
 
-> Estado atual + retomada rápida pra próxima sessão.
-> **Última atualização:** 2026-06-05 (saneamento estrutural + run-ready local).
+> **O que é este arquivo (pro Matheus):** é o **diário de bordo** do projeto —
+> um registro do que foi feito em cada dia de trabalho, pra quem retomar (você
+> ou o assistente de IA) saber de onde continuar. As anotações mais abaixo são
+> **técnicas** (escritas pro assistente); use o resumo logo abaixo pra
+> acompanhar sem precisar decifrar o jargão. Pra entender o programa em si, leia
+> o **`CLAUDE.md`** (guia simples).
+
+## 📍 Onde o projeto está agora (em linguagem simples)
+
+- **O programa funciona e está pronto pra rodar** no seu computador
+  (`C:\Users\mathe\card-trader-scanner`). A pasta antiga no Google Drive foi
+  apagada (estava corrompendo os arquivos de controle).
+- **Versão atual: v2.11.** Ela ganhou há pouco a opção de **rastrear todas as
+  coleções de uma vez** (pro levantamento semanal) e de **mostrar resultados
+  parciais enquanto o rastreio longo ainda roda**.
+- **Como rodar:** está explicado em linguagem simples no `CLAUDE.md` e, com mais
+  detalhe, no `README.md`.
+- **O que ainda está em aberto:** fazer um rastreio completo (semanal) pra
+  calibrar os números reais; trocar uma senha de acesso antiga por segurança.
+  Nada disso impede o uso normal do dia a dia.
+
+> **Última atualização:** 2026-06-05 (saneamento + linguagem acessível nos docs).
+
+---
+
+> ⬇️ **Daqui pra baixo são as anotações técnicas (registro por data).**
 
 ---
 
@@ -18,6 +42,20 @@
   canônico + a do monorepo como ref).
 - **`.venv` recriado** (Python 3.12.10, deps de `requirements.txt`). Smoke-test
   OK (`scanner --help` exit 0, `postprocess --help`, imports OK). **Run-ready.**
+- **PR #6 merged** @ `387cd40`: fix de docs — comando do postprocess era
+  posicional no CLAUDE.md (CLI v2 exige `--input`/`--output`); quick-start do
+  handoff apontava pro Drive deletado.
+- **PR #7 merged** @ `33ef779` (**v2.11**): integra a feature que estava no
+  branch `run-scan` (esquecida, validada no scan de 4h 06-02) re-aplicada sobre
+  o main pós-saneamento: `--all-sets` (~832 exp, SV/curados primeiro) +
+  `scripts/checkpoint_to_partial.py` (parciais ao vivo) + weekly.yml publica
+  parciais no branch `scan-live`. Gatilho `push:run-scan` REMOVIDO (dispatch-only).
+  Pendência: deletar branch remoto `run-scan` (harness bloqueou; operador roda
+  `git push origin --delete run-scan`).
+- **PR #8 merged** @ `b416da2`: `CLAUDE.md` reescrito em linguagem acessível pro
+  operador (médico, não-programador) — termos explicados inline + glossário.
+  Memória `feedback_docs_linguagem_acessivel` criada (padrão a estender aos
+  repos irmãos). README + este handoff acessibilizados na sequência.
 
 ---
 

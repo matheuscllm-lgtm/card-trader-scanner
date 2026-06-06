@@ -7,16 +7,30 @@ tags:
   - pokémon
   - projeto-ativo
 date: 2026-04-20
-updated: 2026-04-20
+updated: 2026-06-05
 status: ativo
-version: v1.0
+version: v2.11
 ---
 
 # CardTrader Arbitrage Scanner — Pokémon TCG
 
+> 📖 **Para o Matheus (leitura simples):** este é o **manual técnico completo**.
+> Se você só quer entender o que o programa faz e como rodá-lo, o lugar certo é
+> o **`CLAUDE.md`** (guia em linguagem acessível, com glossário). Aqui embaixo há
+> detalhe profundo: as seções marcadas com **🔧** são mais avançadas — pode pular
+> sem dó. As seções "Instalação", "Como rodar", "Saída" e "Resolução de
+> problemas" foram escritas pra você conseguir acompanhar.
+>
+> *Termos técnicos que aparecem (repo, branch, venv, flag, token…) estão
+> explicados no glossário do `CLAUDE.md`.*
+
 ## Objetivo
 
-Identificar oportunidades de arbitragem entre **CardTrader** (marketplace europeu com preços em EUR) e o **TCG Player** (market US), focando em singles **Near Mint, inglês, não-graded**, com margem **≥ 30%** e preço mínimo **$10 USD**.
+Achar **oportunidades de compra-e-revenda** ("arbitragem") entre o site europeu
+**CardTrader** (preços em euro) e o preço de referência dos EUA (**TCG Player**).
+O foco é em cartas avulsas **em inglês, estado Near Mint** ("quase perfeitas"),
+**não graduadas** (sem aquele case de avaliação tipo PSA), com lucro **≥ 30%** e
+preço mínimo de **$10**.
 
 **Tese:** CardTrader agrega sellers da UE inteira (Itália, Espanha, França, Alemanha…), muitos com precificação desatualizada ou em recuperação cambial. Cartas valorizadas rapidamente no mercado US frequentemente levam semanas para reprecificar na UE → janela de arbitragem.
 
@@ -53,7 +67,11 @@ frete  = 0                                ← modelo Hub depot consolida ~100 ca
 
 **Diferença vs MYP scanner:** MYP usa `(tcg − custo) / custo` (ROI sobre capital). CT usa `(tcg − custo) / tcg` (gross margin sobre receita). Margens não são diretamente comparáveis: CT 15% gross ↔ MYP 17.6% ROI; CT 30% gross ↔ MYP 42.9% ROI. Equivalência: `roi = gross / (1 − gross)`.
 
-## ⚠️ Vício conhecido da CT API (e como mitigamos)
+## 🔧 Vício conhecido da CT API (técnico — pode pular)
+<!-- Resumo simples: o site tem dois jeitos de informar o preço, e um deles vem
+     "cru" (sem a taxa). O programa confere os melhores candidatos no preço REAL
+     de compra pra não cair em falso positivo. Detalhe abaixo é pro assistente
+     de IA / quem mexe no código. -->
 
 A CT API tem **2 endpoints que retornam preços DIFERENTES pra mesma carta**:
 
@@ -90,7 +108,10 @@ Função: `validate_per_blueprint()` em `cardtrader_scanner.py` linhas ~973-1080
 | **Latência de preço** | Diária (site BR) | Horas (API direta) |
 | **Margem alvo** | 35% (absorve frete BR→US maior) | 30% (frete UE→US menor) |
 
-## Arquitetura
+## 🔧 Arquitetura (técnico — pode pular)
+
+<!-- Diagrama de como o programa conversa com os sites de preço. Referência
+     pra quem desenvolve. -->
 
 ```
 ┌──────────────────┐   JWT Bearer   ┌──────────────────────┐
@@ -145,10 +166,10 @@ O scanner usa **Strategy Pattern** — se você conseguir acesso TCGPlayer ofici
 ### 2. Configurar ambiente
 
 ```bash
-# Ir para a pasta do scanner
-cd "01 - Projetos/TCG & Exportação/CardTrader Scanner"
+# Ir para a pasta do scanner (no disco local — desde jun/2026 não é mais no Drive)
+cd /c/Users/mathe/card-trader-scanner
 
-# Criar virtualenv (isolamento de dependências)
+# Criar a "caixinha isolada" de ferramentas (virtualenv / venv)
 python -m venv .venv
 
 # Ativar (Windows)
@@ -185,27 +206,28 @@ python cardtrader_scanner.py --include-graded
 python cardtrader_scanner.py -o scan_semanal_abril.xlsx
 ```
 
-**Rodar scan canônico local (10-set rotina diária) quando GH Actions
-indisponível** (ex: cota free tier exhausted, ver memória
-`gh_actions_quota_exhausted`):
+**Rodar o scan local do dia a dia** (10 coleções curadas):
 
 ```bash
 # Bash (Git Bash / WSL / Linux):
-set -a; source .env; set +a
+set -a; source .env; set +a            # carrega seu token do arquivo .env
 export PYTHONIOENCODING=utf-8
 .venv/Scripts/python.exe cardtrader_scanner.py \
   --sets sfa scr par paf tef twm ssp dri blk jtg \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --output "cardtrader_scan_local_$(date +%Y%m%d_%H%M).xlsx"
+  --output "outputs/cardtrader_scan_local_$(date +%Y%m%d_%H%M).xlsx"
 
-# Depois postprocess:
+# Depois o relatório organizado (postprocess).
+# IMPORTANTE: --input e --output são OBRIGATÓRIOS (interface v2; o antigo
+# --core/--hype/--dead foi aposentado).
 .venv/Scripts/python.exe cardtrader_postprocess.py \
-  --core <scan.xlsx> --hype <scan.xlsx> --dead <scan.xlsx> \
-  --output cardtrader_relatorio_$(date +%Y-%m-%d).xlsx
+  --input  outputs/<scan.xlsx> \
+  --output outputs/cardtrader_relatorio_$(date +%Y-%m-%d).xlsx
 ```
 
-ETA local ≈ 30min (medido 2026-05-15 em 10-set scope canônico, ~2800
-listings priced a 2-10/s).
+Tempo estimado ≈ 30min (medido em 10 coleções, ~2800 itens). Para o **scan
+completo** (todas as ~832 coleções), troque `--sets …` por **`--all-sets`** —
+mas aí leva horas; rode em segundo plano.
 
 ### 4. Saída
 
@@ -226,7 +248,7 @@ listings priced a 2-10/s).
 | Margem bruta | ≥ **30%** | Absorve ~15% taxas eBay/Amazon + frete + câmbio |
 | Moeda | EUR apenas | CT permite sellers em USD/GBP; ignorados por ora para simplicidade FX |
 
-## Fluxo de dados (runtime)
+## 🔧 Fluxo de dados (técnico — pode pular)
 
 1. **Lista expansões** — 1 call: `GET /expansions` (cacheada)
 2. **Para cada set escolhido:**
@@ -258,11 +280,12 @@ listings priced a 2-10/s).
 
 ## Agendamento (cron/Task Scheduler)
 
-> **Status 2026-05-15:** cron GH Actions `daily-scan.yml` está **desabilitado**
-> temporariamente (cota free tier 2000min/mês exhausted; reset 01/06).
-> Reativar descomentando `schedule:` no YAML quando cota voltar OU resolver
-> via upgrade plano / repo público / self-hosted runner. Detalhes em memória
-> `gh_actions_quota_exhausted`. Scans ad-hoc rodam LOCAL via venv com `.env`.
+> **Status 2026-06-05:** **não há agendamento automático.** Os dois fluxos na
+> nuvem (`daily-scan.yml` e `weekly-scan.yml`) rodam **só quando você manda**
+> (dispatch manual), por decisão sua — sem horário fixo. A cota mensal de
+> processamento na nuvem (GitHub Actions) voltou ao normal em 01/06. Os scans
+> avulsos rodam **no seu computador** (pelo `.venv` + `.env`). *("cron" = um
+> agendador que dispara tarefas em horários fixos.)*
 
 **Recomendação:** rodar 2x/dia, manhã e tarde. CardTrader refresca com frequência, mas 2x/dia pega as melhores janelas antes dos concorrentes.
 
@@ -303,9 +326,9 @@ Hetzner CX11 (€4.50/mês) ou DigitalOcean Basic ($6/mês):
 | JustTCG (alternativa premium) | **$19-49/mês** |
 | **Total mínimo** | **€0-5/mês** |
 
-## Troubleshooting
+## Resolução de problemas (o que fazer quando dá erro)
 
-| Erro | Causa provável | Solução |
+| Erro (mensagem na tela) | Causa provável | Solução |
 |---|---|---|
 | `CT_JWT não definido` | `.env` não preenchido | Copiar `.env.example` → `.env` e colar token |
 | `401 Unauthorized` | Token expirou ou inválido | Gerar novo em CardTrader Settings |
