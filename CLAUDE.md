@@ -84,10 +84,16 @@ cenário sem consolidação: `--shipping-brl X`.
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
   --hub-fee 0.06 --output outputs/scan_<stamp>.xlsx
 
-# Depois postprocess (relatório classificado):
+# Depois postprocess (relatório classificado) — --input e --output OBRIGATÓRIOS:
 $env:PYTHONIOENCODING="utf-8"
-.venv\Scripts\python.exe cardtrader_postprocess.py outputs/scan_<stamp>.xlsx
+.venv\Scripts\python.exe cardtrader_postprocess.py \
+  --input outputs/scan_<stamp>.xlsx \
+  --output outputs/relatorio_<stamp>.xlsx
 ```
+
+> O postprocess v2 **não** aceita argumento posicional: passe `--input`/`-i` e
+> `--output`/`-o`. Knobs de classificação (defaults): `--min-net-margin 0.25`
+> (COMPRA), `--min-lucro 50`, `--revisar-min-net 0.20`, `--revisar-modest-min 0.30`.
 
 - `--sets` aceita codes CT (ex.: `scr`, `sfa`). Aliases CT↔pokemontcg.io estão
   mapeados no scanner (`SET_ALIAS_TO_PTCG`).
