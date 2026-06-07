@@ -76,24 +76,34 @@ Quando você manda o programa procurar deals, define uma **margem mínima de luc
 
 ---
 
-## A conta do lucro (a "taxa do depósito")
+## A conta do lucro (margem BRUTA — você soma as taxas por fora)
 
-As cartas que você compra vão pro **depósito da CardTrader na Europa** (o "Hub"),
-acumulam ~100 unidades, e só então são enviadas ao Brasil de uma vez — o que faz
-o frete por carta virar quase nada. Por isso a conta é:
+**Mudança de 2026-06-06:** o programa agora mostra só a **margem bruta** — o
+desconto puro, sem descontar nenhuma taxa. A conta é a mais simples possível:
 
 ```
-custo da carta = preço no site × 1,06    (os 6% são a taxa do Hub)
-lucro = (preço de referência TCG − custo) ÷ preço TCG     (sem frete)
+margem = (preço de referência TCG − preço no site) ÷ preço TCG
 ```
 
-O programa já aplica esses 6% sozinho, **e** o relatório final (o "postprocess",
-explicado abaixo) aplica os mesmos 6% — pra os dois baterem.
+> **O que isso quer dizer na prática:** o programa pega o preço que aparece na
+> ficha da carta no CardTrader e compara com o preço de referência dos EUA
+> (TCG Player). O número que aparece na planilha é esse desconto cru. **Você
+> (Matheus) é quem soma o Hub fee, o frete, a taxa do cartão e o IOF por fora**,
+> manualmente, do seu jeito, pra decidir se vale a pena.
+
+> **Por que mudamos:** antes o programa já tirava 6% sozinho (de "Hub fee").
+> Agora ele não mexe em nada — só te dá o número limpo. Fica mais fácil você
+> conferir a margem da planilha contra o que vê no site, sem ter que "desfazer"
+> a taxa de cabeça.
 
 > **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
 > (*per-expansion*); a conferência (`--validate-top`) refaz com o preço **real
-> de checkout** (*per-blueprint*, já com a taxa). **Sempre conferir** — sem isso,
-> no passado ~76% dos "achados" eram falsos.
+> de checkout** (*per-blueprint*). **Sempre conferir** — sem isso, no passado
+> ~76% dos "achados" eram falsos.
+>
+> A opção `--hub-fee` continua existindo nos dois scripts e tem **default 0.0**
+> (margem bruta). Se um dia quiser reembutir os 6% antigos, passe `--hub-fee 0.06`
+> no scanner **e** no postprocess.
 
 ---
 
@@ -182,17 +192,6 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.11. Este guia foi reescrito em linguagem acessível em
-2026-06-05 — termos técnicos explicados pra leitura do operador (Matheus).*
-
----
-
-## 📤 Entrega de resultados — tabela na plataforma, NUNCA arquivo
-
-**Regra dura (operador, 2026-06-06). Vale para TODOS os scanners (CardTrader / MYP / Liga / sealed / PSA).**
-
-O resultado de um scan é entregue ao operador **como tabela no chat do Claude Code** — no **terminal ou no app**. **NÃO** entregar como arquivo `.xlsx`/`.csv` para download por padrão.
-
-- O scanner/postprocess **pode escrever** uma planilha local como subproduto de trabalho (gitignored) — tudo bem. O ponto é a **ENTREGA**: ela é a tabela na plataforma, não um anexo de arquivo.
-- Gerar/anexar arquivo **só quando o operador pedir explicitamente** (ex.: "me manda o XLSX pra importar em lote"). Sem pedido = sem arquivo.
-- A tabela traz **todos** os deals (não amostra curada) + as colunas relevantes da fonte.
+*Versão do scanner: v2.12 (margem bruta — sem taxa embutida; 2026-06-06). Este
+guia foi reescrito em linguagem acessível em 2026-06-05 — termos técnicos
+explicados pra leitura do operador (Matheus).*
