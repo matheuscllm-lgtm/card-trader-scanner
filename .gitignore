@@ -30,6 +30,8 @@ scan_*.log
 *.log
 # v2.6 checkpoint sidecars (crash-recovery JSONL — data, não código)
 *.checkpoint.jsonl
+# PR-F heartbeat (liveness runtime do scanner — data, não código)
+heartbeat.txt
 
 # MYP / merge tool outputs (sibling tools)
 merge_*.xlsx
