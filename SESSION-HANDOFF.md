@@ -29,6 +29,50 @@
 
 ---
 
+## 2026-06-08 — Auditoria de cobertura (sessão de execução, SEM mudança de código)
+
+> Sessão de **investigação/auditoria** no Claude Code on the web (container
+> efêmero). `.env` com `CT_JWT` criado local (gitignored, nunca commitado). Sem
+> `POKEMONTCG_API_KEY` → throttle pokemontcg.io ~30/min.
+
+**Achados (todos checados com dado real nesta sessão):**
+
+1. **`--min-price-usd 25` foi erro de método.** Subi o piso pra fugir do rate
+   limit → escondeu a faixa US$10–25, onde mora a maioria dos deals. Evidência:
+   mesmos sets modernos = **12 candidatos a $10 vs 2 a $25**. → **Sempre o piso
+   padrão (~$10).**
+
+2. **Back-catalog = mercado eficiente.** Era Sword & Shield inteira (17 sets,
+   ~1.000 cartas precificadas) deu **0 deal acionável** tanto a ≥30% quanto a
+   ≥20%/$10. → **Não varrer sets antigos**; deal mora em lançamento novo
+   (reafirma o foco em `PRIORITY_SET_CODES`).
+
+3. **Ground-truth (Arceus VSTAR brs 176):**
+   - TCGplayer (referência) **bate**: scanner $15.45 vs real $15.63 (#176 Rainbow
+     Rare, via pokemontcg.io set `swsh9`). Carta + variante certas. Fonte OK.
+   - CardTrader (compra) estava **defasado**: scan R$54 → validação R$62 →
+     **real-agora R$75** (EN NM mais barata) → custo R$75×1,06 = R$79,78 vs TCG
+     R$79,09 = **prejuízo**. **Liquidez/staleness é o calcanhar de Aquiles** (a
+     cópia barata flaggeada some). Reafirma roadmap #4 (liquidity gate).
+   - Bônus: cópias mais baratas eram **italianas** (R$38) — scanner ignora de
+     propósito (referência TCGplayer é inglesa). Design correto.
+
+4. **`--all-sets` (839) inviável sem `POKEMONTCG_API_KEY`** numa sessão (~30/min,
+   1k/dia sem key). `cache.db` ajuda em re-runs. `crz`/Galarian Gallery: ~30%
+   não precifica (colisão de número → set mismatch, corretamente rejeitado).
+
+**Outputs (gitignored, não versionados):** scan_principais, scan_sv, scan_swsh
+(+`_t20`), scan_swsh_recent_p10, test_evs_p10, relatorios.
+
+**Backlog "devagarinho" (melhorias pequenas, 1 por PR):**
+- [ ] **Liquidity flag no relatório**: nº de cópias EN-NM no/perto do preço do
+  deal (1 cópia = alto risco de staleness). Vem do achado #3.
+- [ ] **Re-check ao vivo** do preço das top-N do relatório.
+- [ ] **Atalho/flag pra pular back-catalog** (foco em sets recentes).
+- [ ] Investigar cobertura **crz/Galarian Gallery** (~30% não precificadas).
+
+---
+
 ## 2026-06-05 — Saneamento estrutural (PR #5 + docs fix)
 
 - **Repo migrado pra disco local:** `C:\Users\mathe\card-trader-scanner` (clone

@@ -136,6 +136,18 @@ Opções úteis:
   desconfie.
 - **Coleções muito novas**: a base de preços de referência ainda é fraca nelas →
   pode faltar preço ou casar com a coleção errada.
+- **Sets antigos (back-catalog)**: mercado já "eficiente" — o preço na Europa
+  costuma bater com o dos EUA, então quase nunca sobra deal. Auditoria de
+  2026-06-08: toda a era Sword & Shield (17 sets, ~1.000 cartas) deu **0 deal**.
+  Gaste energia em **lançamentos novos** — é onde o gap aparece.
+- **Use o piso de preço padrão (≈US$10)**: subir o piso (ex.: `--min-price-usd
+  25`) esconde a faixa barata (US$10–25), que é justamente onde **a maioria dos
+  deals mora**. No teste de 06-08, subir pra $25 derrubou os achados de 12 → 2.
+- **A cópia barata pode já ter sumido ("staleness")**: o número que o scanner
+  mostra é o preço de *quando ele rastreou*. Cópias baratas vendem rápido —
+  quando você for comprar, pode só restar a cara. **Confira o preço ao vivo
+  antes de comprar.** (Ex. 06-08: Arceus VSTAR scan R$54 → real R$75 → virou
+  prejuízo.)
 
 ---
 
