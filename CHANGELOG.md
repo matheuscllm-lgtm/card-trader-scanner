@@ -4,6 +4,36 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-09 — Postprocess: tabela de ENTREGA em markdown (links clicáveis)
+
+Padroniza a **apresentação** do resultado no formato aprovado pelo operador
+(paridade com o scanner COMC): a entrega é uma **tabela markdown no chat**, não
+planilha. Threshold/filtros/classificação **inalterados** — só formato de saída.
+
+### Postprocess (`cardtrader_postprocess.py`)
+- Nova função `build_delivery_markdown(df, cfg, fx_usd_brl, top_n)` emite:
+  ```
+  | # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |
+  ```
+  - **Carta** = nome + número combinados (reusa `_combine_name_number`).
+  - **Links** = `[oferta](url_ct) · [TCG](url_tcg)` — markdown clicável; `[oferta]`
+    aponta pro CardTrader, `[TCG]` é o workflow de validação manual do operador.
+  - **CT US$** = `live_usd` se houver, senão `live_brl ÷ FX`; **TCG US$** = nativo
+    (`reference_price_usd`); **Dif** = TCG US$ − CT US$. Sem FX → CT US$ vazio
+    (não inventa câmbio).
+  - Filtra só COMPRA/REVISAR via `classify_decision` (mesma regra do XLSX),
+    ordena por `net_margin` desc, `--top-md` linhas (default 50).
+- `_read_fx_usd_brl()` lê `usd_brl_rate` da aba **Stats** do raw do scanner.
+- `write_report` agora **também** grava um `.md` sidecar (mesmo nome do output) e
+  imprime a tabela no stdout; retorna o markdown. Nova flag `--top-md`.
+- Novo alias de coluna `reference_price_usd` (`TCG Market (USD)`), p/ levar o
+  preço USD nativo do raw até a tabela.
+- **Inalterado:** XLSX/CSV/JSON seguem **colunares com URLs cruas**; margem
+  BRUTA; threshold fração; TG## → MANUAL REVIEW; pisos de preço.
+- Testes: `tests/test_delivery_markdown.py` (11 casos — header exato, Carta
+  composta, links clicáveis, conversão CT US$ via FX, Dif, filtro COMPRA/REVISAR,
+  pipe→`/`, vazio amigável, `--top-md`).
+
 ## 2026-06-06 — Scanner v2.12 + Postprocess: margem BRUTA (remove Hub fee do cálculo)
 
 Decisão do operador (regra cross-scanner): o scanner deve reportar **apenas
