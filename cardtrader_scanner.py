@@ -243,6 +243,144 @@ _NUMBER_IN_VERSION = re.compile(r"(\d+)\s*/\s*\d+")
 _TRAINER_GALLERY_RE = re.compile(r"^TG\d+", re.IGNORECASE)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# CHASE TIER — classificação de raridade (v2.13, frente "chase cards")
+# ══════════════════════════════════════════════════════════════════════
+# Espelha CHASE_TIER_PATTERNS do postprocess (mesma taxonomia oficial
+# PokemonTCG) pra manter coerência entre scanner e relatório. Substring-aware,
+# case-insensitive. Mantenha as duas listas em sincronia se editar.
+#   TOP    = raridades top (SIR/SAR/Hyper/Secret/Illustration Rare)
+#   MID    = alt/full art, rainbow/gold, double/ultra rare
+#   MODEST = holo/reverse holo, promos
+#   BULK   = common/uncommon (sem liquidez mesmo barato)
+CHASE_TIER_PATTERNS = {
+    "TOP": [
+        "special illustration rare", "sir", "illustration rare",
+        "special art rare", "sar", "hyper rare", "ultra hyper rare",
+        "secret rare", "rara secreta",
+    ],
+    "MID": [
+        "full art", "alt art", "alternate art", "alternative art",
+        "rainbow rare", "gold rare", "trainer gallery", "double rare",
+        "rara hiper", "ultra rare",
+    ],
+    "MODEST": [
+        "holo rare", "reverse holo", "reverse foil", "promo",
+        "rare holo",
+    ],
+    "BULK": [
+        "common", "comum", "uncommon", "incomum",
+    ],
+}
+# Ordem de prioridade (alto→baixo) pra ranquear e filtrar --chase-only.
+CHASE_TIER_ORDER = {"TOP": 3, "MID": 2, "MODEST": 1, "BULK": 0, "": -1}
+# Tiers considerados "chase" pelo filtro --chase-only.
+CHASE_ONLY_TIERS = {"TOP", "MID"}
+
+
+def classify_chase_tier(rarity: Optional[str]) -> str:
+    """Classifica o chase tier (TOP/MID/MODEST/BULK) a partir da rarity.
+
+    `rarity` pode vir da rarity oficial pokemontcg.io (preferida) ou da rarity
+    do blueprint CT (fallback). Sem rarity → "" (desconhecido), tratado como
+    não-chase pelo filtro. A versão completa com proxies (número supranumerário,
+    markup tier) vive no postprocess — aqui mantemos só o caminho por rarity,
+    que é o que o scanner tem em mãos durante o scan.
+    """
+    if not rarity:
+        return ""
+    r = str(rarity).lower().strip()
+    for tier, patterns in CHASE_TIER_PATTERNS.items():
+        if any(p in r for p in patterns):
+            return tier
+    # Rarity presente mas não mapeada → MODEST (conservador).
+    return "MODEST"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# VALORIZAÇÃO — score heurístico honesto (v2.13, frente "médio/longo prazo")
+# ══════════════════════════════════════════════════════════════════════
+# IMPORTANTE (honestidade de dados): este score NÃO usa preço histórico nem
+# dados de tendência — as APIs atuais (CardTrader + pokemontcg.io) NÃO fornecem
+# série temporal de preços. O que temos é: (1) data de lançamento do set
+# (pokemontcg.io set.releaseDate) → idade; (2) rarity oficial → chase tier;
+# (3) preço de mercado atual. O score combina SÓ esses sinais derivávies, e
+# cada componente é explicado em texto na coluna "Valorização — Notas".
+# Não inventamos "alta histórica" nem "% do topo" porque a fonte não dá isso.
+#
+# Heurística (0-100), três componentes objetivos:
+#   • Raridade (0-45):  TOP=45, MID=30, MODEST=12, BULK=0, desconhecida=8
+#   • Maturidade (0-35): sets com 1.5-4 anos pontuam mais (já passaram do
+#     dip pós-lançamento e ainda não saíram totalmente de circulação). Recém-
+#     lançado (<6m) e muito antigo (>6 anos) pontuam menos — heurística simples,
+#     não previsão. Set sem data → 10 (neutro).
+#   • Preço-âncora (0-20): cartas de market mais alto têm mais "chão" e
+#     histórico de retenção de valor; <$15→4, $15-40→10, $40-100→16, >$100→20.
+# Limitações ficam documentadas na própria nota de cada linha.
+def _valorization_age_component(set_release_date: Optional[str],
+                                now: Optional[datetime] = None) -> tuple[int, str]:
+    """Componente de maturidade (0-35) + nota textual. Data no formato
+    'YYYY/MM/DD' (pokemontcg.io). Sem data → neutro."""
+    if not set_release_date:
+        return 10, "idade do set desconhecida (sem data na fonte)"
+    now = now or datetime.now()
+    parsed = None
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(set_release_date, fmt)
+            break
+        except (ValueError, TypeError):
+            continue
+    if parsed is None:
+        return 10, "idade do set desconhecida (data ilegível)"
+    age_days = (now - parsed).days
+    age_years = age_days / 365.25
+    if age_years < 0.5:
+        return 12, f"set recém-lançado (~{age_years:.1f} anos) — preço ainda instável"
+    if age_years < 1.5:
+        return 22, f"set jovem (~{age_years:.1f} anos) — saindo do dip pós-lançamento"
+    if age_years <= 4.0:
+        return 35, f"set maduro (~{age_years:.1f} anos) — janela clássica de valorização"
+    if age_years <= 6.0:
+        return 24, f"set antigo (~{age_years:.1f} anos) — fora de circulação, demanda residual"
+    return 16, f"set muito antigo (~{age_years:.1f} anos) — vintage, líquido só em chase"
+
+
+def compute_valorization(rarity: Optional[str],
+                         set_release_date: Optional[str],
+                         tcg_market_usd: float,
+                         now: Optional[datetime] = None) -> tuple[int, str]:
+    """Score de valorização médio/longo prazo (0-100) + nota explicativa.
+
+    Honestidade: combina SÓ sinais que as APIs fornecem (rarity, idade do set,
+    preço atual). NÃO usa preço histórico (a fonte não tem). É uma HEURÍSTICA
+    de triagem, não previsão. Operador decide capital.
+    """
+    tier = classify_chase_tier(rarity)
+    rarity_pts = {"TOP": 45, "MID": 30, "MODEST": 12, "BULK": 0}.get(tier, 8)
+    rarity_note = {
+        "TOP": "raridade top (chase forte)",
+        "MID": "raridade média-alta (alt/ultra/rainbow)",
+        "MODEST": "raridade modesta (holo/promo)",
+        "BULK": "bulk (common/uncommon — baixo potencial)",
+    }.get(tier, "raridade desconhecida")
+
+    age_pts, age_note = _valorization_age_component(set_release_date, now=now)
+
+    if tcg_market_usd < 15:
+        price_pts, price_note = 4, "preço-âncora baixo (<$15)"
+    elif tcg_market_usd < 40:
+        price_pts, price_note = 10, "preço-âncora médio ($15-40)"
+    elif tcg_market_usd < 100:
+        price_pts, price_note = 16, "preço-âncora alto ($40-100)"
+    else:
+        price_pts, price_note = 20, "preço-âncora premium (>$100)"
+
+    score = rarity_pts + age_pts + price_pts
+    note = f"{rarity_note}; {age_note}; {price_note} (heurística — sem série histórica)"
+    return score, note
+
+
 def clean_collector_number(raw: str) -> str:
     """Normaliza um collector_number pra uso em query no pokemontcg.io.
     Entrada pode vir limpa ("007") ou com rarity concatenada ("SIR | 161/131").
@@ -340,6 +478,19 @@ class Opportunity:
     # Holofoil ($50 mesma carta). Valores: "holofoil", "reverseHolofoil",
     # "normal", "unlimitedHolofoil", "" (provider != pokemontcg ou sem variant).
     price_variant_used: Optional[str] = None
+    # v2.13 (2026-06-09): frente "chase cards" — tier de raridade (TOP/MID/
+    # MODEST/BULK/""). Derivado da rarity oficial pokemontcg.io quando
+    # disponível, senão da rarity do blueprint CT. Usado pelo --chase-only e
+    # pela coluna Chase Tier no XLSX.
+    chase_tier: str = ""
+    # v2.13: frente "valorização" — score heurístico 0-100 (rarity + idade do
+    # set + preço-âncora) + nota explicativa. NÃO é previsão (sem série
+    # histórica na fonte); é triagem. Ver compute_valorization().
+    valorization_score: int = 0
+    valorization_note: str = ""
+    # v2.13: data de lançamento do set (pokemontcg.io set.releaseDate), pra
+    # auditoria da idade usada no score. "" quando a fonte não traz.
+    set_release_date: str = ""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -427,16 +578,25 @@ class Cache:
         # tem essa key → variant_used vira None, scanner persiste vazio.
         tcg_url = None
         variant_used = None
+        # v2.13 (valorização): extrai metadados do card pokemontcg.io já cacheado
+        # (set.releaseDate + rarity oficial). ZERO fetch extra — reusa o raw_json
+        # que set_price já persistiu. Usado pelo score de valorização (idade do
+        # set) e pela coluna Chase Tier (rarity oficial > rarity do CT).
+        ptcg_rarity = None
+        set_release_date = None
         try:
             if raw_json:
                 raw = json.loads(raw_json)
                 tcg_url = (raw.get("tcgplayer") or {}).get("url")
                 variant_used = raw.get("_variant_used")
+                ptcg_rarity = raw.get("rarity")
+                set_release_date = (raw.get("set") or {}).get("releaseDate")
         except (json.JSONDecodeError, AttributeError, TypeError):
             tcg_url = None
             variant_used = None
         return {"market_usd": market, "low_usd": low, "mid_usd": mid,
-                "tcg_url": tcg_url, "variant_used": variant_used}
+                "tcg_url": tcg_url, "variant_used": variant_used,
+                "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -966,6 +1126,10 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.8 Layer 4: reset last_variant_used também.
         self.last_tcg_url = None
         self.last_variant_used = None
+        # v2.13 (valorização): metadados pra score + chase tier. Reset a cada
+        # chamada pra evitar carry-over do card anterior.
+        self.last_ptcg_rarity = None
+        self.last_set_release_date = None
         # Cache inclui foil pra evitar colisão entre versão normal e RH
         # do mesmo card (2026-05-11 H2 fix).
         cache_key = f"pokemontcg:{set_code}:{collector_number}:{card_name}:foil={foil}"
@@ -973,6 +1137,8 @@ class PokemonTcgIoProvider(PricingProvider):
         if cached:
             self.last_tcg_url = cached.get("tcg_url")
             self.last_variant_used = cached.get("variant_used")
+            self.last_ptcg_rarity = cached.get("ptcg_rarity")
+            self.last_set_release_date = cached.get("set_release_date")
             return cached["market_usd"]
 
         card = self._search(card_name, set_code, collector_number)
@@ -982,6 +1148,10 @@ class PokemonTcgIoProvider(PricingProvider):
         # cards — set defensivo). Setado ANTES de validações restantes pra
         # garantir que sempre que retornarmos um preço, a url esteja disponível.
         self.last_tcg_url = (card.get("tcgplayer") or {}).get("url")
+        # v2.13 (valorização): rarity oficial pokemontcg.io + data de lançamento
+        # do set. Usados pelo score de valorização e pela coluna Chase Tier.
+        self.last_ptcg_rarity = card.get("rarity")
+        self.last_set_release_date = (card.get("set") or {}).get("releaseDate")
 
         # M5 fix (2026-05-12): instrumentação supranumerários.
         # Detecta quando o match retornado é SIR/SAR/HR/Gold/Rainbow (collector
@@ -1557,7 +1727,9 @@ class Scanner:
                  shipping_brl_override: float = 0.0,
                  hub_fee_rate: float = 0.0,
                  per_set_timeout_s: float = DEFAULT_PER_SET_TIMEOUT_MIN * 60,
-                 ignore_skip_list: bool = False):
+                 ignore_skip_list: bool = False,
+                 chase_only: bool = False,
+                 max_consecutive_misses: int = 0):
         self.ct = ct
         self.pricing = pricing
         self.cache = cache
@@ -1578,6 +1750,15 @@ class Scanner:
         # Quando excedido, scan_expansion aborta + adiciona o set à skip-list.
         self.per_set_timeout_s = per_set_timeout_s
         self.ignore_skip_list = ignore_skip_list
+        # v2.13 (frente chase): --chase-only filtra pra raridades TOP/MID
+        # (Special/Hyper/Secret/Illustration Rare, alt arts, ultra/rainbow/gold).
+        self.chase_only = chase_only
+        # v2.13 (frente eficiência): cap de "misses" consecutivos no pricing.
+        # Quando N listings seguidos de um set não casam preço na pokemontcg.io
+        # (buraco de cobertura — sets 2026 / mega evolução), aborta o set + skip
+        # list em vez de moer centenas de listings no rate limit. 0 = desativado
+        # (comportamento histórico preservado). Pendência v2.4 conhecida.
+        self.max_consecutive_misses = max_consecutive_misses
         # PR-F (2026-05-28): defaults seguros pra heartbeat/checkpoint quando
         # scan_expansion é chamado direto (tests/diagnose) sem passar por scan().
         # scan() reaponta esses dois quando há um CheckpointWriter ativo.
@@ -1596,6 +1777,8 @@ class Scanner:
             "expansions_timed_out": 0,        # v2.4: sets que estouraram per_set_timeout
             "pricing_failures": 0,            # v2.9 (Codex H5): erros desconhecidos no pricing
             "expansions_mass_pricing_abort": 0,  # v2.9: sets abortados por >50% pricing fails
+            "skipped_non_chase": 0,           # v2.13: listings cortados por --chase-only
+            "expansions_no_coverage_abort": 0,  # v2.13: sets abortados por N misses consecutivos
         }
         # v2.9 (Codex H5): threshold pra abortar set quando pricing está
         # massivamente quebrado (schema drift / SSL / endpoint down). 50% das
@@ -1862,6 +2045,9 @@ class Scanner:
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
         set_pricing_attempts = 0
         set_pricing_failures = 0
+        # v2.13 (frente eficiência): contador de "misses" consecutivos (preço
+        # não encontrado na fonte) pra cortar sets sem cobertura cedo.
+        set_consecutive_misses = 0
         for i, l in enumerate(best_by_uid.values(), 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
             if self.per_set_timeout_s and (time.monotonic() - set_start) > self.per_set_timeout_s:
@@ -1933,7 +2119,34 @@ class Scanner:
                 return
 
             if not tcg_market or tcg_market <= 0:
+                # v2.13 (frente eficiência): conta miss consecutivo. Em sets sem
+                # cobertura na pokemontcg.io (ex: 2026 / mega evolução), centenas
+                # de listings seguidos não casam preço — cada um custa uma chamada
+                # à API (com rate limit) que sempre falha. Quando bate o cap,
+                # aborta o set e o joga na skip-list (mesma mecânica do timeout/
+                # mass-pricing-failure). Distingue-se de pricing_failure (erro de
+                # rede/exceção): aqui o request foi OK, só não há match.
+                set_consecutive_misses += 1
+                if (self.max_consecutive_misses > 0
+                        and set_consecutive_misses >= self.max_consecutive_misses):
+                    log.warning(
+                        f"  🕳️  SEM COBERTURA em {exp_code} ({exp_name}): "
+                        f"{set_consecutive_misses} listings consecutivos sem preço "
+                        f"na fonte (cap={self.max_consecutive_misses}). Abortando set "
+                        f"após {i}/{total_listings}."
+                    )
+                    self.stats["expansions_no_coverage_abort"] += 1
+                    try:
+                        add_to_skip_list(
+                            exp_code,
+                            f"no_coverage_{set_consecutive_misses}_consecutive_misses_at_{i}_of_{total_listings}",
+                        )
+                    except Exception as ee:
+                        log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+                    return
                 continue
+            # Hit: zera o contador de misses consecutivos.
+            set_consecutive_misses = 0
             self.stats["tcg_price_found"] += 1
 
             # Margem calculada em BRL (a verdade operacional pro Matheus).
@@ -1958,6 +2171,19 @@ class Scanner:
             tcg_url = getattr(self.pricing, "last_tcg_url", None)
             # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
             variant_used = getattr(self.pricing, "last_variant_used", None)
+            # v2.13: rarity oficial pokemontcg.io (preferida) → fallback rarity
+            # do blueprint CT. Set release date pra score de valorização.
+            ptcg_rarity = getattr(self.pricing, "last_ptcg_rarity", None)
+            set_release = getattr(self.pricing, "last_set_release_date", None) or ""
+            rarity_for_tier = ptcg_rarity or l.rarity
+            chase_tier = classify_chase_tier(rarity_for_tier)
+            val_score, val_note = compute_valorization(
+                rarity_for_tier, set_release, tcg_market
+            )
+            # Filtro --chase-only: só TOP/MID passam (cartas de maior interesse).
+            if self.chase_only and chase_tier not in CHASE_ONLY_TIERS:
+                self.stats["skipped_non_chase"] += 1
+                continue
             yield Opportunity(
                 listing=l,
                 tcg_market_usd=tcg_market,
@@ -1969,6 +2195,10 @@ class Scanner:
                 net_margin_pct=net_margin,
                 tcg_url=tcg_url,
                 price_variant_used=variant_used,
+                chase_tier=chase_tier,
+                valorization_score=val_score,
+                valorization_note=val_note,
+                set_release_date=set_release,
             )
 
         self.stats["expansions_scanned"] += 1
@@ -2216,6 +2446,12 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # vs normal) antes de comprar. Vazio quando provider != pokemontcg ou
         # card sem entry TCGPlayer (Promos antigos comum).
         "Link CardTrader", "Link TCG", "Scanned At",
+        # v2.13 — frentes "chase" e "valorização". APPEND no fim (não realocar
+        # colunas existentes: os testes de coerência checam índices fixos 6-19,
+        # 26, 27). Chase Tier = raridade top (TOP/MID/MODEST/BULK). Desconto %
+        # = margem bruta repetida com rótulo do ranking de chase. Valorização =
+        # score heurístico 0-100 (rarity + idade do set + preço) + notas.
+        "Chase Tier", "Desconto %", "Valorização (0-100)", "Valorização — Notas",
     ]
     ws.append(headers)
 
@@ -2251,6 +2487,11 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             l.cardtrader_url,
             opp.tcg_url or "",
             opp.scanned_at,
+            # v2.13 — chase + valorização (colunas append, índices 29-32 0-based)
+            opp.chase_tier or "",
+            round(opp.margin_pct, 4),  # Desconto % (= margem bruta, rótulo chase)
+            opp.valorization_score,
+            opp.valorization_note or "",
         ])
 
     # ─── Formatação ───
@@ -2277,6 +2518,8 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         18,                       # V: variant (holofoil/reverseHolofoil/normal)
         20, 14, 6,                # W-Y: seller/tipo/hub
         40, 40, 18,               # Z-AB: link CT / link TCG / scanned_at
+        # v2.13 — AC-AF: chase tier / desconto% / valorização / notas
+        12, 11, 16, 60,
     ]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -2299,6 +2542,11 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         row[17].number_format = "0.00%"         # R: Net Margin % REAL
         row[18].number_format = '"R$"#,##0.00'  # S: Lucro R$ REAL
         row[19].number_format = '"R$"#,##0.00'  # T: Frete Est. R$
+        # v2.13: Desconto % (idx30 0-based) — formato percentual. Demais novas
+        # colunas (Chase Tier idx29, Valorização idx31 int, Notas idx32 texto)
+        # ficam no formato geral.
+        if len(row) > 30:
+            row[30].number_format = "0.00%"
         # v2.8 Layer 4: nova coluna Variant inserida entre Foil e Seller.
         # Headers atuais (29 cols): ... "Foil"(22), "Variant"(23), "Seller"(24),
         # "Tipo Seller"(25), "Hub"(26), "Link CardTrader"(27), "Link TCG"(28),
@@ -2403,6 +2651,20 @@ def parse_args():
                          f"set é abortado e adicionado à skip-list. 0 = desativado."))
     p.add_argument("--ignore-skip-list", action="store_true",
                    help="v2.4: ignora scanner_skip_list.json (retenta sets que travaram em runs anteriores).")
+    # v2.13 (frente chase cards): filtra pra raridades top.
+    p.add_argument("--chase-only", action="store_true",
+                   help=("v2.13: só inclui chase cards — raridades TOP/MID "
+                         "(Special/Hyper/Secret/Illustration Rare, alt/full art, "
+                         "ultra/rainbow/gold rare). Corta common/uncommon/holo "
+                         "comum. Mantém piso $10 e validação per-blueprint. "
+                         "Output já vem ranqueado por desconto (margem desc)."))
+    # v2.13 (frente eficiência): cap de misses consecutivos sem cobertura.
+    p.add_argument("--max-consecutive-misses", type=int, default=0,
+                   help=("v2.13: aborta um set após N listings consecutivos sem "
+                         "preço na fonte (buraco de cobertura — sets 2026/mega "
+                         "evolução) e o joga na skip-list. Evita moer centenas de "
+                         "chamadas que sempre falham. 0 = desativado (default, "
+                         "comportamento histórico). Sugestão p/ --all-sets: 40."))
     p.add_argument("--clear-skip-list", action="store_true",
                    help="v2.4: apaga scanner_skip_list.json antes de rodar (reset total).")
     # v2.6 (2026-05-17): partial JSONL checkpoint crash-recovery
@@ -2586,6 +2848,8 @@ def main():
         hub_fee_rate=args.hub_fee,
         per_set_timeout_s=per_set_timeout_s,
         ignore_skip_list=args.ignore_skip_list,
+        chase_only=args.chase_only,
+        max_consecutive_misses=args.max_consecutive_misses,
     )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.

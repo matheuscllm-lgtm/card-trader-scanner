@@ -186,6 +186,12 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         # None — checkpoints pré-v2.8 não tinham. Sem isso o recovery perdia
         # a coluna Variant (operador não conseguia validar foil/holofoil).
         price_variant_used=d.get("price_variant_used"),
+        # v2.13: chase tier + valorização. Get com default — checkpoints
+        # pré-v2.13 não tinham estes campos (sem crash, vira default).
+        chase_tier=d.get("chase_tier", ""),
+        valorization_score=d.get("valorization_score", 0),
+        valorization_note=d.get("valorization_note", ""),
+        set_release_date=d.get("set_release_date", ""),
     )
 
 
