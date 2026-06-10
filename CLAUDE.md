@@ -139,6 +139,52 @@ Opções úteis:
 
 ---
 
+## Como o resultado é ENTREGUE (tabela no chat, com links pra clicar)
+
+> **Regra do operador (jun/2026):** a entrega do resultado é uma **tabela no
+> chat** — **não** uma planilha. A planilha (`.xlsx`) continua sendo gerada e
+> guardada na pasta `outputs/`, mas é arquivo de apoio, não a entrega.
+
+Quando você roda o **postprocess** (passo 2 acima), além da planilha ele agora
+gera também uma **tabela em formato de texto** (chamada "markdown" — texto com
+links clicáveis) com as colunas:
+
+```
+| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |
+```
+
+O que cada coluna quer dizer:
+
+| Coluna | O que é |
+|---|---|
+| **#** | posição no ranking (1 = maior margem) |
+| **Margem %** | o desconto bruto (preço EUA − preço Europa) ÷ preço EUA |
+| **CT US$** | preço no CardTrader, **em dólar** (convertido do real pela cotação do dia, que o programa lê da planilha) |
+| **TCG US$** | preço de referência dos EUA (TCG Player), em dólar |
+| **Dif** | a diferença em dólar (TCG US$ − CT US$) — quanto "sobra" antes das taxas |
+| **Carta** | nome **+ número** numa célula só (ex.: `Hitmonlee (013/110)`). Se o nome já tem o número, não duplica |
+| **Set** | a coleção (código do CardTrader) |
+| **Raridade** / **Cond** | raridade oficial e condição (sempre Near Mint) |
+| **Qtd** | quantas unidades o vendedor tem (você importa em lote) |
+| **Links** | **dois links pra clicar:** `[oferta]` abre a página da carta no CardTrader · `[TCG]` abre a página do TCG Player **pra você conferir o preço à mão** |
+
+> **Por que dois links:** o `[TCG]` é o seu jeito padrão de **conferir** o preço
+> antes de comprar (lembre: sem conferir, no passado ~76% dos "achados" eram
+> falsos). O `[oferta]` te leva direto à carta no CardTrader.
+
+A tabela aparece **na tela** quando o postprocess roda, e também é salva num
+arquivo de texto `.md` ao lado da planilha (mesmo nome, terminação `.md`) — é só
+copiar e colar no chat. Use `--top-md N` pra escolher quantas linhas mostrar (o
+padrão são 50; a planilha sempre traz **todos** os deals, sem corte).
+
+> **Detalhe técnico (pode pular):** a tabela do chat **junta** colunas (Carta =
+> nome+número; Links = oferta+TCG) só pra ficar legível. A planilha (`.xlsx`) e
+> os arquivos `.csv`/`.json` continuam com **colunas separadas e os endereços
+> (URLs) crus**, do jeito que ferramentas de importação esperam. Margem, filtros
+> e classificação (COMPRA/REVISAR/NÃO) **não mudaram** — só a apresentação.
+
+---
+
 ## Cuidados — "achados" que costumam ser falsos
 
 - **Cartas "Trainer Gallery" (código começa com `TG`)**: o preço de referência

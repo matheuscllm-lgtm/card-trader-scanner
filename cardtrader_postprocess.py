@@ -349,6 +349,10 @@ COLUMN_ALIASES = {
     "markup_tier": ["markup_tier","Markup Tier","tier"],
     "validation_status": ["validation_status","Validation Status","valid_status","status"],
     "reference_price_brl": ["reference_price_brl","TCG Market (BRL)","TCG R$","TCG Market (R$)"],
+    # Preço de referência TCGPlayer na MOEDA ORIGINAL (USD). Usado só na tabela
+    # de entrega no chat (colunas "CT US$"/"TCG US$"). O raw do scanner grava
+    # "TCG Market (USD)"; pode faltar em provider != pokemontcg → fallback FX.
+    "reference_price_usd": ["reference_price_usd","TCG Market (USD)","TCG USD","TCG US$","tcg_market_usd"],
     "net_margin": ["net_margin","Net Margin % REAL","Net Margin %","Net REAL"],
     "lucro_liq": ["lucro_liq","Lucro R$ REAL","Lucro REAL","Lucro Liq (R$)","Net Profit (R$)"],
     "link_ct": ["link_ct","Link CT","Link CardTrader","CardTrader URL","CardTrader Link","Link"],
@@ -758,7 +762,164 @@ def _safe_val(val):
     return val
 
 
-def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
+# ─── Tabela de ENTREGA no chat (markdown, links clicáveis) ───────────────────
+# Formato aprovado pelo operador 2026-06-09 (paridade com o scanner COMC):
+# entrega = tabela markdown no chat, NÃO planilha. CSV/XLSX seguem com colunas
+# separadas + URLs cruas; só esta tabela compõe Carta (nome+número) e Links.
+#
+#   | # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |
+#
+# Coluna Links = "[oferta](url_ct) · [TCG](url_tcg)" — o link da oferta aponta
+# pra página do CardTrader (de preferência per-blueprint, preço final com markup
+# — lembrar dos ~76% de falsos positivos sem validação per-blueprint); o link TCG
+# é o workflow canônico de validação manual do operador.
+#
+# Margem é a net_margin já enriquecida = margem BRUTA (regra 2026-06-06, sem Hub
+# fee). Esta função NÃO altera threshold/filtro/classificação — só APRESENTA os
+# deals que classify_decision marcou COMPRA/REVISAR.
+_DELIVERY_HEADERS = [
+    "#", "Margem %", "CT US$", "TCG US$", "Dif",
+    "Carta", "Set", "Raridade", "Cond", "Qtd", "Links",
+]
+
+
+def _fmt_usd(v) -> str:
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        return f"{float(v):,.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_pct(v) -> str:
+    """net_margin chega em fração (0.30 = 30%) → '30%'."""
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        return f"{float(v) * 100:.0f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _md_links_cell(link_ct, link_tcg) -> str:
+    """'[oferta](url_ct) · [TCG](url_tcg)' — só inclui o que existir."""
+    parts = []
+    ct = "" if link_ct is None else str(link_ct).strip()
+    tcg = "" if link_tcg is None else str(link_tcg).strip()
+    if ct.startswith("http"):
+        parts.append(f"[oferta]({ct})")
+    if tcg.startswith("http"):
+        parts.append(f"[TCG]({tcg})")
+    return " · ".join(parts)
+
+
+def _md_escape(s) -> str:
+    """Pipe quebra a tabela markdown → vira '/'. None → ''."""
+    if s is None:
+        return ""
+    try:
+        if isinstance(s, float) and pd.isna(s):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(s).replace("|", "/").strip()
+
+
+def build_delivery_markdown(
+    df: pd.DataFrame,
+    cfg: DecisionConfig,
+    fx_usd_brl: float | None = None,
+    top_n: int = 50,
+) -> str:
+    """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
+
+    Espera `df` já passado por `enrich_df` (colunas lógicas + net_margin/chase_tier).
+    Reaproveita `classify_decision` p/ filtrar COMPRA+REVISAR (mesma classificação
+    do XLSX — NÃO duplica regra), `_combine_name_number` p/ a coluna 'Carta'.
+
+    USD:
+      - "TCG US$" = `reference_price_usd` (nativo do raw, TCG Market USD).
+      - "CT US$"  = `live_usd` se existir, senão `live_brl / fx_usd_brl`.
+      - "Dif"     = TCG US$ − CT US$ (lacuna bruta em dólar).
+    `fx_usd_brl` vem do Stats sheet do raw (usd_brl_rate). Sem FX nem live_usd,
+    a célula CT US$ fica vazia (não inventa câmbio).
+    """
+    work = df.copy()
+    decisions = work.apply(lambda r: classify_decision(r, cfg), axis=1)
+    work["decisao"] = [d[0] for d in decisions]
+    deals = work[work["decisao"].isin(["COMPRA", "REVISAR"])].copy()
+    if "net_margin" in deals.columns:
+        deals = deals.sort_values("net_margin", ascending=False)
+    deals = deals.head(top_n)
+    deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
+
+    title = (
+        f"### CardTrader — entrega (top {len(deals)} por margem · "
+        f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
+    )
+    if deals.empty:
+        return title + "\n\n_(nenhum deal COMPRA/REVISAR acima do limiar)_"
+
+    header = "| " + " | ".join(_DELIVERY_HEADERS) + " |"
+    sep = "| " + " | ".join("---" for _ in _DELIVERY_HEADERS) + " |"
+    lines = [title, "", header, sep]
+
+    def _ct_usd(row):
+        # live_usd direto se o raw trouxer; senão converte BRL via FX.
+        for k in ("live_usd", "ct_price_usd"):
+            if k in row and pd.notna(row.get(k)):
+                return float(row[k])
+        live_brl = row.get("live_brl")
+        if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
+            return float(live_brl) / float(fx_usd_brl)
+        return None
+
+    for rank, (_, row) in enumerate(deals.iterrows(), 1):
+        ct_usd = _ct_usd(row)
+        tcg_usd = row.get("reference_price_usd")
+        try:
+            tcg_usd = float(tcg_usd) if pd.notna(tcg_usd) else None
+        except (TypeError, ValueError):
+            tcg_usd = None
+        dif = (tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
+        cells = [
+            str(rank),
+            _fmt_pct(row.get("net_margin")),
+            _fmt_usd(ct_usd),
+            _fmt_usd(tcg_usd),
+            _fmt_usd(dif),
+            _md_escape(row.get("card_name")),
+            _md_escape(row.get("set_code")),
+            _md_escape(row.get("rarity")),
+            _md_escape(row.get("condition")),
+            _md_escape(row.get("quantity")),
+            _md_links_cell(row.get("link_ct"), row.get("link_tcg")),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _read_fx_usd_brl(input_path: Path) -> float | None:
+    """Lê usd_brl_rate da aba Stats do raw XLSX do scanner (pra converter CT US$).
+
+    Retorna None silenciosamente se a aba/linha não existir (input de origem
+    diferente, raw antigo). Sem FX, a coluna CT US$ fica vazia — não inventa."""
+    try:
+        stats = pd.read_excel(input_path, sheet_name="Stats", header=None)
+    except Exception:
+        return None
+    for _, r in stats.iterrows():
+        if str(r.iloc[0]).strip().lower() == "usd_brl_rate":
+            try:
+                return float(r.iloc[1])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
+                 fx_usd_brl: float | None = None, top_md: int = 50) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
     wb = Workbook(); wb.remove(wb.active)
 
@@ -814,6 +975,19 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path):
     wb.save(output_path)
     print(f"OK: {output_path}")
 
+    # ─── Entrega no chat: tabela markdown (links clicáveis) ──────────────────
+    # Formato aprovado 2026-06-09. A entrega ao operador é a TABELA no chat;
+    # o .md sidecar é só conveniência (mesmo conteúdo). XLSX segue cru/colunar.
+    md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md)
+    md_path = output_path.with_suffix(".md")
+    try:
+        md_path.write_text(md + "\n", encoding="utf-8")
+        print(f"OK: {md_path} (tabela de entrega — copie pro chat)")
+    except OSError as e:
+        print(f"[postprocess] aviso: não gravou {md_path} ({e}); tabela só no stdout.")
+    print("\n" + md + "\n")
+    return md
+
 def main():
     p = argparse.ArgumentParser(description="CardTrader postprocess v2.0 — simplificado")
     p.add_argument("--input", "-i", required=True, help="XLSX raw do scanner")
@@ -830,6 +1004,9 @@ def main():
                    help=("v2.12: DEFAULT 0.0 — margem BRUTA (custo = preço do "
                          "site, SEM taxa). Operador soma Hub fee/frete/cartão/IOF "
                          "por fora. Passe 0.06 pra reembutir os 6% históricos."))
+    p.add_argument("--top-md", type=int, default=50,
+                   help=("Quantas linhas na tabela de entrega markdown do chat "
+                         "(default 50). XLSX sempre traz todos os deals."))
     args = p.parse_args()
 
     # Paridade com o scanner: aceita `6` ou `0.06` (auto-converte percentual).
@@ -847,7 +1024,13 @@ def main():
     )
     df = pd.read_excel(args.input)
     print(f"Carregado: {args.input} | {len(df)} rows | cols: {len(df.columns)}")
-    write_report(df, cfg, Path(args.output))
+    # FX usd_brl da aba Stats do raw → converte CT (BRL) p/ "CT US$" na tabela.
+    fx = _read_fx_usd_brl(Path(args.input))
+    if fx:
+        print(f"FX usd_brl_rate (Stats) = {fx:.4f} — usado p/ coluna CT US$.")
+    else:
+        print("FX usd_brl_rate ausente no input — coluna CT US$ ficará vazia.")
+    write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md)
 
 if __name__ == "__main__":
     main()
