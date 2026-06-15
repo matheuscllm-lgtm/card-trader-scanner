@@ -7,9 +7,9 @@ tags:
   - pokémon
   - projeto-ativo
 date: 2026-04-20
-updated: 2026-06-05
+updated: 2026-06-15
 status: ativo
-version: v2.11
+version: v2.15
 ---
 
 # CardTrader Arbitrage Scanner — Pokémon TCG

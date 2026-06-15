@@ -4,6 +4,53 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-15 — Scanner v2.15: overrides de timeout por SET (fim do "churn" vintage)
+
+**Problema (investigação do ciclo vintage):** alguns sets vintage pesados não
+cabem no limite de tempo padrão por coleção (*per-set-timeout* = 8min). Eles
+estouravam o tempo **sempre**, eram jogados na lista de pulos automática
+(*skip-list*), pulados nos rastreios seguintes e **nunca mais escaneados por
+completo**. Vira um ciclo vicioso ("churn"): entra na lista, é pulado, volta a
+entrar. O operador teria que lembrar de passar `--per-set-timeout 20` à mão toda
+vez — frágil. Casos confirmados:
+
+- `df` (EX Dragon Frontiers) — precisa ~19min p/ cobrir 100% das 79 listings;
+  com 8min, cortava sempre.
+- `ds` (EX Delta Species), `n1` (Neo Genesis), `n4` (Neo Destiny) — cobertura
+  **parcial** cortada por 12min; escaneariam mais com mais fôlego.
+- `n2` (Neo Discovery) é **caso diferente** — quase sem preço de referência na
+  pokemontcg.io (no-coverage genuíno). Esse é tratado pelo cap de *misses*
+  (`--max-consecutive-misses`), **não** por timeout. Não recebe override.
+
+**Solução (`cardtrader_scanner.py`):**
+- Novo mapa code-level `SET_TIMEOUT_OVERRIDES` (código CardTrader → segundos) com
+  os sets confirmados: `df`=1200s (20min), `ds`/`n1`/`n4`=1080s (18min). É código
+  (não config que o operador edita) porque são **fatos estáveis** sobre sets
+  específicos — moram ao lado das outras constantes (regex TG, TTLs).
+- Novo resolver `effective_set_timeout_s(exp_code, default_s)`. Regras: o
+  override **só ELEVA o teto** (`max(default, override)`) — um `--per-set-timeout`
+  global ainda maior continua vencendo; se o operador desliga o timeout global
+  (`--per-set-timeout 0`), tudo fica sem timeout (override não reativa); set sem
+  override = comportamento histórico; código case-insensitive.
+- `scan_expansion` resolve o timeout efetivo **uma vez** no topo e o usa em todos
+  os pontos de checagem (pré-blueprints, pré-listings, loop de pricing) + na
+  `deadline_ts` que governa retries/429-sleeps. Loga quando um override está
+  ativo. `_check_set_timeout` ganhou parâmetro opcional `timeout_s` (None =
+  retrocompat: cai no default da instância).
+- **Inalterado:** flag `--per-set-timeout` (default 8min); mecânica de skip-list;
+  cap de misses; mass-pricing-abort; margem bruta; threshold fração; TG##.
+- **Estado local (fora do PR):** a skip-list vive em `%LOCALAPPDATA%`; as entradas
+  `df/ds/n1/n4` que eram artefato de timeout curto foram limpas manualmente
+  (backup feito), preservando `asc`/`paf` (pré-existentes) e `n2` (no-coverage).
+- Testes: `tests/test_set_timeout_overrides.py` (11 casos — mapa de overrides,
+  resolver em todas as regras, integração com `_check_set_timeout`).
+
+> **Follow-up conhecido (não nesta mudança):** o timeout per-set é checado
+> *entre* iterações do loop de listings — uma chamada HTTP travada (*stall*
+> intra-call) não é interrompida no meio. (Nota v2.15: o watchdog intra-call de
+> 429/Retry-After foi endereçado na v2.14 via truncamento de backoff; um
+> watchdog genérico de stall HTTP de qualquer chamada segue como dívida.)
+
 ## 2026-06-15 — v2.14: correção + robustez (resultados corretos, sem travar)
 
 Auditoria de correção/robustez (autorizada pelo operador). Cinco frentes; cada
