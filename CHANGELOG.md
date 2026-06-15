@@ -4,6 +4,50 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-15 — v2.14: correção + robustez (resultados corretos, sem travar)
+
+Auditoria de correção/robustez (autorizada pelo operador). Cinco frentes; cada
+uma com teste. Suíte inteira verde (16 arquivos de teste).
+
+### Scanner (`cardtrader_scanner.py`)
+- **Timeout que escapava (corrigido).** Quando o tempo de espera pedido num
+  retry (ex.: a API pede "espere 60s") não cabia no limite restante do set, o
+  programa às vezes "deixava passar" por uma fração de segundo e tentava de
+  novo, escondendo o estouro. Agora, se a espera tem que ser cortada pelo
+  limite, o programa aborta de forma previsível. (Um teste que já existia estava
+  FALHANDO no main exatamente por isso — agora passa.)
+- **Falha de preço silenciosa (corrigida).** Quando a fonte de preços
+  (pokemontcg.io) respondia "ocupado" (429) ou "erro de servidor" (5xx), o
+  programa tratava como "carta não existe" e seguia em silêncio — sumindo com
+  achados de verdade, abortando coleções boas por engano e inflando a taxa de
+  falha. Agora ele tenta de novo algumas vezes e, se persistir, registra como
+  FALHA VISÍVEL (não como "carta inexistente"). Erro legítimo do servidor (4xx
+  que não seja 429) continua sendo tratado como "sem correspondência".
+- **Dois scanners ao mesmo tempo (bloqueado).** Se você (ou um agendador) tentar
+  rodar dois scanners usando a MESMA pasta de estado, o segundo agora RECUSA
+  iniciar com uma mensagem clara — antes os dois brigavam pelo mesmo arquivo de
+  cache e a coisa ficava lentíssima (~9s por carta), o que fazia a "lista de
+  coleções a pular" ser preenchida com coleções boas por engano. Se você
+  realmente precisa rodar dois, use `--allow-concurrent`.
+- **Câmbio no arquivo de recuperação (corrigido).** Quando um scan trava no
+  meio e é recuperado, o arquivo recuperado agora preserva a cotação do dólar do
+  scan original (antes vinha zerado, e a coluna "CT US$" da tabela de entrega
+  ficava em branco). A decisão COMPRA/REVISAR nunca foi afetada por isso.
+- **Nova coluna "Variante Baixa Confiança".** Marca "Sim" quando uma carta
+  vendida como NÃO-brilhante casou preço só com uma versão brilhante cara — sinal
+  de que o preço de referência pode ser da versão errada. É só um aviso para você
+  conferir; não muda o preço nem a classificação.
+
+### Recovery (`scripts/recover_from_checkpoint.py`)
+- Lê a cotação do cabeçalho do checkpoint e reconstrói a célula `usd_brl_rate`.
+
+### Testes novos
+- `scripts/test_ptcg_transient_errors.py` (5 casos): 429/5xx viram falha
+  visível, não "miss"; 429→200 recupera; 200 vazio e 400 = sem-match sem exceção.
+- `scripts/test_run_guard.py` (4 casos): recusa de instância concorrente,
+  re-aquisição após release, state-dirs diferentes não conflitam, PID gravado.
+- `scripts/test_checkpoint_crash_recovery.py`: +1 caso (FX reconstruído do header).
+
 ## 2026-06-09 — Postprocess: tabela de ENTREGA em markdown (links clicáveis)
 
 Padroniza a **apresentação** do resultado no formato aprovado pelo operador

@@ -45,9 +45,36 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12)
-Versão: v2.12
+Versão: v2.14
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.14 (2026-06-15 — correção + robustez; resultados corretos e sem bug):
+  - [CORREÇÃO timeout] _get._sleep_capped: quando o backoff pedido NÃO cabia no
+    tempo restante (ex.: 429 Retry-After 60s com 3s de deadline), o retorno
+    `time.monotonic() > deadline_ts` podia dar False por uma fração de segundo,
+    o loop re-tentava e MASCARAVA o timeout. Agora um backoff TRUNCADO sinaliza
+    estouro de forma determinística. (Teste pré-existente test_per_set_timeout_
+    initial_calls estava VERMELHO no main por causa disso.)
+  - [CORREÇÃO silent-failure pricing] pokemontcg.io: 429 (rate-limit) e 5xx
+    eram tratados como "carta não encontrada" (miss) → sumiam deals em silêncio,
+    envenenavam o contador de misses (abort no_coverage falso) e inflavam a taxa
+    de falha. Novo _ptcg_get faz retry bounded em 429/5xx e, se persistir,
+    LEVANTA requests.Timeout (→ contado como pricing_failure VISÍVEL, não miss).
+    4xx ≠ 429 segue como sem-match legítimo.
+  - [ROBUSTEZ concorrência] Run-guard: o scanner agora RECUSA iniciar se já há
+    outra instância no mesmo --state-dir (lockfile scanner_run.lock). Evita o
+    incidente de contenção de lock SQLite (pricing → ~9s/listing) que envenenava
+    a skip-list. Escape hatch: --allow-concurrent.
+  - [CORREÇÃO recovery FX] O checkpoint JSONL agora grava usd_brl/eur_brl no
+    header; recover_from_checkpoint.py reconstrói a célula Stats usd_brl_rate.
+    Antes o XLSX recuperado tinha FX=0.0 → a coluna "CT US$" da tabela de
+    entrega do postprocess ficava vazia. (Classificação COMPRA/REVISAR NÃO era
+    afetada — usa colunas em BRL.)
+  - [SINAL variante] Nova coluna "Variante Baixa Confiança": "Sim" quando o
+    listing é NÃO-foil mas o único preço veio de variante metálica premium
+    (holofoil/unlimitedHolofoil). Só FLAG — não muda preço nem decisão.
+    reverseHolofoil NÃO dispara (fallback intencional p/ Holo Rare vintage).
 
 Changelog v2.12 (2026-06-06 — margem BRUTA pura; remove Hub fee do cálculo):
   - Decisão do operador (cross-scanner): scanner reporta APENAS margem bruta
@@ -491,6 +518,17 @@ class Opportunity:
     # v2.13: data de lançamento do set (pokemontcg.io set.releaseDate), pra
     # auditoria da idade usada no score. "" quando a fonte não traz.
     set_release_date: str = ""
+    # v2.14 (correção de resultado — candidato 4): FLAG de BAIXA CONFIANÇA de
+    # variante. True quando o listing CT é NÃO-foil (foil=False) mas o único
+    # preço disponível na pokemontcg.io foi de uma variante METÁLICA premium
+    # (holofoil/unlimitedHolofoil) — i.e. nem `normal` nem `reverseHolofoil`
+    # existiam. Nesse caso o preço de referência pode ser da variante ERRADA
+    # (a holo costuma valer 3-10× a não-foil) e a margem fica inflada.
+    # NÃO altera preço nem decisão — é só um sinal pro operador validar via
+    # Link TCG (caso load-bearing: Gengar não-foil casando preço holo $1600).
+    # reverseHolofoil NÃO dispara a flag de propósito: é o fallback INTENCIONAL
+    # pra Holo Rare vintage (v2.10 Layer 4.1), onde non-foil↔reverse é correto.
+    variant_low_confidence: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -682,16 +720,29 @@ class CardTraderClient:
             return deadline_ts is not None and time.monotonic() > deadline_ts
 
         def _sleep_capped(wait_s: float) -> bool:
-            """Sleep cap pra não passar da deadline. Retorna True se deadline
-            estourou durante (ou antes do) sleep."""
+            """Sleep cap pra não passar da deadline. Retorna True se a deadline
+            estourou OU se o backoff pedido (`wait_s`) não coube no tempo
+            restante (não dá pra honrar a espera → não adianta tentar de novo).
+
+            Fix 2026-06-15 (correção/robustez): antes o retorno era só
+            `time.monotonic() > deadline_ts` APÓS dormir `min(wait_s, remaining)`.
+            Quando `wait_s > remaining`, dormíamos exatamente até a deadline e o
+            `>` voltava False por uma fração de segundo (sleep retorna um tiquinho
+            cedo / arredondamento), o loop fazia `continue`, re-tentava e
+            mascarava o timeout (ex.: 429 Retry-After 60s com 3s restantes
+            "passava" em vez de abortar). Agora, se o backoff foi TRUNCADO pela
+            deadline, sinalizamos estouro de forma determinística."""
             if deadline_ts is None:
                 time.sleep(wait_s)
                 return False
             remaining = deadline_ts - time.monotonic()
             if remaining <= 0:
                 return True
+            truncated = wait_s > remaining
             time.sleep(min(wait_s, remaining))
-            return time.monotonic() > deadline_ts
+            # Estourou se: passou da deadline OU o backoff teve que ser cortado
+            # (não conseguimos esperar o tempo necessário pra a próxima tentativa).
+            return truncated or time.monotonic() > deadline_ts
 
         if _deadline_exceeded():
             raise TimeoutError(f"CT _get({path}): deadline already exceeded before request")
@@ -834,6 +885,55 @@ class PokemonTcgIoProvider(PricingProvider):
         if elapsed < self.delay:
             time.sleep(self.delay - elapsed)
         self._last_call = time.time()
+
+    def _ptcg_get(self, params: dict):
+        """GET na pokemontcg.io com retry bounded em erros TRANSIENTES
+        (429 rate-limit, 5xx). Distingue:
+          - 200            → retorna Response (caller parseia data/totalCount)
+          - 429 / 5xx      → retry com backoff curto; se persistir, levanta
+                             requests.Timeout (→ scan loop conta como
+                             pricing_failure, NÃO como "miss" de cobertura)
+          - 4xx ≠ 429      → retorna a Response (caller trata como "sem match";
+                             é resposta legítima do servidor, não falha)
+
+        Fix 2026-06-15 (correção/robustez — candidato 5): antes QUALQUER
+        status != 200 (incluindo 429 e 5xx) virava `continue` → `_search`
+        devolvia None → o loop de pricing contava como "miss" de cobertura.
+        Consequências: (a) rate-limit/queda transitória da fonte sumia deals
+        em silêncio; (b) o contador de "misses consecutivos" era envenenado e
+        podia abortar sets bons com `no_coverage`; (c) inflava a taxa aparente
+        de falha. Agora 429/5xx são tratados como falha transiente VISÍVEL
+        (logada + contabilizada), não como ausência de carta.
+        """
+        last_status = None
+        for attempt in range(3):
+            self._rate_limit()
+            r = self.session.get(f"{POKEMONTCG_BASE}/cards",
+                                 params=params, timeout=TIMEOUT)
+            if r.status_code == 200:
+                return r
+            last_status = r.status_code
+            if r.status_code == 429 or 500 <= r.status_code < 600:
+                # Transiente: respeita Retry-After (429) ou backoff exponencial.
+                try:
+                    retry_after = int(r.headers.get("Retry-After", "0"))
+                except (TypeError, ValueError):
+                    retry_after = 0
+                backoff = retry_after if retry_after > 0 else 2 ** attempt
+                # Cap defensivo: nunca dorme mais que TIMEOUT por tentativa.
+                backoff = min(backoff, TIMEOUT)
+                log.warning(
+                    f"pokemontcg.io {r.status_code} (transiente), retry em "
+                    f"{backoff}s... ({attempt + 1}/3)"
+                )
+                time.sleep(backoff)
+                continue
+            # 4xx ≠ 429 → resposta legítima do servidor; caller decide.
+            return r
+        # Esgotou retries num status transiente → falha VISÍVEL, não "miss".
+        raise requests.Timeout(
+            f"pokemontcg.io: status {last_status} persistente após 3 tentativas"
+        )
 
     # v2.7 Layer 1.5 (bug-hunt 2026-05-18): alias map CT → pokemontcg.io.
     # CT usa códigos curtos derivados de TCGPlayer/comunidade; pokemontcg.io
@@ -1090,9 +1190,10 @@ class PokemonTcgIoProvider(PricingProvider):
         queries.append((base_q, True))
 
         for q, strict_set_check in queries:
-            self._rate_limit()
-            r = self.session.get(f"{POKEMONTCG_BASE}/cards",
-                                 params={"q": q, "pageSize": 5}, timeout=TIMEOUT)
+            # _ptcg_get faz retry em 429/5xx e LEVANTA requests.Timeout se
+            # persistir (→ pricing_failure no scan loop, não "miss"). Erros 4xx
+            # legítimos (≠429) voltam como Response e viram "sem match" abaixo.
+            r = self._ptcg_get({"q": q, "pageSize": 5})
             if r.status_code != 200:
                 log.debug(f"pokemontcg.io erro {r.status_code} para {q}")
                 continue
@@ -1335,6 +1436,44 @@ PROVIDERS = {
 # segurando o lock.
 
 _SKIP_LIST_LOCK_TIMEOUT = 30  # seg — operação é trivial, 30s é generoso
+
+
+# ── Run-guard contra instâncias concorrentes (v2.14 robustez) ──────────────
+# Incidente documentado (memória ct_scan_long_run_detached): dois scanners no
+# MESMO state-dir disputam o cache.db SQLite + skip-list. A contenção de lock
+# derruba o pricing pra ~9s/listing → o per-set-timeout estoura por falsa lentidão
+# → a skip-list é ENVENENADA com sets bons. O guard segura um lock EXCLUSIVE
+# não-bloqueante num lockfile do state-dir DURANTE TODO o scan. Se outro
+# processo já o segura, recusamos iniciar (a menos de --allow-concurrent).
+def acquire_run_guard(state_dir: Path):
+    """Tenta adquirir o run-guard exclusivo do state-dir. Retorna o handle
+    portalocker.Lock JÁ ADQUIRIDO (caller deve mantê-lo vivo até o fim do scan
+    e dar .release() no final), ou None se já houver outra instância.
+
+    Não levanta — o caller decide abortar (default) ou seguir (--allow-concurrent).
+    """
+    guard_path = state_dir / "scanner_run.lock"
+    lock = portalocker.Lock(
+        str(guard_path),
+        mode="a+",
+        timeout=0,
+        flags=portalocker.LOCK_EX | portalocker.LOCK_NB,
+    )
+    try:
+        lock.acquire()
+    except portalocker.exceptions.LockException:
+        return None
+    # Grava PID + timestamp pra diagnóstico de quem segura o lock.
+    try:
+        fh = lock.fh
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"pid={os.getpid()} since={datetime.now().astimezone().isoformat(timespec='seconds')}\n")
+        fh.flush()
+    except Exception:
+        # Lock é o que importa; o conteúdo informativo é best-effort.
+        pass
+    return lock
 
 # PR-F (2026-05-28): TTL pra entries TRANSIENTES da skip-list. Sets pulados por
 # timeout (per_set_timeout_/ct_*_timeout_) ou mass-pricing-failure costumam ser
@@ -1657,14 +1796,24 @@ class CheckpointWriter:
             "total": total,
         })
 
-    def write_header(self, args_dict: dict, total_sets: int) -> None:
+    def write_header(self, args_dict: dict, total_sets: int,
+                     usd_brl: float = 0.0, eur_brl: float = 0.0) -> None:
         if not self.enabled:
             return
+        # v2.14 (correção de resultado — candidato 3): grava as taxas de câmbio
+        # do scan no header. O recovery (scripts/recover_from_checkpoint.py) lê
+        # daqui pra reconstruir a célula Stats `usd_brl_rate` do XLSX. Sem isso,
+        # o XLSX recuperado tinha usd_brl_rate=0.0 → a tabela de ENTREGA do
+        # postprocess (coluna "CT US$", convertida via FX) ficava vazia. A
+        # CLASSIFICAÇÃO (COMPRA/REVISAR) NÃO depende do FX (usa colunas em BRL),
+        # mas a entrega ao operador sim.
         self._write({
             "_type": "scan_header",
             "stamp": datetime.now().astimezone().isoformat(timespec="seconds"),
             "args": args_dict,
             "total_sets": total_sets,
+            "usd_brl": round(usd_brl, 4) if usd_brl else 0.0,
+            "eur_brl": round(eur_brl, 4) if eur_brl else 0.0,
         })
 
     def write_opportunity(self, opp: "Opportunity") -> None:
@@ -2171,6 +2320,14 @@ class Scanner:
             tcg_url = getattr(self.pricing, "last_tcg_url", None)
             # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
             variant_used = getattr(self.pricing, "last_variant_used", None)
+            # v2.14 (candidato 4): flag de baixa confiança de variante. Listing
+            # NÃO-foil que só achou preço numa variante metálica premium
+            # (holofoil/unlimitedHolofoil — nem normal nem reverseHolofoil).
+            # Preço pode ser da variante errada → margem inflada. Só sinaliza.
+            variant_low_conf = (
+                l.foil is False
+                and variant_used in ("holofoil", "unlimitedHolofoil")
+            )
             # v2.13: rarity oficial pokemontcg.io (preferida) → fallback rarity
             # do blueprint CT. Set release date pra score de valorização.
             ptcg_rarity = getattr(self.pricing, "last_ptcg_rarity", None)
@@ -2199,6 +2356,7 @@ class Scanner:
                 valorization_score=val_score,
                 valorization_note=val_note,
                 set_release_date=set_release,
+                variant_low_confidence=variant_low_conf,
             )
 
         self.stats["expansions_scanned"] += 1
@@ -2452,6 +2610,9 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # = margem bruta repetida com rótulo do ranking de chase. Valorização =
         # score heurístico 0-100 (rarity + idade do set + preço) + notas.
         "Chase Tier", "Desconto %", "Valorização (0-100)", "Valorização — Notas",
+        # v2.14 (candidato 4): flag de baixa confiança de variante. APPEND no
+        # FIM (não realocar — testes de coerência checam índices fixos).
+        "Variante Baixa Confiança",
     ]
     ws.append(headers)
 
@@ -2492,6 +2653,8 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             round(opp.margin_pct, 4),  # Desconto % (= margem bruta, rótulo chase)
             opp.valorization_score,
             opp.valorization_note or "",
+            # v2.14 (candidato 4): "Sim" só quando non-foil casou variante holo.
+            "Sim" if opp.variant_low_confidence else "",
         ])
 
     # ─── Formatação ───
@@ -2687,6 +2850,15 @@ def parse_args():
                          "heartbeat a cada N listings precificados (default 50). "
                          "Distinto de --checkpoint-every (que é por SET). Permite "
                          "detectar stall mid-set. 0 = desativado."))
+    p.add_argument("--allow-concurrent", action="store_true",
+                   help=("v2.14 (robustez): por padrão o scanner RECUSA iniciar se "
+                         "já houver outra instância usando o MESMO state-dir "
+                         "(lockfile scanner_run.lock). Dois scanners no mesmo "
+                         "cache.db/skip-list disputam lock SQLite (throughput cai a "
+                         "~9s/listing) e podem ENVENENAR a skip-list por timeout "
+                         "falso. Passe esta flag pra rodar mesmo assim (ex.: "
+                         "state-dirs diferentes que o guard não distingue, ou "
+                         "diagnóstico). Use com cautela."))
     return p.parse_args()
 
 
@@ -2773,6 +2945,27 @@ def main():
     CACHE_DB = state_dir / "cache.db"
     SKIP_LIST_FILE = state_dir / "scanner_skip_list.json"
     log.info(f"State dir: {state_dir}")
+
+    # v2.14 (robustez): run-guard contra instâncias concorrentes no mesmo
+    # state-dir. Dois scanners no mesmo cache.db/skip-list disputam lock e
+    # envenenam a skip-list por timeout falso (ver acquire_run_guard).
+    run_guard = acquire_run_guard(state_dir)
+    if run_guard is None:
+        if args.allow_concurrent:
+            log.warning(
+                "⚠️  Outra instância parece estar usando este state-dir "
+                f"({state_dir}). --allow-concurrent passado → seguindo mesmo "
+                "assim. Risco: contenção de lock SQLite + skip-list envenenada."
+            )
+        else:
+            log.error(
+                f"💥 Já há um scanner rodando neste state-dir ({state_dir}). "
+                "Dois scanners no mesmo cache.db/skip-list disputam lock "
+                "(pricing despenca pra ~9s/listing) e podem ENVENENAR a "
+                "skip-list por timeout falso. Aborte a outra instância, OU use "
+                "--state-dir diferente, OU passe --allow-concurrent (com cautela)."
+            )
+            sys.exit(2)
 
     ct_jwt = os.getenv("CT_JWT", "").strip()
     if not ct_jwt:
@@ -2869,8 +3062,13 @@ def main():
         flush_every_listings=args.flush_every_listings,
     )
     if checkpoint.enabled:
-        # Header com args dict pra reprodutibilidade no recovery
-        checkpoint.write_header(vars(args), total_sets=len(expansions))
+        # Header com args dict pra reprodutibilidade no recovery.
+        # v2.14: inclui FX do scan (usd_brl/eur_brl) pra o recovery reconstruir
+        # a célula Stats usd_brl_rate (candidato 3).
+        checkpoint.write_header(
+            vars(args), total_sets=len(expansions),
+            usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
+        )
 
     t0 = time.time()
     try:

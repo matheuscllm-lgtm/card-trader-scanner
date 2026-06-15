@@ -196,6 +196,47 @@ class TestRunner:
                        "3 opportunities" in stdout_lower,
                        detail=f"log fragment: {(result.stderr + result.stdout)[-200:]}")
 
+    def test_recovery_preserves_fx_from_header(self):
+        """v2.14 (candidato 3): FX gravado no scan_header é reconstruído na
+        célula Stats `usd_brl_rate` do XLSX recuperado. Sem isso, ficava 0.0 e
+        a tabela de entrega do postprocess (coluna CT US$) ficava vazia."""
+        print("\n[5] Recovery reconstructs usd_brl_rate from header FX")
+        from openpyxl import load_workbook  # local import — só onde precisa
+        path = self.tmpdir / "test5.checkpoint.jsonl"
+        cw = CheckpointWriter(path, every_n=1)
+        cw.write_header({"threshold": 0.3}, total_sets=1,
+                        usd_brl=5.4321, eur_brl=5.9876)
+        cw.write_opportunity(_make_opp(7001, "sfa", "Lugia", 70.0, 50.0))
+        cw.write_set_complete("sfa", "Surging Sparks", {"opps_found": 1}, 9.0)
+        cw.write_scan_complete(total_opps=1, total_elapsed_s=9.0)
+        cw.close()
+
+        out_xlsx = self.tmpdir / "test5.recovered.xlsx"
+        result = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "recover_from_checkpoint.py"),
+             "--checkpoint", str(path), "--output", str(out_xlsx)],
+            capture_output=True, text=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        self.assertion("recover exit 0", result.returncode == 0,
+                       detail=f"stderr={result.stderr[:200]}")
+        # Lê a célula Stats usd_brl_rate do XLSX recuperado.
+        wb = load_workbook(out_xlsx, read_only=True)
+        found_rate = None
+        for sheet in wb.sheetnames:
+            ws = wb[sheet]
+            for row in ws.iter_rows(values_only=True):
+                if row and str(row[0]).strip().lower() == "usd_brl_rate":
+                    found_rate = row[1]
+                    break
+            if found_rate is not None:
+                break
+        wb.close()
+        self.assertion("recovered XLSX has usd_brl_rate cell", found_rate is not None,
+                       detail="usd_brl_rate não encontrado em nenhuma sheet")
+        self.assertion("usd_brl_rate == 5.4321 (from header, not 0.0)",
+                       found_rate is not None and abs(float(found_rate) - 5.4321) < 1e-6,
+                       detail=f"got {found_rate}")
+
     def test_recovery_with_partial_last_line(self):
         print("\n[3] Recovery handles truncated last line (simulated crash)")
         path = self.tmpdir / "test3.checkpoint.jsonl"
@@ -263,6 +304,7 @@ def main() -> int:
     try:
         runner.test_writer_writes_header_opps_setcomplete()
         runner.test_recovery_from_clean_checkpoint()
+        runner.test_recovery_preserves_fx_from_header()
         runner.test_recovery_with_partial_last_line()
         runner.test_recovery_empty_checkpoint_graceful()
     finally:

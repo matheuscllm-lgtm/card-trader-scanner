@@ -192,6 +192,9 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         valorization_score=d.get("valorization_score", 0),
         valorization_note=d.get("valorization_note", ""),
         set_release_date=d.get("set_release_date", ""),
+        # v2.14 (candidato 4): flag de baixa confiança de variante. Default
+        # False — checkpoints pré-v2.14 não tinham (sem crash).
+        variant_low_confidence=d.get("variant_low_confidence", False),
     )
 
 
@@ -260,9 +263,26 @@ def main() -> int:
         return o.real_net_margin_pct if o.real_net_margin_pct is not None else o.margin_pct
     opps.sort(key=_key, reverse=True)
 
-    # FX rates — não temos os exatos do scan original (não estão no JSONL).
-    # Usa placeholders e flagueia na sheet Stats. Se quiser fidelidade total,
-    # gravar usd_brl / eur_brl no header é uma melhoria futura.
+    # FX rates — v2.14 (correção/candidato 3): o scan grava usd_brl/eur_brl no
+    # scan_header do checkpoint. Lê daqui pra reconstruir a célula Stats
+    # `usd_brl_rate` do XLSX recuperado. Sem isso (checkpoints ANTIGOS sem FX no
+    # header), cai pro placeholder 0.0 e a sheet Stats fica explícita.
+    fx_usd_brl = 0.0
+    fx_eur_brl = 0.0
+    try:
+        fx_usd_brl = float(header.get("usd_brl") or 0.0)
+        fx_eur_brl = float(header.get("eur_brl") or 0.0)
+    except (TypeError, ValueError):
+        fx_usd_brl, fx_eur_brl = 0.0, 0.0
+    if fx_usd_brl > 0:
+        log.info(f"FX recuperado do header: usd_brl={fx_usd_brl:.4f} eur_brl={fx_eur_brl:.4f}")
+    else:
+        log.warning(
+            "FX ausente no header do checkpoint (scan antigo pré-v2.14): "
+            "usd_brl_rate=0.0 no XLSX recuperado → a coluna 'CT US$' da tabela "
+            "de entrega do postprocess ficará vazia (a classificação "
+            "COMPRA/REVISAR NÃO é afetada — usa colunas em BRL)."
+        )
     stats_for_xlsx = {
         "recovered_from_checkpoint": str(args.checkpoint.name),
         "opps_recovered": summary["opps_recovered"],
@@ -279,14 +299,13 @@ def main() -> int:
 
     log.info(f"Gerando XLSX: {args.output}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    # FX rate placeholder: melhor seria gravar no header do checkpoint
-    # (TODO v2.7). Aqui usa 0 — sheet Stats fica explícita sobre isso.
+    # v2.14: FX vem do header do checkpoint (fallback 0.0 p/ checkpoints antigos).
     export_xlsx(
         opps,
         stats_for_xlsx,
         args.output,
-        usd_brl=0.0,
-        eur_brl=0.0,
+        usd_brl=fx_usd_brl,
+        eur_brl=fx_eur_brl,
         threshold=args.threshold,
     )
     log.info(
