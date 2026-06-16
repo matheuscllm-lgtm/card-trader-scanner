@@ -44,10 +44,30 @@ Requisitos:
 Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
-      | 2026-06-02 (v2.11) | 2026-06-06 (v2.12)
-Versão: v2.14
+      | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
+Versão: v2.15
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.15 (2026-06-15 — overrides de timeout por SET; fim do "churn" vintage):
+  - [TIMEOUT vintage] Novo mapa code-level SET_TIMEOUT_OVERRIDES (código CT →
+    segundos): df=1200s (20min), ds/n1/n4=1080s (18min). Sets vintage pesados
+    NÃO cabiam no per-set-timeout default (8min) → estouravam SEMPRE → iam pra
+    skip-list → eram pulados → nunca escaneados por completo ("churn"). Agora
+    ganham fôlego sem o operador lembrar de passar --per-set-timeout à mão.
+  - [RESOLVER] Novo effective_set_timeout_s(exp_code, default_s): o override só
+    ELEVA o teto (max(default, override)); --per-set-timeout global maior ainda
+    vence; --per-set-timeout 0 (desligado) deixa TUDO sem timeout (override não
+    reativa); set sem override = comportamento histórico; case-insensitive.
+  - scan_expansion resolve o timeout efetivo UMA vez no topo e o usa em todos os
+    checks (pré-blueprints, pré-listings, loop de pricing) + na deadline_ts que
+    governa retries/429-sleeps. _check_set_timeout ganhou param opcional
+    timeout_s (None = retrocompat: cai no default da instância).
+  - n2 (Neo Discovery) NÃO recebe override: é no-coverage genuíno (pokemontcg.io
+    ~zero referência), tratado pelo cap de --max-consecutive-misses, não timeout.
+  - INALTERADO: flag --per-set-timeout (default 8min); skip-list; cap de misses;
+    mass-pricing-abort; margem bruta; threshold fração; filtro TG##.
+  - Testes: tests/test_set_timeout_overrides.py (11 casos).
 
 Changelog v2.14 (2026-06-15 — correção + robustez; resultados corretos e sem bug):
   - [CORREÇÃO timeout] _get._sleep_capped: quando o backoff pedido NÃO cabia no
@@ -247,6 +267,53 @@ CONFIG_FILE = SCRIPT_DIR / "config.yaml"
 # Solucao: wall-clock timeout per-set + persistir sets travados em skip-list.
 SKIP_LIST_FILE = SCRIPT_DIR / "scanner_skip_list.json"
 DEFAULT_PER_SET_TIMEOUT_MIN = 8  # conservador: pior caso medido foi 7min/set
+
+# v2.14 (2026-06-15): overrides de timeout por SET (vintage churn fix).
+# Problema: alguns sets vintage pesados (muitas listings + pokemontcg.io lento)
+# NÃO cabem no per-set-timeout default (8min) e estouram SEMPRE. O timeout joga
+# o set na skip-list; runs futuros o pulam; ele nunca mais é escaneado por
+# completo. Vira "churn": entra na skip-list, é pulado, volta a entrar. O
+# operador teria que lembrar de passar `--per-set-timeout 20` manualmente toda
+# vez — frágil.
+# Solução: um mapa code-level de overrides (segundos) pra sets confirmados que
+# precisam de mais fôlego. É código (não config que o operador mantém à mão)
+# porque são fatos estáveis sobre sets específicos — pertencem ao lado das
+# outras constantes (regex TG, TTLs). O override só ELEVA o teto: se o operador
+# passar um `--per-set-timeout` global ainda maior, esse vence (max). Se passar
+# 0 (desativado), tudo fica sem timeout. Chaves = códigos CardTrader.
+# Casos confirmados na investigação do ciclo vintage 2026-06-15:
+#   df (EX Dragon Frontiers) — ~19min p/ 100% das 79 listings; 8min cortava sempre.
+#   ds (EX Delta Species), n1 (Neo Genesis), n4 (Neo Destiny) — cobertura PARCIAL
+#       cortada por timeout de 12min; escaneariam mais com budget maior.
+# NÃO inclui n2 (Neo Discovery): aquele é NO-COVERAGE genuíno (pokemontcg.io ~zero
+# referência → ~40 misses consecutivos), tratado pelo --max-consecutive-misses,
+# não por timeout. Entrada de n2 na skip-list por miss-cap é defensável.
+SET_TIMEOUT_OVERRIDES: dict[str, int] = {
+    "df": 1200,  # EX Dragon Frontiers — 20min (medido ~19min p/ 100%)
+    "ds": 1080,  # EX Delta Species — 18min (folga sobre os 12min parciais)
+    "n1": 1080,  # Neo Genesis — 18min
+    "n4": 1080,  # Neo Destiny — 18min
+}
+
+
+def effective_set_timeout_s(exp_code: str, default_s: float) -> float:
+    """Resolve o timeout efetivo (segundos) pra um set.
+
+    Regras:
+      - default_s == 0 (timeout global desativado) → 0 (sem timeout pra ninguém,
+        incluindo sets com override; o operador desligou de propósito).
+      - set com override → max(default_s, override) — o override só ELEVA o teto;
+        um --per-set-timeout global ainda maior continua vencendo.
+      - set sem override → default_s (comportamento histórico).
+    Código normalizado (lower/strip) pra casar com os códigos CardTrader.
+    """
+    if not default_s:
+        return 0.0
+    code = (exp_code or "").strip().lower()
+    override = SET_TIMEOUT_OVERRIDES.get(code)
+    if override is None:
+        return default_s
+    return float(max(default_s, override))
 
 # TTL do cache. Blueprints praticamente não mudam (cartas impressas uma vez).
 # Preços mudam diário → refresh.
@@ -2087,23 +2154,26 @@ class Scanner:
         return base_eur * self.eur_brl
 
     def _check_set_timeout(self, set_start: float, exp_code: str, exp_name: str,
-                            stage: str) -> bool:
+                            stage: str, timeout_s: Optional[float] = None) -> bool:
         """Retorna True se set deve abortar. Loga + marca skip-list quando True.
-        v2.8 (Codex H2): chamado antes de cada call externa do set."""
-        if not self.per_set_timeout_s:
+        v2.8 (Codex H2): chamado antes de cada call externa do set.
+        v2.14: aceita timeout_s explícito (o EFETIVO do set, c/ override). Quando
+        None, cai no self.per_set_timeout_s (retrocompat p/ chamadas diretas)."""
+        effective = self.per_set_timeout_s if timeout_s is None else timeout_s
+        if not effective:
             return False
         elapsed = time.monotonic() - set_start
-        if elapsed > self.per_set_timeout_s:
+        if elapsed > effective:
             log.error(
                 f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}) at stage='{stage}': "
-                f"{elapsed/60:.1f}min > {self.per_set_timeout_s/60:.1f}min limite. "
+                f"{elapsed/60:.1f}min > {effective/60:.1f}min limite. "
                 f"Abortando."
             )
             self.stats["expansions_timed_out"] += 1
             try:
                 add_to_skip_list(
                     exp_code,
-                    f"per_set_timeout_{int(self.per_set_timeout_s)}s_at_{stage}",
+                    f"per_set_timeout_{int(effective)}s_at_{stage}",
                 )
             except Exception as e:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {e}")
@@ -2117,15 +2187,26 @@ class Scanner:
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
+        # v2.14: timeout EFETIVO do set — aplica override de SET_TIMEOUT_OVERRIDES
+        # (sets vintage pesados ganham mais fôlego sem o operador passar flag).
+        # Tudo abaixo usa este valor, não self.per_set_timeout_s direto.
+        effective_timeout_s = effective_set_timeout_s(exp_code, self.per_set_timeout_s)
+        if effective_timeout_s != self.per_set_timeout_s:
+            log.info(
+                f"  ⏱️  Timeout override p/ {exp_code}: "
+                f"{effective_timeout_s/60:.0f}min "
+                f"(default {self.per_set_timeout_s/60:.0f}min)"
+            )
         # v2.8 (Codex H2): deadline absoluta (monotonic). Passada pra todas
         # chamadas CT do set, então retries/429-sleeps respeitam o cap.
         deadline_ts: Optional[float] = (
-            set_start + self.per_set_timeout_s if self.per_set_timeout_s else None
+            set_start + effective_timeout_s if effective_timeout_s else None
         )
 
         # v2.8: check ANTES de blueprints (cobre o caso de set já estourado
         # por algum estado externo, embora improvável aqui — set_start é now)
-        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_blueprints"):
+        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_blueprints",
+                                    timeout_s=effective_timeout_s):
             return
 
         # Carrega blueprints da expansão (indexa para O(1) lookup).
@@ -2138,7 +2219,7 @@ class Scanner:
             try:
                 add_to_skip_list(
                     exp_code,
-                    f"ct_blueprints_timeout_{int(self.per_set_timeout_s or 0)}s",
+                    f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s",
                 )
             except Exception as ee:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
@@ -2148,7 +2229,8 @@ class Scanner:
 
         # v2.8: check entre blueprints e listings — se blueprints foi rápido
         # mas o set já consumiu o orçamento (improvável p/ 1 call), abortar
-        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_listings"):
+        if self._check_set_timeout(set_start, exp_code, exp_name, "pre_listings",
+                                    timeout_s=effective_timeout_s):
             return
 
         # Puxa todas listings EN da expansão de uma vez (muito + eficiente que
@@ -2163,7 +2245,7 @@ class Scanner:
             try:
                 add_to_skip_list(
                     exp_code,
-                    f"ct_listings_timeout_{int(self.per_set_timeout_s or 0)}s",
+                    f"ct_listings_timeout_{int(effective_timeout_s or 0)}s",
                 )
             except Exception as ee:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
@@ -2199,15 +2281,16 @@ class Scanner:
         set_consecutive_misses = 0
         for i, l in enumerate(best_by_uid.values(), 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
-            if self.per_set_timeout_s and (time.monotonic() - set_start) > self.per_set_timeout_s:
+            # v2.14: usa o timeout EFETIVO do set (com override vintage).
+            if effective_timeout_s and (time.monotonic() - set_start) > effective_timeout_s:
                 elapsed = time.monotonic() - set_start
                 log.error(
                     f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}): {elapsed/60:.1f}min "
-                    f"> {self.per_set_timeout_s/60:.1f}min limite. Abortando após "
+                    f"> {effective_timeout_s/60:.1f}min limite. Abortando após "
                     f"{i-1}/{total_listings} listings priced."
                 )
                 self.stats["expansions_timed_out"] += 1
-                add_to_skip_list(exp_code, f"per_set_timeout_{int(self.per_set_timeout_s)}s_at_{i-1}_of_{total_listings}")
+                add_to_skip_list(exp_code, f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
                 return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")

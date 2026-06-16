@@ -220,6 +220,28 @@ padrão são 50; a planilha sempre traz **todos** os deals, sem corte).
 
 ---
 
+## Coleções vintage demoram mais (e o programa já sabe disso)
+
+O programa tem um **limite de tempo por coleção** (chamado *per-set-timeout*):
+se uma coleção demora demais pra ser rastreada, ele desiste dela pra não travar
+o rastreio inteiro, e a coloca numa **lista de pulos** (*skip-list*) pra não
+tentar de novo logo em seguida. O padrão é **8 minutos por coleção**.
+
+O problema (descoberto em jun/2026): algumas coleções **vintage** (antigas, com
+muitas cartas) precisam de bem mais que 8 minutos. Elas estouravam o tempo
+**toda vez**, entravam na lista de pulos e **nunca eram rastreadas por completo**
+— um ciclo sem fim. Era preciso lembrar de mandar um tempo maior à mão toda vez.
+
+**O conserto (v2.15):** o programa agora guarda, no próprio código, um **tempo
+maior só pra essas coleções específicas** — você não precisa lembrar de nada.
+Hoje a lista é: `df` (EX Dragon Frontiers, 20min), `ds` / `n1` / `n4` (18min). Se
+um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25` (em
+minutos) ainda vale e vence o ajuste interno. (`n2` = Neo Discovery é caso
+diferente: a base de preços quase não tem essa coleção, então o problema dela
+não é tempo — é falta de referência mesmo.)
+
+---
+
 ## Quando algo é alterado no código
 
 - Os resultados (planilhas `.xlsx`, registros de execução) **não** vão pra nuvem
@@ -263,9 +285,10 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.14 (correção + robustez — 2026-06-15: timeout que
-escapava corrigido, falha de preço silenciosa corrigida, bloqueio de scanners
-concorrentes, câmbio preservado na recuperação, coluna "Variante Baixa
+*Versão do scanner: v2.15 (overrides de timeout por coleção pra sets vintage
+pesados; 2026-06-15). Inclui v2.14 (correção + robustez — 2026-06-15: timeout
+que escapava corrigido, falha de preço silenciosa corrigida, bloqueio de
+scanners concorrentes, câmbio preservado na recuperação, coluna "Variante Baixa
 Confiança"). Margem bruta — sem taxa embutida (v2.12, 2026-06-06). Este guia foi
 reescrito em linguagem acessível em 2026-06-05 — termos técnicos explicados pra
 leitura do operador (Matheus).*
