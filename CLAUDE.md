@@ -204,6 +204,19 @@ padrão são 50; a planilha sempre traz **todos** os deals, sem corte).
   quando você for comprar, pode só restar a cara. **Confira o preço ao vivo
   antes de comprar.** (Ex. 06-08: Arceus VSTAR scan R$54 → real R$75 → virou
   prejuízo.)
+- **Coluna "Variante Baixa Confiança" (nova em jun/2026)**: quando aparece "Sim",
+  a carta foi anunciada como **não-brilhante** mas o único preço de referência
+  encontrado era de uma versão **brilhante cara**. O preço pode ser da versão
+  errada (a brilhante costuma valer várias vezes mais) → a margem pode estar
+  inflada. **Confira a versão no Link TCG antes de comprar.** É só um aviso — não
+  muda a margem nem a classificação.
+
+> **Não rode dois scanners na mesma pasta de estado ao mesmo tempo.** A partir de
+> jun/2026 o programa **recusa** iniciar um segundo scanner que use a mesma pasta
+> de estado (ele avisa com uma mensagem clara), porque dois ao mesmo tempo
+> brigavam pelo mesmo arquivo de cache e ficavam lentíssimos. Se algum dia você
+> precisar mesmo rodar dois, use pastas de estado diferentes (`--state-dir`) ou a
+> opção `--allow-concurrent`.
 
 ---
 
@@ -250,6 +263,9 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.12 (margem bruta — sem taxa embutida; 2026-06-06). Este
-guia foi reescrito em linguagem acessível em 2026-06-05 — termos técnicos
-explicados pra leitura do operador (Matheus).*
+*Versão do scanner: v2.14 (correção + robustez — 2026-06-15: timeout que
+escapava corrigido, falha de preço silenciosa corrigida, bloqueio de scanners
+concorrentes, câmbio preservado na recuperação, coluna "Variante Baixa
+Confiança"). Margem bruta — sem taxa embutida (v2.12, 2026-06-06). Este guia foi
+reescrito em linguagem acessível em 2026-06-05 — termos técnicos explicados pra
+leitura do operador (Matheus).*
