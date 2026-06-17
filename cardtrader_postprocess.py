@@ -767,19 +767,26 @@ def _safe_val(val):
 # entrega = tabela markdown no chat, NÃO planilha. CSV/XLSX seguem com colunas
 # separadas + URLs cruas; só esta tabela compõe Carta (nome+número) e Links.
 #
-#   | # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |
+#   | # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |
 #
 # Coluna Links = "[oferta](url_ct) · [TCG](url_tcg)" — o link da oferta aponta
 # pra página do CardTrader (de preferência per-blueprint, preço final com markup
 # — lembrar dos ~76% de falsos positivos sem validação per-blueprint); o link TCG
 # é o workflow canônico de validação manual do operador.
 #
+# Coluna Flag = sinaliza, por linha, o que a regra MECÂNICA (classify_decision)
+# concluiu: COMPRA → "" (limpo); REVISAR → "validar manual" (zona cinza /
+# suspeito de margem inflada — TG##, alpha-suffix promo/league, set sem cobertura
+# confiável, markup anômalo, etc.). Reusa a MESMA classificação do XLSX, não
+# duplica regra. NÃO é recomendação de compra — é o flag de cautela que o
+# operador usa pra decidir o que conferir no Link TCG antes.
+#
 # Margem é a net_margin já enriquecida = margem BRUTA (regra 2026-06-06, sem Hub
 # fee). Esta função NÃO altera threshold/filtro/classificação — só APRESENTA os
-# deals que classify_decision marcou COMPRA/REVISAR.
+# deals que classify_decision marcou COMPRA/REVISAR (TODOS eles, até top_n).
 _DELIVERY_HEADERS = [
     "#", "Margem %", "CT US$", "TCG US$", "Dif",
-    "Carta", "Set", "Raridade", "Cond", "Qtd", "Links",
+    "Carta", "Set", "Raridade", "Cond", "Qtd", "Flag", "Links",
 ]
 
 
@@ -883,6 +890,9 @@ def build_delivery_markdown(
         except (TypeError, ValueError):
             tcg_usd = None
         dif = (tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
+        # Flag por linha: REVISAR (zona cinza / suspeito de margem inflada) →
+        # "validar manual"; COMPRA → célula limpa. Mesma classificação do XLSX.
+        flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
         cells = [
             str(rank),
             _fmt_pct(row.get("net_margin")),
@@ -894,6 +904,7 @@ def build_delivery_markdown(
             _md_escape(row.get("rarity")),
             _md_escape(row.get("condition")),
             _md_escape(row.get("quantity")),
+            flag,
             _md_links_cell(row.get("link_ct"), row.get("link_tcg")),
         ]
         lines.append("| " + " | ".join(cells) + " |")
@@ -1003,7 +1014,7 @@ def main():
     p.add_argument("--hub-fee", type=float, default=0.0,
                    help=("v2.12: DEFAULT 0.0 — margem BRUTA (custo = preço do "
                          "site, SEM taxa). Operador soma Hub fee/frete/cartão/IOF "
-                         "por fora. Passe 0.06 pra reembutir os 6% históricos."))
+                         "por fora. Passe 0.06 pra reembutir os 6%% históricos."))
     p.add_argument("--top-md", type=int, default=50,
                    help=("Quantas linhas na tabela de entrega markdown do chat "
                          "(default 50). XLSX sempre traz todos os deals."))

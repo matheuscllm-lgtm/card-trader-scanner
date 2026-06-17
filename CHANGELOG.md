@@ -4,6 +4,41 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-17 — v2.16: entrega = tabela no chat OBRIGATÓRIA + coluna Flag + fix `--help`
+
+**Por quê:** paridade com o reforço feito no MYP (PR #36/v5.11.7). O CT já tinha
+o gerador de tabela markdown (`build_delivery_markdown`, PR #16) e uma seção de
+entrega no CLAUDE.md, mas faltavam três coisas: (1) o **enquadramento
+MANDATÓRIO** ("gere SEMPRE pela ferramenta, nunca à mão; entregue no chat, nunca
+XLSX por padrão; mostre TODOS os deals"); (2) **marcação visível de suspeitos**
+na própria tabela do chat; (3) a convenção no **README** — que é o canal que
+**viaja cross-env** (um Claude Code na nuvem clona o repo e lê README + CLAUDE.md,
+não a memória local). Também foi achado e corrigido um bug no `--help`.
+
+**Mudanças:**
+- **`cardtrader_postprocess.py` — coluna `Flag` na tabela de entrega.** Nova
+  coluna entre `Qtd` e `Links`: reusa a MESMA `classify_decision` (não duplica
+  regra) e mostra **"validar manual"** nas linhas `REVISAR` (zona cinza /
+  suspeita de margem inflada — `TG##`, sufixo alpha de promo/league, set sem
+  cobertura confiável, markup anômalo); vazio em `COMPRA`. Traz pro chat, sem
+  abrir o Excel, quais achados pedem conferência manual antes. **É só
+  apresentação** — não muda margem, filtro nem classificação.
+- **`cardtrader_postprocess.py` — fix do `--help`.** O help do `--hub-fee` tinha
+  um `%` literal ("6%") que o argparse tentava interpolar (`help % params`) e
+  estourava `TypeError: %i format`. Escapado pra `%%`. Agora `--help` funciona
+  (era pré-requisito pra documentar o comando literal com flags verificadas).
+- **`CLAUDE.md` — seção de entrega vira REGRA OBRIGATÓRIA.** Bloco imperativo
+  pro assistente: (1) gerar pela ferramenta, nunca à mão; (2) entregar no chat,
+  nunca XLSX por padrão; (3) mostrar TODOS os deals (`--top-md`); (4) não rankear
+  "comprar/não comprar". Documenta a coluna `Flag`. Comando literal verificado.
+- **`README.md` — nova seção "Entrega dos resultados (tabela no chat —
+  OBRIGATÓRIO)"** + linha no Histórico. É o reforço que viaja cross-env.
+- **Testes:** `tests/test_delivery_markdown.py` atualizado (cabeçalho de 12
+  colunas, contagem de pipes) + novo `test_flag_marks_revisar_as_validar_manual`.
+  12/12 verdes; suíte completa verde (sem regressão).
+- **Inalterado:** geração da planilha, filtros, classificação COMPRA/REVISAR/NÃO,
+  margem bruta, threshold fração, filtro TG##, todos os comandos do scanner.
+
 ## 2026-06-15 — Scanner v2.15: overrides de timeout por SET (fim do "churn" vintage)
 
 **Problema (investigação do ciclo vintage):** alguns sets vintage pesados não

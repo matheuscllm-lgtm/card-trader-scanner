@@ -2,9 +2,10 @@
 
 Cobre `build_delivery_markdown`:
   - cabeçalho exato (# | Margem % | CT US$ | TCG US$ | Dif | Carta | Set |
-    Raridade | Cond | Qtd | Links)
+    Raridade | Cond | Qtd | Flag | Links)
   - Carta = nome + número combinados ("Plusle (193/...)")
   - Links = "[oferta](url_ct) · [TCG](url_tcg)" clicáveis
+  - Flag = "validar manual" em linhas REVISAR; vazio em COMPRA
   - CT US$ convertido de BRL via FX quando não há live_usd
   - TCG US$ nativo (reference_price_usd)
   - filtra só COMPRA/REVISAR (mesma classify_decision do XLSX)
@@ -58,7 +59,7 @@ def test_header_exact():
     df, cfg = _enriched()
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
     expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | "
-                "Raridade | Cond | Qtd | Links |")
+                "Raridade | Cond | Qtd | Flag | Links |")
     assert expected in md
 
 
@@ -120,10 +121,29 @@ def test_pipe_in_text_does_not_break_table():
     raw.loc[0, "Card Name"] = "Pipe|Name"
     df = pp.enrich_df(raw, hub_fee_rate=0.0)
     md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
-    # pipe escapado vira '/', cabeçalho continua com 11 colunas
+    # pipe escapado vira '/', cabeçalho continua com 12 colunas
     data_rows = [ln for ln in md.splitlines() if ln.startswith("| 1 |")]
     assert data_rows
-    assert data_rows[0].count("|") == 12  # 11 colunas → 12 pipes
+    assert data_rows[0].count("|") == 13  # 12 colunas → 13 pipes
+
+
+def test_flag_marks_revisar_as_validar_manual():
+    """Linha REVISAR (zona cinza/suspeita) recebe Flag='validar manual';
+    COMPRA fica com Flag vazio. Margem borderline (entre revisar_min e
+    min_net_margin) força REVISAR sem mexer no filtro."""
+    raw = _raw_df()
+    # Plusle vira borderline: enrich_df recomputa a margem BRUTA = (TCG−CT)/TCG.
+    # (240−187)/240 ≈ 22% (entre revisar_min 20% e min_net 25% default) → REVISAR.
+    raw.loc[0, "LIVE R$ (real)"] = 187.0
+    raw.loc[0, "TCG Market (BRL)"] = 240.0
+    df = pp.enrich_df(raw, hub_fee_rate=0.0)
+    md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
+    # a linha do Plusle (REVISAR) deve trazer o flag de cautela
+    plusle_line = [ln for ln in md.splitlines() if "Plusle" in ln][0]
+    assert "validar manual" in plusle_line
+    # Charizard ex segue COMPRA (net 40%, validado) → sem flag
+    chariz_line = [ln for ln in md.splitlines() if "Charizard ex" in ln][0]
+    assert "validar manual" not in chariz_line
 
 
 def test_empty_deals_friendly_message():
