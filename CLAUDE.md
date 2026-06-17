@@ -132,6 +132,10 @@ Opções úteis:
 - `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),
   começando pelas mais valiosas — é o modo do rastreio **semanal**. Esse modo é
   demorado (horas).
+- `--skip-backcatalog` = no rastreio completo, **pula as coleções antigas** e
+  escaneia só as modernas/curadas (as que valem a pena). Combina com `--all-sets`
+  pra cortar de ~832 pra ~30 coleções. Lembre: back-catalog é mercado eficiente —
+  quase nunca sobra deal lá (a auditoria de jun/2026 deu **0** na era inteira).
 - `--threshold 0.20` acha ~5× mais deals que `0.30`, mas com mais ruído (mais
   falso positivo pra você filtrar).
 - Rastreios longos: rode **em segundo plano** (sem travar o terminal). Nunca
@@ -314,7 +318,9 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
+*Versão do scanner: v2.17 (flag `--skip-backcatalog` — rastreia só coleções
+modernas/curadas, pulando o back-catalog que é mercado eficiente; 2026-06-17).
+Inclui v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
 do repo, nunca à mão / nunca XLSX por padrão; coluna Flag "validar manual" nas
 linhas REVISAR; fix do `--help` do postprocess; 2026-06-17). Inclui v2.15
 (overrides de timeout por coleção pra sets vintage pesados; 2026-06-15) e v2.14

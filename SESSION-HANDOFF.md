@@ -49,7 +49,7 @@ python -m pytest tests/ -q && for t in scripts/test_*.py; do python "$t"; done \
 ```
 
 **Backlog do loop (próximas rodadas — código, verificável offline):**
-- [ ] Atalho/flag pra **pular back-catalog** (foco em sets recentes; back-catalog deu 0 deal).
+- [x] Atalho/flag pra **pular back-catalog** — FEITO (Rodada 2, v2.17: `--skip-backcatalog` + helper `filter_modern_sets`).
 - [ ] Flag de **liquidez** no relatório (nº de cópias EN-NM perto do preço — staleness; auditoria 2026-06-08 #3).
 - [ ] **Re-check ao vivo** das top-N (precisa de rede → testar com mock).
 - [ ] Investigar cobertura **crz/Galarian Gallery** (~30% não precificadas).

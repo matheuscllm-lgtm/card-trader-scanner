@@ -4,6 +4,29 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-17 — v2.17: flag `--skip-backcatalog` (foco em sets recentes)
+
+**Por quê:** lição operacional mais repetida do projeto (auditoria 2026-06-08):
+**back-catalog = mercado eficiente = ~0 deal acionável** — a era Sword & Shield
+inteira (17 sets, ~1.000 cartas) deu zero deal a ≥30% e a ≥20%. O gap de
+arbitragem mora em **lançamentos novos**. Até agora, pular o back-catalog num
+scan completo exigia montar a lista de sets à mão; esta flag automatiza isso.
+
+**Mudanças (`cardtrader_scanner.py`):**
+- **Nova flag `--skip-backcatalog`** — restringe o scan às coleções modernas/
+  curadas (`PRIORITY_SET_CODES`), descartando o back-catalog. Mais útil com
+  `--all-sets` (corta ~832 → ~30 sets, sem o operador montar `--sets` à mão);
+  combinada com `--sets`, **intersecta** com a lista do usuário (logado).
+- **Novo helper puro `filter_modern_sets(expansions, priority_codes=…)`** —
+  mantém só os codes em `priority_codes`, preserva ordem, case-insensitive,
+  tolera `code` ausente/None. Pura (sem rede) → testável offline.
+- **Testes:** `tests/test_skip_backcatalog.py` (11 casos — filtro + registro da
+  flag no parser). Suíte: 101 verdes (era 90).
+
+**Inalterado:** margem bruta, threshold fração, `--hub-fee 0.0`, validação
+per-blueprint, skip-list, overrides de timeout por set, filtro TG##. v2.16 foi
+postprocess-only, então o header do scanner pula de v2.15 → v2.17.
+
 ## 2026-06-17 — v2.16: entrega = tabela no chat OBRIGATÓRIA + coluna Flag + fix `--help`
 
 **Por quê:** paridade com o reforço feito no MYP (PR #36/v5.11.7). O CT já tinha
