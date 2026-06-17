@@ -29,27 +29,29 @@
 
 ---
 
-## 2026-06-17 — Loop de melhoria contínua (rodada 1)
+## 2026-06-17 — Loop de melhoria contínua (início)
 
 > **Contexto:** o operador pediu um `/loop` que, a cada rodada, faz **1 melhoria
-> pequena e focada** no scanner, sempre verde e com PR. Tudo no branch
-> `claude/keen-faraday-w3bq9j`, escopo restrito a este repo. Cadência ~45min via
-> heartbeat (`Monitor`) — neste ambiente remoto não há `CronCreate`/`ScheduleWakeup`,
-> então a recorrência é melhor-esforço (pode parar se o container for reciclado no
-> ocioso; nesse caso, basta pingar pra retomar).
+> pequena e focada** no scanner — sempre com a suíte verde e via PR (branch
+> `claude/keen-faraday-w3bq9j`, escopo restrito a este repo).
 
-**Rodada 1 — CI de testes offline (`.github/workflows/tests.yml`):**
-- Não havia CI rodando a suíte; ela só era validada à mão. Agora todo push/PR roda
-  smoke `--help` + `pytest tests/` (90) + `scripts/test_*.py` (8) — offline, sem
-  secret. Protege automaticamente as próximas rodadas do loop.
-- Gate verde local antes de commitar. Sem mudança de comportamento do scanner.
+**Decisão: verificação é LOCAL; NÃO reintroduzir CI automático aqui.** A 1ª
+tentativa de rodada foi um workflow GH Actions (`tests.yml`) rodando a suíte em
+push/PR. Falhou em ~11s **sem alocar runner** — assinatura de **minutos do GitHub
+Actions esgotados / limite de gasto** (repo privado; já documentado como "GH Actions
+quota exhausted"). Não é bug do YAML nem dos testes (passam local: 90 + 8/8 +
+`--help`). Por ser constraint de billing **fora do repo**, o operador decidiu
+**reverter** (PR #22). O gate roda LOCAL antes de cada commit:
 
-**Backlog do loop (vivo — marcar conforme for fazendo):**
-- [x] CI de testes offline (gate automático) — rodada 1.
-- [ ] Flag de **liquidez** no relatório: nº de cópias EN-NM no/perto do preço do deal
-  (1 cópia = alto risco de staleness). Origem: auditoria 2026-06-08 #3.
-- [ ] **Re-check ao vivo** do preço das top-N do relatório (staleness).
+```
+python -m pytest tests/ -q && for t in scripts/test_*.py; do python "$t"; done \
+  && python cardtrader_scanner.py --help && python cardtrader_postprocess.py --help
+```
+
+**Backlog do loop (próximas rodadas — código, verificável offline):**
 - [ ] Atalho/flag pra **pular back-catalog** (foco em sets recentes; back-catalog deu 0 deal).
+- [ ] Flag de **liquidez** no relatório (nº de cópias EN-NM perto do preço — staleness; auditoria 2026-06-08 #3).
+- [ ] **Re-check ao vivo** das top-N (precisa de rede → testar com mock).
 - [ ] Investigar cobertura **crz/Galarian Gallery** (~30% não precificadas).
 - [ ] (fallback) robustez/cobertura de teste/limpeza identificada lendo o código.
 

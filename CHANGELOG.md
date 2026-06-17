@@ -4,24 +4,6 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
-## 2026-06-17 — CI: workflow de testes offline (gate automático)
-
-**Por quê:** até aqui a suíte de regressão (`tests/` via pytest + `scripts/test_*.py`
-standalone) só era validada à mão no ambiente local. Sem um gate automático, uma
-regressão num PR só apareceria quando alguém lembrasse de rodar pytest. Não muda
-o comportamento do scanner — é infra de qualidade, **sem bump de versão**.
-
-**Mudanças:**
-- **Novo `.github/workflows/tests.yml`** — roda em todo push/PR: smoke `--help`
-  dos dois CLIs + `pytest tests/` + cada `scripts/test_*.py` standalone. **OFFLINE
-  por design** (os testes mockam a rede) → NÃO precisa de secret (`CT_JWT` etc.),
-  ao contrário dos workflows de scan. Python 3.12 (baseline de dev documentada),
-  `paths-ignore` para `*.md`/`docs/`, `concurrency` com `cancel-in-progress`.
-- **`README.md`** — badge de status do CI sob o título.
-
-**Inalterado:** scanner, postprocess, filtros, classificação COMPRA/REVISAR/NÃO,
-margem bruta, threshold fração, e os workflows de scan (daily/weekly).
-
 ## 2026-06-17 — v2.16: entrega = tabela no chat OBRIGATÓRIA + coluna Flag + fix `--help`
 
 **Por quê:** paridade com o reforço feito no MYP (PR #36/v5.11.7). O CT já tinha

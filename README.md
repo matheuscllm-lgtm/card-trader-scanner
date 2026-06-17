@@ -14,8 +14,6 @@ version: v2.15
 
 # CardTrader Arbitrage Scanner — Pokémon TCG
 
-[![Tests](https://github.com/matheuscllm-lgtm/card-trader-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/matheuscllm-lgtm/card-trader-scanner/actions/workflows/tests.yml)
-
 > 📖 **Para o Matheus (leitura simples):** este é o **manual técnico completo**.
 > Se você só quer entender o que o programa faz e como rodá-lo, o lugar certo é
 > o **`CLAUDE.md`** (guia em linguagem acessível, com glossário). Aqui embaixo há
