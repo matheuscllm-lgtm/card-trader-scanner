@@ -29,6 +29,32 @@
 
 ---
 
+## 2026-06-17 — Loop de melhoria contínua (rodada 1)
+
+> **Contexto:** o operador pediu um `/loop` que, a cada rodada, faz **1 melhoria
+> pequena e focada** no scanner, sempre verde e com PR. Tudo no branch
+> `claude/keen-faraday-w3bq9j`, escopo restrito a este repo. Cadência ~45min via
+> heartbeat (`Monitor`) — neste ambiente remoto não há `CronCreate`/`ScheduleWakeup`,
+> então a recorrência é melhor-esforço (pode parar se o container for reciclado no
+> ocioso; nesse caso, basta pingar pra retomar).
+
+**Rodada 1 — CI de testes offline (`.github/workflows/tests.yml`):**
+- Não havia CI rodando a suíte; ela só era validada à mão. Agora todo push/PR roda
+  smoke `--help` + `pytest tests/` (90) + `scripts/test_*.py` (8) — offline, sem
+  secret. Protege automaticamente as próximas rodadas do loop.
+- Gate verde local antes de commitar. Sem mudança de comportamento do scanner.
+
+**Backlog do loop (vivo — marcar conforme for fazendo):**
+- [x] CI de testes offline (gate automático) — rodada 1.
+- [ ] Flag de **liquidez** no relatório: nº de cópias EN-NM no/perto do preço do deal
+  (1 cópia = alto risco de staleness). Origem: auditoria 2026-06-08 #3.
+- [ ] **Re-check ao vivo** do preço das top-N do relatório (staleness).
+- [ ] Atalho/flag pra **pular back-catalog** (foco em sets recentes; back-catalog deu 0 deal).
+- [ ] Investigar cobertura **crz/Galarian Gallery** (~30% não precificadas).
+- [ ] (fallback) robustez/cobertura de teste/limpeza identificada lendo o código.
+
+---
+
 ## 2026-06-08 — Auditoria de cobertura (sessão de execução, SEM mudança de código)
 
 > Sessão de **investigação/auditoria** no Claude Code on the web (container
