@@ -139,18 +139,42 @@ Opções úteis:
 
 ---
 
-## Como o resultado é ENTREGUE (tabela no chat, com links pra clicar)
+## Como o resultado é ENTREGUE (tabela no chat, com links pra clicar) — REGRA OBRIGATÓRIA
 
 > **Regra do operador (jun/2026):** a entrega do resultado é uma **tabela no
 > chat** — **não** uma planilha. A planilha (`.xlsx`) continua sendo gerada e
 > guardada na pasta `outputs/`, mas é arquivo de apoio, não a entrega.
 
-Quando você roda o **postprocess** (passo 2 acima), além da planilha ele agora
-gera também uma **tabela em formato de texto** (chamada "markdown" — texto com
-links clicáveis) com as colunas:
+> **⚠️ Instrução MANDATÓRIA pro assistente (Claude Code) — não opcional:**
+> Sempre que for entregar resultados deste scanner ao operador, você **DEVE**:
+> 1. **Gerar a tabela pela ferramenta do repo** (`cardtrader_postprocess.py`,
+>    que chama `build_delivery_markdown`). **NUNCA monte a tabela à mão** nem
+>    reformate números/links você mesmo — a ferramenta garante o formato, os
+>    links clicáveis e a classificação coerente com a planilha.
+> 2. **Colar a tabela markdown no chat** (terminal ou app). **NUNCA** entregar
+>    XLSX/CSV por anexo como padrão. Só mande arquivo se o operador **pedir
+>    explicitamente**.
+> 3. **Mostrar TODOS os deals** (COMPRA + REVISAR) — não uma amostra curada.
+>    Se forem muitos, use `--top-md N` com N alto o bastante pra cobrir todos
+>    (o default 50 já cobre a grande maioria das runs); a planilha sempre traz
+>    todos sem corte.
+> 4. **Não rankear "comprar/não comprar".** Você reporta margem, flags e fontes;
+>    quem decide capital é o operador.
+
+O comando literal de entrega (passo 2 do "Como rodar") **já produz a tabela** —
+ele imprime no terminal E grava um arquivo `.md` ao lado da planilha:
+
+```bash
+.venv\Scripts\python.exe cardtrader_postprocess.py \
+  --input outputs/scan_da_vez.xlsx \
+  --output outputs/relatorio_da_vez.xlsx \
+  --top-md 50                                 # quantas linhas na tabela do chat
+```
+
+A tabela tem as colunas:
 
 ```
-| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |
+| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |
 ```
 
 O que cada coluna quer dizer:
@@ -166,16 +190,21 @@ O que cada coluna quer dizer:
 | **Set** | a coleção (código do CardTrader) |
 | **Raridade** / **Cond** | raridade oficial e condição (sempre Near Mint) |
 | **Qtd** | quantas unidades o vendedor tem (você importa em lote) |
+| **Flag** | aviso de cautela por linha: **"validar manual"** quando a carta caiu na zona REVISAR (margem borderline OU suspeita de inflada — `TG`, sufixo de promo/league, set sem cobertura confiável, markup anômalo). Vazio = COMPRA limpa. **É só um aviso**, não muda a margem |
 | **Links** | **dois links pra clicar:** `[oferta]` abre a página da carta no CardTrader · `[TCG]` abre a página do TCG Player **pra você conferir o preço à mão** |
 
+> **Por que a coluna Flag:** ela traz pro chat a mesma classificação que a
+> planilha faz (`COMPRA` / `REVISAR`). Assim, sem abrir o Excel, você já vê
+> quais achados são "limpos" e quais pedem **conferência manual** antes — os
+> suspeitos de margem inflada (lembre: no passado ~76% dos "achados" eram
+> falsos sem validação per-blueprint).
+
 > **Por que dois links:** o `[TCG]` é o seu jeito padrão de **conferir** o preço
-> antes de comprar (lembre: sem conferir, no passado ~76% dos "achados" eram
-> falsos). O `[oferta]` te leva direto à carta no CardTrader.
+> antes de comprar. O `[oferta]` te leva direto à carta no CardTrader.
 
 A tabela aparece **na tela** quando o postprocess roda, e também é salva num
 arquivo de texto `.md` ao lado da planilha (mesmo nome, terminação `.md`) — é só
-copiar e colar no chat. Use `--top-md N` pra escolher quantas linhas mostrar (o
-padrão são 50; a planilha sempre traz **todos** os deals, sem corte).
+copiar e colar no chat.
 
 > **Detalhe técnico (pode pular):** a tabela do chat **junta** colunas (Carta =
 > nome+número; Links = oferta+TCG) só pra ficar legível. A planilha (`.xlsx`) e
@@ -285,8 +314,11 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.15 (overrides de timeout por coleção pra sets vintage
-pesados; 2026-06-15). Inclui v2.14 (correção + robustez — 2026-06-15: timeout
+*Versão do scanner: v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
+do repo, nunca à mão / nunca XLSX por padrão; coluna Flag "validar manual" nas
+linhas REVISAR; fix do `--help` do postprocess; 2026-06-17). Inclui v2.15
+(overrides de timeout por coleção pra sets vintage pesados; 2026-06-15) e v2.14
+(correção + robustez — 2026-06-15: timeout
 que escapava corrigido, falha de preço silenciosa corrigida, bloqueio de
 scanners concorrentes, câmbio preservado na recuperação, coluna "Variante Baixa
 Confiança"). Margem bruta — sem taxa embutida (v2.12, 2026-06-06). Este guia foi

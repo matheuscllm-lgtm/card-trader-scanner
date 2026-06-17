@@ -248,6 +248,39 @@ mas aí leva horas; rode em segundo plano.
 - **Log `cardtrader_scanner.log`** — histórico textual para auditoria
 - **Cache `cache.db`** — SQLite local com blueprints e preços (acelera runs subsequentes)
 
+## 📋 Entrega dos resultados (tabela no chat — OBRIGATÓRIO)
+
+A **entrega ao operador** é uma **tabela markdown no chat**, não um arquivo. A
+planilha `.xlsx` segue sendo gerada como apoio, mas **não** é a entrega.
+
+O `cardtrader_postprocess.py` já gera essa tabela: imprime no terminal e grava um
+`.md` ao lado da planilha. Colunas:
+
+```
+| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |
+```
+
+- **Carta** = nome + número (`Hitmonlee (013/110)`).
+- **Flag** = `validar manual` nas linhas REVISAR (margem borderline ou suspeita
+  de inflada: `TG`, sufixo promo/league, set sem cobertura, markup anômalo).
+- **Links** = `[oferta](url_CardTrader) · [TCG](url_TCGplayer)`, ambos clicáveis
+  (o link TCG é o caminho canônico de validação manual do preço).
+
+**Contrato MANDATÓRIO (vale também pro assistente de IA):**
+
+1. Gere a tabela **pela ferramenta** (`build_delivery_markdown`); **nunca** monte
+   à mão.
+2. Entregue **no chat**; **nunca** anexe XLSX/CSV por padrão (só se pedido
+   explícito).
+3. Mostre **todos** os deals (COMPRA + REVISAR) — use `--top-md N` se precisar
+   cobrir mais que 50; a planilha sempre traz todos sem corte.
+4. **Não** rankear "comprar/não comprar" — reportar margem, flags e fontes;
+   capital é decisão do operador.
+
+Detalhe completo + glossário no `CLAUDE.md` (seção "Como o resultado é
+ENTREGUE"). Esta é a convenção que **viaja cross-env** (um Claude Code na nuvem
+clona o repo e lê este README + o CLAUDE.md, não a memória local).
+
 ## Filtros ativos
 
 | Filtro | Regra | Por quê |
@@ -371,3 +404,4 @@ Hetzner CX11 (€4.50/mês) ou DigitalOcean Basic ($6/mês):
 | Data | Versão | Evento |
 |---|---|---|
 | 2026-04-20 | v1.0 | Projeto criado. MVP com pokemontcg.io, cache SQLite, 3 providers pluggable, filtros NM/EN/não-graded/≥$10, margem 30% default |
+| 2026-06-17 | v2.16 | Entrega = tabela no chat OBRIGATÓRIA (via a ferramenta, nunca à mão / nunca XLSX por padrão), documentada no README + CLAUDE.md (canal cross-env); coluna `Flag` "validar manual" nas linhas REVISAR; fix do `--help` do postprocess (literal `%` escapado) |
