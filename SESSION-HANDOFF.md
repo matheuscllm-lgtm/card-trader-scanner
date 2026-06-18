@@ -29,6 +29,41 @@
 
 ---
 
+## 2026-06-18 — Loop PAUSADO pelo operador (após Rodada 2)
+
+> **Estado:** loop de melhoria **pausado a pedido do operador**. Nenhum heartbeat
+> ativo, nada rodando. Retomar com "próxima rodada". Branch
+> `claude/keen-faraday-w3bq9j`, PR #22 (draft).
+
+**Feito até aqui:**
+- Rodada 1 (CI `tests.yml`) — **revertida** (billing GH Actions fora do repo; o
+  gate roda LOCAL). Detalhe na entrada 2026-06-17.
+- Rodada 2 (v2.17 `--skip-backcatalog` + helper `filter_modern_sets`) —
+  **entregue**, suíte 101 verde, em PR #22.
+
+**Próxima rodada = flag de LIQUIDEZ — já investigada (NÃO implementada). Spec pra retomar:**
+- **Dado já disponível:** `validate_per_blueprint` (cardtrader_scanner.py
+  ~L2589–2604) já busca TODAS as ofertas por blueprint em `bp_listings[bp_id]`; a
+  lista completa de cada candidato está em mãos no loop de enriquecimento.
+- **Schema:** a listing per-blueprint usa `price_cents`/`price_currency` **no
+  topo** do dict (L2614), ≠ per-expansion (que aninha em `price` — ver
+  `_dict_to_listing`). Condição/foil per-blueprint: **NÃO confirmado** —
+  per-expansion usa `properties_hash.condition` e `properties_hash.mtg_foil|foil`;
+  **confirmar com scan real** antes de confiar.
+- **Design proposto:** helper PURO `count_comparable_listings(offers,
+  ref_price_brl, *, want_foil, within_pct=0.15, condition="Near Mint")` → conta
+  ofertas mesma condição/foil, não-graded, com `price_brl <= ref*(1+within)`. Novo
+  campo `Opportunity.liquidity_count` (default None). Surfacing: coluna no XLSX
+  cru (append). Tabela do chat (`build_delivery_markdown`) = follow-up separado
+  (mexe nos testes de entrega).
+- **Failure mode SEGURO (chave):** se o schema per-blueprint divergir, condição
+  vira "Unknown" → excluída → contagem BAIXA → operador fica mais cauteloso,
+  **nunca super-confiante**. Por isso seria aceitável shippar conservador e
+  validar depois — mas o operador preferiu esperar o scan real (alinhado à tese
+  anti-falso-sinal do projeto).
+
+---
+
 ## 2026-06-17 — Loop de melhoria contínua (início)
 
 > **Contexto:** o operador pediu um `/loop` que, a cada rodada, faz **1 melhoria
@@ -50,7 +85,7 @@ python -m pytest tests/ -q && for t in scripts/test_*.py; do python "$t"; done \
 
 **Backlog do loop (próximas rodadas — código, verificável offline):**
 - [x] Atalho/flag pra **pular back-catalog** — FEITO (Rodada 2, v2.17: `--skip-backcatalog` + helper `filter_modern_sets`).
-- [ ] Flag de **liquidez** no relatório (nº de cópias EN-NM perto do preço — staleness; auditoria 2026-06-08 #3).
+- [ ] Flag de **liquidez** no relatório (nº de cópias EN-NM perto do preço — staleness; auditoria 2026-06-08 #3). **Investigada/especificada 2026-06-18 — ver entrada desse dia.**
 - [ ] **Re-check ao vivo** das top-N (precisa de rede → testar com mock).
 - [ ] Investigar cobertura **crz/Galarian Gallery** (~30% não precificadas).
 - [ ] (fallback) robustez/cobertura de teste/limpeza identificada lendo o código.
