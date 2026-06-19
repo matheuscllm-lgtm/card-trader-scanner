@@ -88,8 +88,20 @@ HUB_FEE_RATE = 0.0
 # inflação reverseHolofoil vintage, etc.) e vão pra revisão manual.
 EXTREME_NET_PCT = 2.0
 
-# ─── Trainer Gallery filter (preservado de v1.5) ──────────────────────────────
-TRAINER_GALLERY_RE = re.compile(r'^TG\d+', re.IGNORECASE)
+# ─── Gallery subset filter (Trainer Gallery TG## + Galarian Gallery GG##) ─────
+# Cartas dos subsets de galeria geram FP massivo: o pricing pokemontcg.io casa
+# com uma variante secret-rare alt-art de MESMO NOME (preço 5-10x maior) →
+# margem falsa (35/38 oportunidades de um scan SWSH 2026-04-29 eram FP). Produção
+# guardava só TG## (^TG\d+), mas o subset irmão Galarian Gallery é numerado GG##
+# (confirmado: pokemontcg.io numera "GG01"… com rarity "Trainer Gallery Rare
+# Holo", a MESMA classe) e escapava do guard → virava COMPRA com margem falsa.
+# O próprio scanner já trata swsh12pt5gg (Crown Zenith Galarian Gallery) como
+# gallery split problemático (não-aliasado de propósito) — esta regex só COMPLETA
+# essa intenção no postprocess. Achado via ASI-Evolve (experimento
+# cardtrader_classify: baseline COMPRA-F1 0,73 → 1,0 ao generalizar o guard).
+# CONSERVADOR: roteia GG## pra NAO/manual igual TG##, nunca auto-compra. O nome
+# TRAINER_GALLERY_RE é mantido por compat (agora cobre TG+GG).
+TRAINER_GALLERY_RE = re.compile(r'^(?:TG|GG)\d+', re.IGNORECASE)
 
 # ─── CT set base totals (PR-K — alinhamento com modelo MYP, 2026-05-29) ──────
 # Formato Carta MYP-style: "Plusle (193/197)". Total = printedTotal do
@@ -282,7 +294,7 @@ def classify_decision(row, cfg: DecisionConfig):
 
     # NAO (rejeitos definitivos)
     if is_tg:
-        return "NAO", "TG## potencial FP (pokemontcg.io infla 5-10x)"
+        return "NAO", "TG##/GG## gallery potencial FP (pokemontcg.io infla 5-10x)"
     if val in ("STALE",):
         return "NAO", "Validation STALE — preço inseguro"
     if chase == "BULK":
@@ -509,9 +521,9 @@ def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float = HUB_FEE_RATE) -> pd.Da
     # v2.1 #2 fix: defensive recompute ANTES de classify_decision consumir.
     # v2.12: hub_fee_rate default 0.0 → margem BRUTA.
     df = _recompute_margin_with_fee(df, hub_fee_rate=hub_fee_rate)
-    # TG## flag
+    # TG##/GG## gallery flag (Trainer + Galarian Gallery — mesma inflação pokemontcg.io)
     if "card_number" in df.columns:
-        df["trainer_gallery_potential_fp"] = df["card_number"].astype(str).str.match(r"^TG\d+", case=False, na=False)
+        df["trainer_gallery_potential_fp"] = df["card_number"].astype(str).str.match(r"^(?:TG|GG)\d+", case=False, na=False)
     else:
         df["trainer_gallery_potential_fp"] = False
     # Chase Tier
@@ -632,7 +644,7 @@ def build_top50_margin_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
 
 def build_validate_manually_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
     """PR-K: listings que pedem revisão manual via heurísticas:
-      - Carta TG## (Trainer Gallery, ^TG\\d+) no Nº
+      - Carta TG##/GG## (Trainer + Galarian Gallery, ^(?:TG|GG)\\d+) no Nº
       - Validação ∈ {STALE, PRICE_CHANGED, API_ERROR}
       - Set vintage suspect (lc, ba-20, ba-22)
       - Net % > 200% (provável FP)
@@ -641,9 +653,9 @@ def build_validate_manually_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
         return all_listings
     df = all_listings.copy()
     mask = pd.Series(False, index=df.index)
-    # TG##
+    # TG##/GG## gallery
     if "Nº" in df.columns:
-        mask = mask | df["Nº"].astype(str).str.match(r"^TG\d+", case=False, na=False)
+        mask = mask | df["Nº"].astype(str).str.match(r"^(?:TG|GG)\d+", case=False, na=False)
     # Validation flags
     if "Validação" in df.columns:
         val_up = df["Validação"].astype(str).str.upper()
