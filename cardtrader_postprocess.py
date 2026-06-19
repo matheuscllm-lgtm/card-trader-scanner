@@ -89,14 +89,18 @@ HUB_FEE_RATE = 0.0
 EXTREME_NET_PCT = 2.0
 
 # ─── Gallery subset filter (Trainer Gallery TG## + Galarian Gallery GG##) ─────
-# pokemontcg.io infla o preço de referência das duas galerias 5-10x (mesma
-# classe de falso positivo). Produção só guardava TG##; GG## (Galarian Gallery,
-# era SWSH — Brilliant Stars/Astral Radiance/Lost Origin/Silver Tempest/Crown
-# Zenith) é o subset irmão, numerado à parte, com a MESMA inflação — escapava
-# como COMPRA com margem falsa. GG## adicionado 2026-06-18 via ASI-Evolve
-# (experimento cardtrader_classify: baseline COMPRA-F1 0,73 → 1,0 ao generalizar
-# o guard). Mudança CONSERVADORA: roteia GG## pra NAO/manual igual TG##, nunca
-# auto-compra. O nome TRAINER_GALLERY_RE é mantido por compat (agora cobre TG+GG).
+# Cartas dos subsets de galeria geram FP massivo: o pricing pokemontcg.io casa
+# com uma variante secret-rare alt-art de MESMO NOME (preço 5-10x maior) →
+# margem falsa (35/38 oportunidades de um scan SWSH 2026-04-29 eram FP). Produção
+# guardava só TG## (^TG\d+), mas o subset irmão Galarian Gallery é numerado GG##
+# (confirmado: pokemontcg.io numera "GG01"… com rarity "Trainer Gallery Rare
+# Holo", a MESMA classe) e escapava do guard → virava COMPRA com margem falsa.
+# O próprio scanner já trata swsh12pt5gg (Crown Zenith Galarian Gallery) como
+# gallery split problemático (não-aliasado de propósito) — esta regex só COMPLETA
+# essa intenção no postprocess. Achado via ASI-Evolve (experimento
+# cardtrader_classify: baseline COMPRA-F1 0,73 → 1,0 ao generalizar o guard).
+# CONSERVADOR: roteia GG## pra NAO/manual igual TG##, nunca auto-compra. O nome
+# TRAINER_GALLERY_RE é mantido por compat (agora cobre TG+GG).
 TRAINER_GALLERY_RE = re.compile(r'^(?:TG|GG)\d+', re.IGNORECASE)
 
 # ─── CT set base totals (PR-K — alinhamento com modelo MYP, 2026-05-29) ──────
