@@ -146,13 +146,27 @@ def test_flag_marks_revisar_as_validar_manual():
     assert "validar manual" not in chariz_line
 
 
-def test_empty_deals_friendly_message():
+def test_no_deals_shows_near_miss_table():
+    """Sem COMPRA/REVISAR (ex.: tudo STALE), a entrega NÃO é um beco 'nenhum
+    deal': mostra os candidatos mais próximos por margem no MESMO formato
+    (modelo MYP + coluna Links combinada), marcados 'abaixo do limiar'. Garante
+    que a entrega seja SEMPRE a tabela da ferramenta — nunca um vazio que leve a
+    montar tabela à mão fora do padrão."""
     raw = _raw_df()
-    raw["Net Margin % REAL"] = [0.01, 0.02, 0.01]  # nada passa
-    raw["Validation Status"] = ["STALE", "STALE", "STALE"]
+    raw["Validation Status"] = ["STALE", "STALE", "STALE"]  # nada vira COMPRA/REVISAR
     df = pp.enrich_df(raw, hub_fee_rate=0.0)
     md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
-    assert "nenhum deal" in md.lower()
+    assert "abaixo do limiar" in md.lower()           # near-miss marcado na linha
+    assert "| # | Margem % |" in md                   # tabela renderizada (não beco)
+    assert any(ln.startswith("| 1 |") for ln in md.splitlines())
+    assert "[oferta](" in md and "[TCG](" in md       # Links combinados no fallback
+
+
+def test_truly_empty_df_friendly_message():
+    """df sem listing nenhum (nada precificado) → mensagem amigável, não crash."""
+    df = pp.enrich_df(_raw_df().iloc[0:0], hub_fee_rate=0.0)
+    md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
+    assert "nada a entregar" in md.lower()
 
 
 def test_top_n_caps_rows():

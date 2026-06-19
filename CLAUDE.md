@@ -160,6 +160,21 @@ Opções úteis:
 >    todos sem corte.
 > 4. **Não rankear "comprar/não comprar".** Você reporta margem, flags e fontes;
 >    quem decide capital é o operador.
+> 5. **NUNCA monte tabela à mão, nem mesmo quando "não há deal".** A ferramenta
+>    **sempre** entrega uma tabela no formato canônico: se nenhum item passa o
+>    limiar, ela mostra os **candidatos mais próximos por margem** marcados
+>    *"abaixo do limiar"* (fallback near-miss). Logo **não existe** o caso "veio
+>    vazio, então eu reformato" — esse era o erro recorrente. Se a entrega que
+>    você vai colar **não saiu do `.md` da ferramenta**, pare e gere por ela.
+
+**Para explorar abaixo do threshold padrão** (ver o que está "perto"), rebaixe os
+limiares **na própria ferramenta** — nunca leia o XLSX e monte à mão:
+
+```bash
+.venv\Scripts\python.exe cardtrader_postprocess.py \
+  --input outputs/scan_da_vez.xlsx --output outputs/relatorio.xlsx \
+  --min-net-margin 0.20 --revisar-min-net 0.10 --min-lucro 0
+```
 
 O comando literal de entrega (passo 2 do "Como rodar") **já produz a tabela** —
 ele imprime no terminal E grava um arquivo `.md` ao lado da planilha:
