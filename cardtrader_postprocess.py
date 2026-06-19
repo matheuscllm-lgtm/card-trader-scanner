@@ -868,6 +868,14 @@ def build_delivery_markdown(
     decisions = work.apply(lambda r: classify_decision(r, cfg), axis=1)
     work["decisao"] = [d[0] for d in decisions]
     deals = work[work["decisao"].isin(["COMPRA", "REVISAR"])].copy()
+    # Fallback near-miss: sem COMPRA/REVISAR, a entrega NÃO vira um beco
+    # "nenhum deal" (que historicamente levava a montar tabela à mão, fora do
+    # padrão). Em vez disso, mostra os candidatos mais próximos por margem, no
+    # MESMO formato canônico, marcados "abaixo do limiar". Garante que a entrega
+    # seja SEMPRE a tabela da ferramenta (modelo MYP + coluna Links combinada).
+    near_miss = deals.empty
+    if near_miss:
+        deals = work.copy()
     if "net_margin" in deals.columns:
         deals = deals.sort_values("net_margin", ascending=False)
     deals = deals.head(top_n)
@@ -878,11 +886,17 @@ def build_delivery_markdown(
         f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
     )
     if deals.empty:
-        return title + "\n\n_(nenhum deal COMPRA/REVISAR acima do limiar)_"
+        return title + "\n\n_(nenhum listing precificado — nada a entregar)_"
 
     header = "| " + " | ".join(_DELIVERY_HEADERS) + " |"
     sep = "| " + " | ".join("---" for _ in _DELIVERY_HEADERS) + " |"
-    lines = [title, "", header, sep]
+    lines = [title]
+    if near_miss:
+        lines.append(
+            "\n_⚠️ Nenhum deal acima do limiar — mostrando os candidatos mais "
+            "próximos por margem (todos ABAIXO do limiar, só referência)._"
+        )
+    lines += ["", header, sep]
 
     def _ct_usd(row):
         # live_usd direto se o raw trouxer; senão converte BRL via FX.
@@ -902,9 +916,13 @@ def build_delivery_markdown(
         except (TypeError, ValueError):
             tcg_usd = None
         dif = (tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
-        # Flag por linha: REVISAR (zona cinza / suspeito de margem inflada) →
-        # "validar manual"; COMPRA → célula limpa. Mesma classificação do XLSX.
-        flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
+        # Flag por linha: near-miss → "abaixo do limiar"; REVISAR (zona cinza /
+        # suspeito de margem inflada) → "validar manual"; COMPRA → célula limpa.
+        # Mesma classificação do XLSX.
+        if near_miss:
+            flag = "abaixo do limiar"
+        else:
+            flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
         cells = [
             str(rank),
             _fmt_pct(row.get("net_margin")),
