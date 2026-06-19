@@ -28,7 +28,6 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   scan:
@@ -95,11 +94,5 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Notify on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue create \
-            --title "Daily CT scan failed: run ${{ github.run_id }}" \
-            --body "Scheduled scan failed at $(date -u +'%Y-%m-%d %H:%M UTC'). Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # Failure surfaces in the Actions run status. No public issue is created
+      # (Issues are disabled on the public repo, and issue bodies are world-readable).
