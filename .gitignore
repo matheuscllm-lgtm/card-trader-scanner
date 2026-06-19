@@ -79,3 +79,20 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ── Public-release hygiene (2026-06-18): keep strategy/deal artifacts OUT ──
+# Internal handoffs, session summaries and run state are operational data, not
+# code. They reveal which sets profit, margins and findings — keep them local.
+SESSION-HANDOFF.md
+HANDOFF*.md
+*handoff*.md
+docs/RESUMO-*.md
+docs/handoff*.md
+# Live-partials / checkpoint run state (was pushed to scan-live branch — retired)
+partials/
+scan-state/
+scan-live/
+
+# Ad-hoc run output (deal/validation data — local only)
+runs/
+validate_*.py
