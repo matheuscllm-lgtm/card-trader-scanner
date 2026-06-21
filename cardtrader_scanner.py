@@ -45,10 +45,32 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
-      | 2026-06-20 (v2.17/v2.18)
-Versão: v2.18
+      | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19)
+Versão: v2.19
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.19 (2026-06-21 — validação per-blueprint casa condição NM + reverse/variante):
+  - [CORREÇÃO] validate_per_blueprint casava o listing per-blueprint SÓ pelo
+    username do vendedor, IGNORANDO condição e reverse. Um vendedor com uma cópia
+    Poor barata (ou a versão não-reverse) "contaminava" a validação. Caso real
+    Shiftry hl: o scan achou a NM reverse (~R$140) referenciada a reverseHolofoil
+    $42.95, mas a validação casava a Poor não-reverse do MESMO vendedor (R$46,46)
+    → comparava preço de carta Poor vs referência reverse → falso "79%" (o
+    ground-truth real: holo NM R$86,15 vs $20,27 ≈ 18%; reverse NM R$139,70 vs
+    $42,94 ≈ 37% — nunca 79%). Isso RESSUSCITAVA falsos positivos DEPOIS do fix
+    v2.18, na etapa que deveria ser o ground-truth.
+  - [FIX] o match agora exige condition == listing.condition (Near Mint, garantido
+    pelo filtro NM-only) E reverse igual (pokemon_reverse/mtg_foil/foil == listing.foil,
+    simétrico com o parse do scan v2.18); entre os que batem, pega o MAIS BARATO.
+    Se nenhum bate → STALE honesto (a cópia exata que o scan viu sumiu), em vez
+    de casar a cópia errada.
+  - [LIMPEZA] removido script órfão local validate_vintage_candidates.py (gitignored,
+    one-off) que carregava o mesmo padrão de match buggy.
+  - INALTERADO: tiers de markup, recálculo de margem real, contrato STALE→NÃO no
+    postprocess, threshold fração, margem bruta.
+  - Testes: tests/test_per_blueprint_variant_match.py (4 casos: reverse, holo
+    padrão, mais-barato-entre-iguais, STALE). Suíte 110/110 verde.
 
 Changelog v2.18 (2026-06-20 — fim da inflação de holo rare vintage; pricing por raridade+reverse):
   - [CORREÇÃO-RAIZ] Cartas Pokémon SEMPRE chegavam foil=False: o parse do listing
@@ -2678,8 +2700,37 @@ class Scanner:
             if listings is None:
                 o.validation_status = "API_ERROR"
                 continue
-            match = next((l for l in listings if (l.get("user") or {}).get("username") == seller), None)
+            # v2.19 (2026-06-21): casar o listing per-blueprint pela MESMA
+            # condição (NM) E mesmo reverse/variante do listing que o scan achou
+            # — não só pelo vendedor. Antes pegava o PRIMEIRO listing do vendedor
+            # (qualquer condição/variante): um vendedor com uma cópia Poor barata
+            # OU a versão não-reverse "contaminava" a validação. Caso real
+            # Shiftry hl: scan achou a NM reverse (~R$140), mas a validação casava
+            # a Poor não-reverse do mesmo vendedor (R$46,46) → comparava preço de
+            # carta Poor contra referência reverse → falso "79%". Agora exige
+            # condition == o.listing.condition (Near Mint) e reverse igual; entre
+            # os que batem, pega o MAIS BARATO (melhor oferta daquele vendedor
+            # naquela exata variante/condição). Se nenhum bate → STALE honesto
+            # (a cópia exata que o scan viu sumiu), em vez de casar a errada.
+            def _variant_matches(listing_dict) -> bool:
+                p = (listing_dict.get("properties_hash")
+                     or listing_dict.get("properties") or {})
+                cond = p.get("condition", "")
+                is_rev = bool(p.get("pokemon_reverse", False)
+                              or p.get("mtg_foil", False)
+                              or p.get("foil", False))
+                return cond == o.listing.condition and is_rev == bool(o.listing.foil)
+
+            seller_matches = [
+                l for l in listings
+                if (l.get("user") or {}).get("username") == seller
+                and _variant_matches(l)
+            ]
+            match = (min(seller_matches, key=lambda l: l.get("price_cents", float("inf")))
+                     if seller_matches else None)
             if not match:
+                # STALE: vendedor não tem mais a cópia na MESMA condição+variante
+                # que o scan achou (ou só tinha outra condição/variante).
                 o.validation_status = "STALE"
                 continue
             # Live BRL (per-blueprint sempre retorna na moeda da conta = BRL pra Matheus,
