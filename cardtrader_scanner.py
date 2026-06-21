@@ -45,10 +45,29 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
-      | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20)
-Versão: v2.20
+      | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
+Versão: v2.21
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.21 (2026-06-21 — lista curada vintage core + flag --vintage):
+  - [ESCOPO] Nova constante VINTAGE_SET_CODES (34 sets): WOTC (bs ju fo b2 tr g1
+    g2 n1 n2 n3 n4 si lc wiz bog) + e-Card (ex aq skg) + EX Series COMPLETA (16:
+    rs ss dr exma hl rg trr dx em uf ds lm hp cg df pk). Códigos CT REAIS
+    verificados contra a API de expansões (não os chutes do briefing: Base Set =
+    `bs` não `b1`; Southern Islands = `si` não `si1`; Best of Game = `bog` não
+    `bp`; WOTC promos = `wiz` não `basep`).
+  - [FLAG] --vintage: restringe o scan ao vintage core na ordem curada. Sozinho
+    filtra TODAS as expansões; com --sets intersecta. Helper puro
+    filter_vintage_sets (espelha filter_modern_sets; testável offline).
+  - [ALIAS] +3 aliases pokemontcg.io confirmados por cobertura: bs→base1 (102
+    cards), si→si1 (18), bog→bp (9). dr→ex3 e df→ex15 já existiam — eram os 2
+    sets EX faltando nos scans anteriores (EX Dragon + Dragon Frontiers, Gold
+    Stars/Charizard secret). n2→neo2 mantido mas baixo yield (cobertura pobre de
+    variantes não-1stEd; 1stEd é excluída no pricing).
+  - INALTERADO: seleção de variante v2.18, validação v2.19, cache-bust v2.20,
+    margem bruta, threshold fração, --skip-backcatalog.
+  - Testes: tests/test_vintage_sets.py (7 casos). Suíte 117/117 verde.
 
 Changelog v2.20 (2026-06-21 — cache-bust da lógica de pricing; run diário não serve preço stale):
   - [ROBUSTEZ] A chave do price_cache não incluía a raridade, então entradas
@@ -1125,6 +1144,9 @@ class PokemonTcgIoProvider(PricingProvider):
     # sets que apareceram no weekly v2.6 + vintage Wizards essenciais.
     SET_ALIAS_TO_PTCG = {
         # Wizards original era
+        "bs": ["base1"],          # Base Set (v2.21: alias confirmado — 102 cards,
+                                  # Alakazam holofoil $84. 1stEd/Shadowless são
+                                  # variantes EXCLUÍDAS no pricing; holo = unlimited)
         "ju": ["base2"],          # Jungle
         "fo": ["base3"],          # Fossil
         "b2": ["base4"],          # Base Set 2
@@ -1132,10 +1154,13 @@ class PokemonTcgIoProvider(PricingProvider):
         "g1": ["gym1"],           # Gym Heroes
         "g2": ["gym2"],           # Gym Challenge
         "n1": ["neo1"],           # Neo Genesis
-        "n2": ["neo2"],           # Neo Discovery
+        "n2": ["neo2"],           # Neo Discovery (cobertura pobre p/ não-1stEd →
+                                  # baixo yield; alias mantido por completude)
         "n3": ["neo3"],           # Neo Revelation
         "n4": ["neo4"],           # Neo Destiny
         "lc": ["base6"],          # Legendary Collection
+        "si": ["si1"],            # Southern Islands (v2.21: 18 cards)
+        "bog": ["bp"],            # Best of Game promos (v2.21: 9 cards, esparso)
         # E-Card era
         "ex": ["ecard1"],         # Expedition Base Set
         "aq": ["ecard2"],         # Aquapolis
@@ -3029,6 +3054,12 @@ def parse_args():
                          "pulando o back-catalog (mercado eficiente, ~0 deal acionável). "
                          "Mais útil com --all-sets: corta ~832 → ~30 sets. Combinado com "
                          "--sets, intersecta com a lista do usuário."))
+    p.add_argument("--vintage", action="store_true",
+                   help=("Escaneia a lista CURADA vintage core (VINTAGE_SET_CODES): "
+                         "WOTC + e-Card + EX Series completa (~34 sets). Onde mora o "
+                         "gap de arbitragem vintage (holo rares era EX/Neo). Restringe "
+                         "o escopo a essas coleções, na ordem curada. Mutuamente "
+                         "exclusivo com --skip-backcatalog."))
     p.add_argument("--threshold", type=float, default=MARGIN_THRESHOLD,
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
@@ -3141,6 +3172,44 @@ def filter_modern_sets(
     """
     prio = {c.lower() for c in priority_codes}
     return [e for e in expansions if (e.get("code") or "").lower() in prio]
+
+
+# v2.21 (2026-06-21): lista CURADA "vintage core" — códigos CardTrader REAIS
+# (verificados contra a API de expansões do CT em 2026-06-21, não os chutes do
+# briefing: Base Set = `bs` (não `b1`); Southern Islands = `si` (não `si1`);
+# Best of Game = `bog` (não `bp`); WOTC promos = `wiz` (não `basep`)). Cobre as
+# 3 eras "vintage clássico": WOTC/Wizards, e-Card e EX Series completa (16 sets).
+# Todos com alias pra pokemontcg.io em SET_ALIAS_TO_PTCG (ou code idêntico).
+# Suporte da flag `--vintage`. NÃO inclui POP/DP/Platinum/HGSS (bucket separado,
+# "early modern" — o briefing pediu pra não misturar no mesmo threshold).
+VINTAGE_SET_CODES = [
+    # WOTC / Wizards era
+    "bs", "ju", "fo", "b2", "tr", "g1", "g2",
+    "n1", "n2", "n3", "n4", "si", "lc", "wiz", "bog",
+    # e-Card era
+    "ex", "aq", "skg",
+    # EX Series (16 main expansions: rs..pk, incluindo dr e df)
+    "rs", "ss", "dr", "exma", "hl", "rg", "trr", "dx",
+    "em", "uf", "ds", "lm", "hp", "cg", "df", "pk",
+]
+
+
+def filter_vintage_sets(
+    expansions: list[dict], vintage_codes: list[str] = VINTAGE_SET_CODES
+) -> list[dict]:
+    """Mantém só as expansões cujo `code` está em `vintage_codes` (vintage core:
+    WOTC + e-Card + EX Series). Suporte da flag `--vintage`.
+
+    Espelha `filter_modern_sets` mas para o lado oposto do catálogo: o gap de
+    arbitragem vintage mora na era EX + alguns Neo/WOTC holo rares (validado nos
+    scans 2026-06-21). Função pura (sem rede) → testável offline. Preserva a
+    ordem de `vintage_codes` (não a do catálogo), pra escanear na ordem curada.
+    Case-insensitive; tolera `code` ausente/None.
+    """
+    order = {c.lower(): i for i, c in enumerate(vintage_codes)}
+    matched = [e for e in expansions if (e.get("code") or "").lower() in order]
+    matched.sort(key=lambda e: order[(e.get("code") or "").lower()])
+    return matched
 
 
 def load_config() -> dict:
@@ -3284,11 +3353,28 @@ def main():
             f"(puladas {before - len(expansions)} de back-catalog)"
         )
 
+    # v2.21: --vintage restringe ao vintage core (VINTAGE_SET_CODES) na ordem
+    # curada. Onde mora o gap vintage (holo rares era EX/Neo, validado 2026-06-21).
+    # Escopo: sozinho filtra TODAS as expansões (não a lista modern do config);
+    # com --sets explícito, intersecta com a lista do usuário.
+    if getattr(args, "vintage", False):
+        base = expansions if args.sets else all_expansions
+        before = len(base)
+        expansions = filter_vintage_sets(base)
+        found = [e.get("code") for e in expansions]
+        present = {(e.get("code") or "").lower() for e in expansions}
+        missing = [c for c in VINTAGE_SET_CODES if c not in present]
+        log.info(
+            f"--vintage: {len(expansions)}/{before} expansões vintage core "
+            f"(ordem curada). Sets: {', '.join(found)}"
+            + (f" | NÃO encontrados no CT: {', '.join(missing)}" if missing else "")
+        )
+
     # Reordena no escopo COMPLETO: sets de maior valor (SV/curados) PRIMEIRO.
     # O catálogo CT vem old→new; sem isso, os sets modernos (foco) ficariam no
     # fim e poderiam ser cortados pelo timeout. sort é estável → o resto mantém
     # a ordem do catálogo. Só afeta --all-sets (em --sets a ordem é do usuário).
-    if args.all_sets:
+    if args.all_sets and not getattr(args, "vintage", False):
         prio = {c.lower(): i for i, c in enumerate(PRIORITY_SET_CODES)}
         expansions.sort(key=lambda e: prio.get((e.get("code") or "").lower(), 10_000))
         matched = [e.get("code") for e in expansions if (e.get("code") or "").lower() in prio]

@@ -4,6 +4,28 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-21 — Scanner v2.21: lista curada "vintage core" + flag `--vintage`
+
+**Por quê:** o operador pediu pra incorporar os sets vintage ao scanner. O
+briefing trazia códigos chutados ("provavelmente"); verifiquei os **códigos
+reais do CardTrader** contra a API de expansões e corrigi: Base Set = `bs` (não
+`b1`), Southern Islands = `si` (não `si1`), Best of Game = `bog` (não `bp`), WOTC
+promos = `wiz` (não `basep`). Os scans anteriores estavam faltando, sobretudo,
+**EX Dragon (`dr`)** e **EX Dragon Frontiers (`df`)** — dois dos 16 sets da EX
+Series, com Charizard secret e Gold Stars.
+
+**Mudanças:**
+- **`VINTAGE_SET_CODES` (34 sets):** WOTC (`bs ju fo b2 tr g1 g2 n1 n2 n3 n4 si lc
+  wiz bog`) + e-Card (`ex aq skg`) + EX Series completa (`rs ss dr exma hl rg trr
+  dx em uf ds lm hp cg df pk`). Não inclui POP/DP/Platinum/HGSS (bucket "early
+  modern" separado — o briefing pediu pra não misturar no mesmo threshold).
+- **Flag `--vintage`:** restringe ao vintage core na ordem curada. Sozinha filtra
+  todas as expansões; com `--sets` intersecta. Helper puro `filter_vintage_sets`.
+- **+3 aliases pokemontcg.io** (cobertura confirmada): `bs→base1` (102 cards),
+  `si→si1` (18), `bog→bp` (9). `dr→ex3`/`df→ex15` já existiam. `n2→neo2` mantido,
+  mas baixo yield (cobertura pobre de variantes não-1stEd).
+- **Testes:** `tests/test_vintage_sets.py` (7 casos). Suíte **117/117 verde**.
+
 ## 2026-06-21 — Scanner v2.20: cache-bust da lógica de pricing (run diário não serve preço stale)
 
 **Por quê:** o fix v2.18 mudou a *seleção de variante*, mas a chave do `price_cache`
