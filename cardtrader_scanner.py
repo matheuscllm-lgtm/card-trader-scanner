@@ -990,6 +990,11 @@ def _rarity_is_holo(*rarities: Optional[str]) -> bool:
         if not r:
             continue
         rl = r.lower()
+        # Guard defensivo: "reverse holo" como raridade (não existe no vocab CT
+        # atual — reverse é o booleano pokemon_reverse) NÃO conta como holo aqui;
+        # mantém o código fiel ao docstring se a fonte um dia mudar.
+        if "reverse" in rl:
+            continue
         if "holo" in rl or "shining" in rl:
             return True
     return False
