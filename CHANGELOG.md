@@ -4,6 +4,45 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-21 — Scanner v2.19: validação per-blueprint casa condição NM + reverse/variante
+
+**Por quê:** depois do v2.18 (que acertou a *seleção de variante* no scan), o
+operador conferiu o candidato nº 1 da varredura vintage — Shiftry EX Hidden
+Legends, "79%" — e mostrou na tela que **não era real**. O fix v2.18 tinha
+acertado a parte dele (reconheceu a oferta como reverse → referência
+`reverseHolofoil` $42,95), mas a **validação per-blueprint** então re-introduziu
+o falso positivo.
+
+**A causa:** `validate_per_blueprint` casava o listing per-blueprint **só pelo
+username do vendedor** (`cardtrader_scanner.py:2681`), ignorando condição e
+reverse. O vendedor Monkey_Milano tinha uma cópia **Poor não-reverse a R$46,46**;
+a validação pegou essa (a primeira/mais barata do vendedor) em vez da **NM reverse
+~R$140** que o scan achou, e comparou o preço da carta Poor contra a referência
+reverse $42,95 → `(42,95−9,00)/42,95 = 79%`. Maçã com laranja.
+
+Ground-truth (tela CardTrader + TCGplayer):
+
+| Versão | CT NM mais barata | Ref. TCGplayer NM | Margem real |
+|---|---|---|---|
+| Holofoil (padrão) | R$86,15 ($16,69) | $20,27 | ~18% (sem deal) |
+| Reverse Holofoil | R$139,70 ($27,07) | $42,94 | ~37% (marginal) |
+
+Nunca 79%.
+
+**Mudanças:**
+- **Match per-blueprint ciente de condição + variante.** Exige
+  `condition == listing.condition` (Near Mint, garantido pelo filtro NM-only) **e**
+  reverse igual (`pokemon_reverse`/`mtg_foil`/`foil == listing.foil`, simétrico com
+  o parse do scan v2.18). Entre os que batem, pega o **mais barato**. Se nenhum
+  bate → **STALE** honesto (a cópia exata sumiu), em vez de casar a errada.
+- **Limpeza:** removido o script órfão local `validate_vintage_candidates.py`
+  (gitignored, one-off) que carregava o mesmo padrão de match buggy.
+- **Testes:** `tests/test_per_blueprint_variant_match.py` (4 casos, incl. o caso
+  Shiftry reproduzido). Suíte **110/110 verde**.
+
+**Inalterado:** tiers de markup, recálculo de margem real, contrato STALE→NÃO no
+postprocess, threshold fração, margem bruta.
+
 ## 2026-06-20 — Scanner v2.18: fim da inflação de holo rare vintage (pricing por raridade + reverse)
 
 **Por quê:** a varredura vintage de 2026-06-19 entregou margens lindas (79%, 76%,
