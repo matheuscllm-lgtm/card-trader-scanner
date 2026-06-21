@@ -80,6 +80,7 @@ def assert_in(needle, haystack, label: str):
 PICHU_ECARD1 = {
     "id": "ecard1-22",
     "name": "Pichu",
+    "rarity": "Rare Holo",
     "set": {"id": "ecard1", "printedTotal": 165},
     "number": "22",
     "tcgplayer": {
@@ -95,6 +96,7 @@ PICHU_ECARD1 = {
 ARBOK_ECARD1 = {
     "id": "ecard1-3",
     "name": "Arbok",
+    "rarity": "Rare Holo",
     "set": {"id": "ecard1", "printedTotal": 165},
     "number": "3",
     "tcgplayer": {
@@ -109,6 +111,7 @@ ARBOK_ECARD1 = {
 VAPOREON_BASE2 = {
     "id": "base2-12",
     "name": "Vaporeon",
+    "rarity": "Rare Holo",
     "set": {"id": "base2", "printedTotal": 64},
     "number": "12",
     "tcgplayer": {
@@ -118,6 +121,35 @@ VAPOREON_BASE2 = {
             "1stEditionHolofoil": {"low": 160.0, "mid": 165.0, "market": 168.40},
         },
     },
+}
+
+
+# ── v2.18 regression fixtures: vintage Holo Rare inflation bug ──────────────
+# Preços reais observados via pokemontcg.io 2026-06-20. Antes do v2.18, o
+# scanner pegava reverseHolofoil (inflado) pra TODA holo rare padrão porque
+# `pokemon_reverse` era ignorado (foil sempre False) e holo rare não tem
+# variante `normal`.
+SHIFTRY_HL = {  # EX Hidden Legends — reverse $42.95 vs holo $19.92 (+116%)
+    "id": "ex5-14", "name": "Shiftry", "rarity": "Rare Holo",
+    "set": {"id": "ex5", "printedTotal": 101}, "number": "14",
+    "tcgplayer": {"url": "https://prices.pokemontcg.io/tcgplayer/ex5-14",
+        "prices": {"holofoil": {"market": 19.92},
+                   "reverseHolofoil": {"market": 42.95}}},
+}
+GENGAR_LC = {  # Legendary Collection — reverse $1599.99 vs holo $146.89 (10×!)
+    "id": "base6-11", "name": "Gengar", "rarity": "Rare Holo",
+    "set": {"id": "base6", "printedTotal": 110}, "number": "11",
+    "tcgplayer": {"url": "https://prices.pokemontcg.io/tcgplayer/base6-11",
+        "prices": {"holofoil": {"market": 146.89},
+                   "reverseHolofoil": {"market": 1599.99}}},
+}
+# Non-holo common: normal $0.50 vs reverseHolofoil $3.00 — deve usar normal.
+PIDGEY_NONHOLO = {
+    "id": "xy1-99", "name": "Pidgey", "rarity": "Common",
+    "set": {"id": "xy1", "printedTotal": 146}, "number": "99",
+    "tcgplayer": {"url": "https://prices.pokemontcg.io/tcgplayer/xy1-99",
+        "prices": {"normal": {"market": 0.50},
+                   "reverseHolofoil": {"market": 3.00}}},
 }
 
 
@@ -151,41 +183,45 @@ def make_provider(card_fixture):
 # ──────────────────────────────────────────────────────────────────────
 # Layer 4 — scanner variant disambiguation
 # ──────────────────────────────────────────────────────────────────────
-print("\n=== Layer 4 — foil-aware variant disambiguation ===")
+print("\n=== Layer 4 — variant disambiguation (rarity+reverse aware, v2.18) ===")
+# v2.18 redefiniu a semântica: `foil` agora = reverse-holo (pokemon_reverse).
+#   foil=False + raridade holo → holofoil (printagem holo padrão)
+#   foil=True (reverse holo)   → reverseHolofoil
+#   foil=False + não-holo      → normal
 
-# Test 1: Pichu foil=True → holofoil $224.99
+# Test 1: Pichu Rare Holo, PADRÃO (foil=False) → holofoil $224.99
 p = make_provider(PICHU_ECARD1)
-m = p.market_price_usd("Pichu", "ecard1", "22", foil=True)
-assert_eq(m, 224.99, "Pichu ecard1/22 foil=True → market=$224.99")
-assert_eq(p.last_variant_used, "holofoil", "Pichu foil=True → variant=holofoil")
+m = p.market_price_usd("Pichu", "ecard1", "22", foil=False, rarity="Holo Rare")
+assert_eq(m, 224.99, "Pichu ecard1/22 holo padrão → market=$224.99")
+assert_eq(p.last_variant_used, "holofoil", "Pichu holo padrão → variant=holofoil")
 
-# Test 2: Pichu foil=False → reverseHolofoil $120.57
+# Test 2: Pichu Rare Holo, REVERSE (foil=True) → reverseHolofoil $120.57
 p = make_provider(PICHU_ECARD1)
-m = p.market_price_usd("Pichu", "ecard1", "22", foil=False)
-assert_eq(m, 120.57, "Pichu ecard1/22 foil=False → market=$120.57")
-assert_eq(p.last_variant_used, "reverseHolofoil", "Pichu foil=False → variant=reverseHolofoil")
+m = p.market_price_usd("Pichu", "ecard1", "22", foil=True, rarity="Holo Rare")
+assert_eq(m, 120.57, "Pichu ecard1/22 reverse → market=$120.57")
+assert_eq(p.last_variant_used, "reverseHolofoil", "Pichu reverse → variant=reverseHolofoil")
 
-# Test 3: Arbok foil=True → holofoil $82.77
+# Test 3: Arbok Rare Holo, PADRÃO → holofoil $82.77
 p = make_provider(ARBOK_ECARD1)
-m = p.market_price_usd("Arbok", "ecard1", "3", foil=True)
-assert_eq(m, 82.77, "Arbok ecard1/3 foil=True → market=$82.77")
-assert_eq(p.last_variant_used, "holofoil", "Arbok foil=True → variant=holofoil")
+m = p.market_price_usd("Arbok", "ecard1", "3", foil=False, rarity="Holo Rare")
+assert_eq(m, 82.77, "Arbok ecard1/3 holo padrão → market=$82.77")
+assert_eq(p.last_variant_used, "holofoil", "Arbok holo padrão → variant=holofoil")
 
-# Test 4: Arbok foil=False → reverseHolofoil $27.93
+# Test 4: Arbok Rare Holo, REVERSE → reverseHolofoil $27.93
 p = make_provider(ARBOK_ECARD1)
-m = p.market_price_usd("Arbok", "ecard1", "3", foil=False)
-assert_eq(m, 27.93, "Arbok ecard1/3 foil=False → market=$27.93")
-assert_eq(p.last_variant_used, "reverseHolofoil", "Arbok foil=False → variant=reverseHolofoil")
+m = p.market_price_usd("Arbok", "ecard1", "3", foil=True, rarity="Holo Rare")
+assert_eq(m, 27.93, "Arbok ecard1/3 reverse → market=$27.93")
+assert_eq(p.last_variant_used, "reverseHolofoil", "Arbok reverse → variant=reverseHolofoil")
 
-# Test 5: Vaporeon base2/12 foil=True → unlimitedHolofoil $52.25 (1stEd excluído)
+# Test 5: Vaporeon base2/12 holo padrão → unlimitedHolofoil $52.25 (sem holofoil, 1stEd excl.)
 p = make_provider(VAPOREON_BASE2)
-m = p.market_price_usd("Vaporeon", "base2", "12", foil=True)
-assert_eq(m, 52.25, "Vaporeon base2/12 foil=True → market=$52.25")
-assert_eq(p.last_variant_used, "unlimitedHolofoil", "Vaporeon vintage → variant=unlimitedHolofoil (1stEd excluded)")
+m = p.market_price_usd("Vaporeon", "base2", "12", foil=False, rarity="Holo Rare")
+assert_eq(m, 52.25, "Vaporeon base2/12 holo → market=$52.25")
+assert_eq(p.last_variant_used, "unlimitedHolofoil", "Vaporeon vintage → unlimitedHolofoil (1stEd excluded)")
 
 # Test 6: 1stEdition NUNCA é escolhida (Pichu tem 1stEd $750 → ignorado)
 p = make_provider(PICHU_ECARD1)
-p.market_price_usd("Pichu", "ecard1", "22", foil=True)
+p.market_price_usd("Pichu", "ecard1", "22", foil=True, rarity="Holo Rare")
 if p.last_variant_used == "1stEditionHolofoil":
     failures.append("FAIL 1stEditionHolofoil should be excluded")
     print(f"  [FAIL] 1stEditionHolofoil chosen (should be excluded)")
@@ -200,8 +236,39 @@ assert_eq(p.last_variant_used, "holofoil", "foil=None → variant=holofoil (v2.7
 
 # Test 8: tcg_url propagated regardless of variant
 p = make_provider(PICHU_ECARD1)
-p.market_price_usd("Pichu", "ecard1", "22", foil=False)
-assert_in("ecard1-22", p.last_tcg_url, "tcg_url populated even when reverseHolofoil chosen")
+p.market_price_usd("Pichu", "ecard1", "22", foil=False, rarity="Holo Rare")
+assert_in("ecard1-22", p.last_tcg_url, "tcg_url populated when holofoil chosen")
+
+# ── v2.18 regression: vintage Holo Rare inflation bug ──────────────────────
+# Test 8a: Shiftry EX HL holo padrão → holofoil $19.92 (NÃO reverse $42.95)
+p = make_provider(SHIFTRY_HL)
+m = p.market_price_usd("Shiftry", "ex5", "14", foil=False, rarity="Holo Rare")
+assert_eq(m, 19.92, "Shiftry hl holo → holofoil $19.92 (não reverse $42.95)")
+assert_eq(p.last_variant_used, "holofoil", "Shiftry hl → variant=holofoil")
+
+# Test 8b: Gengar Legendary Collection holo → holofoil $146.89 (NÃO reverse $1599.99)
+p = make_provider(GENGAR_LC)
+m = p.market_price_usd("Gengar", "base6", "11", foil=False, rarity="Holo Rare")
+assert_eq(m, 146.89, "Gengar LC holo → holofoil $146.89 (não reverse $1599.99!)")
+assert_eq(p.last_variant_used, "holofoil", "Gengar LC → variant=holofoil")
+
+# Test 8c: Gengar LC REVERSE (foil=True) → reverseHolofoil $1599.99 (caso legítimo)
+p = make_provider(GENGAR_LC)
+m = p.market_price_usd("Gengar", "base6", "11", foil=True, rarity="Holo Rare")
+assert_eq(m, 1599.99, "Gengar LC reverse → reverseHolofoil $1599.99")
+assert_eq(p.last_variant_used, "reverseHolofoil", "Gengar LC reverse → variant=reverseHolofoil")
+
+# Test 8d: Pidgey non-holo common → normal $0.50 (NÃO reverse $3.00)
+p = make_provider(PIDGEY_NONHOLO)
+m = p.market_price_usd("Pidgey", "xy1", "99", foil=False, rarity="Common")
+assert_eq(m, 0.50, "Pidgey common → normal $0.50 (não reverse $3.00)")
+assert_eq(p.last_variant_used, "normal", "Pidgey common → variant=normal")
+
+# Test 8e: helper _rarity_is_holo
+assert_eq(scanner._rarity_is_holo("Holo Rare"), True, "_rarity_is_holo('Holo Rare')")
+assert_eq(scanner._rarity_is_holo("Rare Holo EX"), True, "_rarity_is_holo('Rare Holo EX')")
+assert_eq(scanner._rarity_is_holo("Common"), False, "_rarity_is_holo('Common')")
+assert_eq(scanner._rarity_is_holo(None, "Rare"), False, "_rarity_is_holo(None,'Rare')")
 
 # ──────────────────────────────────────────────────────────────────────
 # Layer 5 — postprocess alpha-suffix filter

@@ -45,10 +45,38 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
-      | 2026-06-20 (v2.17)
-Versão: v2.17
+      | 2026-06-20 (v2.17/v2.18)
+Versão: v2.18
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.18 (2026-06-20 — fim da inflação de holo rare vintage; pricing por raridade+reverse):
+  - [CORREÇÃO-RAIZ] Cartas Pokémon SEMPRE chegavam foil=False: o parse do listing
+    lia props["mtg_foil"]/["foil"] (campos MTG, inexistentes em Pokémon) e IGNORAVA
+    `pokemon_reverse`. Consequência: TODA "Holo Rare" PADRÃO caía no ramo foil=False
+    e, sem variante `normal` na TCGPlayer (holo rare não tem printagem normal),
+    escorregava pra `reverseHolofoil` — variante reverse, mais rara e CARA →
+    margem inflada sistemática. Exemplos reais (pokemontcg.io 2026-06-20):
+    Gengar Legendary Collection holofoil $146.89 vs reverse $1599.99 (10×!);
+    Claydol EX Hidden Legends $14.47 vs $44.95 (+210%); Shiftry hl $19.92 vs
+    $42.95 (+116%). A varredura vintage de 2026-06-19 era quase toda falso
+    positivo por causa disso.
+  - [FIX] (1) o parse lê `pokemon_reverse` → reverse-holo chega como foil=True.
+    (2) seleção de variante ciente de raridade (novo helper _rarity_is_holo +
+    param `rarity` em market_price_usd, alimentado por l.rarity no call site):
+      • foil=True (reverse)        → reverseHolofoil primeiro;
+      • foil=False + raridade holo → holofoil/unlimitedHolofoil (printagem holo
+        base), reverseHolofoil POR ÚLTIMO;
+      • foil=False + não-holo      → normal, reverse por último (era 2º).
+    Verificado no data model do CardTrader: pokemon_rarity="Holo Rare" +
+    pokemon_reverse=false = holo padrão (→ holofoil); reverse=true (→ reverse).
+  - [FLAG] "Variante Baixa Confiança" NÃO dispara mais pra holo rare (holofoil é
+    a variante CORRETA, não um casamento errado); só p/ carta NÃO-holo que casou
+    preço holo (o caso Gengar não-foil → $1600).
+  - INALTERADO: margem bruta, threshold fração, validação per-blueprint, skip-list,
+    overrides de timeout por set, filtro TG##, --skip-backcatalog.
+  - Testes: scripts/test_variant_disambiguation.py reescrito (semântica
+    rarity+reverse; +regressões Shiftry/Gengar LC/Pidgey). Suíte 106/106 verde.
 
 Changelog v2.17 (2026-06-20 — flag --skip-backcatalog; foco em sets recentes):
   - Nova flag --skip-backcatalog: restringe o scan às coleções modernas/curadas
@@ -930,15 +958,46 @@ class PricingProvider(ABC):
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
-                         foil: bool = False) -> Optional[float]:
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
         """Retorna preço market em USD ou None se não achar.
 
-        `foil`: indica se o listing CT é foil. Provider usa pra priorizar
-        a variante correta (reverseHolofoil vs normal) no agregador
-        pokemontcg.io e evitar falso negativo em commons Reverse Holo
-        (fix H2, 2026-05-11).
+        `foil`: indica se o listing CT é reverse-holo (pokemon_reverse=True
+        em Pokémon, mtg_foil em MTG). Provider usa pra priorizar a variante
+        correta (reverseHolofoil vs holofoil vs normal) no agregador
+        pokemontcg.io (fix H2 2026-05-11; v2.18 2026-06-20).
+        `rarity`: raridade do listing CT ("Holo Rare", "Common", ...). v2.18
+        usa pra distinguir holo rare padrão (→ holofoil) de carta base
+        (→ normal) quando foil=False.
         """
         ...
+
+
+def _rarity_is_holo(*rarities: Optional[str]) -> bool:
+    """True se QUALQUER rótulo de raridade indicar carta holográfica.
+
+    Casa tanto a raridade do CardTrader ("Holo Rare") quanto a do
+    pokemontcg.io ("Rare Holo", "Rare Holo EX", "Rare Holo Star",
+    "Rare Holo LV.X", "Rare Shining", ...). Usado pela seleção de
+    variante (v2.18) pra decidir se o preço de referência correto é
+    `holofoil` (carta intrinsecamente holo) ou `normal` (carta base).
+
+    NÃO casa "Reverse Holo" como raridade — no CardTrader o reverse é uma
+    propriedade separada do listing (`pokemon_reverse`), não a raridade
+    impressa; ele é tratado pelo sinal `foil`/reverse, não por aqui.
+    """
+    for r in rarities:
+        if not r:
+            continue
+        rl = r.lower()
+        # Guard defensivo: "reverse holo" como raridade (não existe no vocab CT
+        # atual — reverse é o booleano pokemon_reverse) NÃO conta como holo aqui;
+        # mantém o código fiel ao docstring se a fonte um dia mudar.
+        if "reverse" in rl:
+            continue
+        if "holo" in rl or "shining" in rl:
+            return True
+    return False
 
 
 class PokemonTcgIoProvider(PricingProvider):
@@ -1303,7 +1362,8 @@ class PokemonTcgIoProvider(PricingProvider):
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
-                         foil: bool = False) -> Optional[float]:
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
         # v2.7.1: reset last_tcg_url no início de cada chamada pra evitar
         # carry-over do card anterior caso este falhe sem set explícito.
         # v2.8 Layer 4: reset last_variant_used também.
@@ -1359,45 +1419,47 @@ class PokemonTcgIoProvider(PricingProvider):
         if not tcg:
             return None
 
-        # v2.8 Layer 4 (bug-hunt 2026-05-18): variant disambiguation foil-aware.
-        # v2.10 Layer 4.1 (2026-05-19): foil=False priority INVERTIDA — normal
-        # antes de reverseHolofoil. Motivação: weekly 2026-05-19 mostrou que
-        # vintage cards (e-Card era, Legendary Collection, Skyridge, Aquapolis)
-        # frequentemente têm `reverseHolofoil.market` maior que `normal.market`
-        # (variante mais cara/desejada). CT sellers com foil=False vendem a
-        # versão "normal" (não-foil) — pegar reverse inflava sistematicamente:
-        # Snorlax LC #11 ~R$3275 (reverse inflado) vs preço real (normal).
-        # Mesmo padrão Hitmonlee LC, Nidoqueen LC, Alakazam Skyridge, Mantine
-        # Skyridge.
+        # v2.18 (2026-06-20): seleção de variante CIENTE de raridade + reverse.
         #
-        # Histórico:
-        #   v2.7 Layer 2: priority fixa `holofoil → normal → reverseHolofoil
-        #     → unlimitedHolofoil`. Bug: pra Holo Rare antigas (Expedition,
-        #     EX Dragon, Aquapolis, Skyridge) o TCG Player Default Landing é
-        #     **Reverse Holofoil**, não Holofoil. Scanner pegava sempre
-        #     `holofoil` se existisse → Pichu Expedition #22 → $224.99 (Holo)
-        #     vs $50.41 (Reverse, default da página).
-        #   v2.8: foil-aware. foil=False → `reverseHolofoil → normal → holofoil
-        #     → unlimitedHolofoil` (acreditando que RH era Default Landing
-        #     universal). Funcionou pra Pichu/Tyranitar Expedition+Aquapolis
-        #     mas inflou non-foil de muito vintage (LC/Skyridge non-holo).
-        #   v2.10 Layer 4.1: foil=False → `normal → reverseHolofoil → holofoil
-        #     → unlimitedHolofoil`. `normal` é o preço mais conservador e
-        #     reflete o que CT seller foil=False normalmente lista. Reverse
-        #     fica como fallback (sob protesto), holofoil último.
+        # PROBLEMA-RAIZ descoberto: pra cartas Pokémon, o sinal `foil` SEMPRE
+        # chegava False — o parse do listing lia `props["mtg_foil"]/["foil"]`
+        # (campos MTG, inexistentes em Pokémon) e IGNORAVA `pokemon_reverse`.
+        # Logo a Holo Rare PADRÃO (pokemon_reverse=False) caía no ramo foil=False
+        # e, sem `normal` na TCGPlayer (holo rare não tem printagem normal),
+        # escorregava pra `reverseHolofoil` — variante reverse, mais rara e CARA.
+        # Inflação sistemática em TODA holo rare vintage:
+        #   Gengar Legendary Collection: holofoil $146.89 vs reverseHolofoil
+        #     $1599.99 (10×!) — exatamente o "Gengar não-foil $1600" load-bearing.
+        #   Claydol EX Hidden Legends: holofoil $14.47 vs reverse $44.95 (+210%).
+        #   Shiftry EX Hidden Legends: holofoil $19.92 vs reverse $42.95 (+116%).
+        # O fix v2.10 (normal-first) só corrigiu NÃO-holo (que têm `normal`);
+        # holo rares continuaram inflando.
         #
-        # foil=True: mantido v2.8 (holofoil → unlimitedHolofoil → normal →
-        #   reverseHolofoil). Listings CT foil são versão metálica.
-        # foil=None: preserva v2.7 Layer 2.
+        # CONSERTO: (1) o parse passa a ler `pokemon_reverse` → reverse holo
+        #   chega como foil=True. (2) Aqui a prioridade vira ciente de raridade:
+        #   - foil=True (reverse holo)      → reverseHolofoil primeiro.
+        #   - foil=False + raridade holo    → holofoil/unlimited (printagem holo
+        #       base); reverseHolofoil POR ÚLTIMO (nunca é o que o seller vende).
+        #   - foil=False + não-holo         → normal; reverse por último.
+        #   - foil=None (legado/direto)     → v2.7 Layer 2.
+        # Empiricamente verificado no data model do CardTrader (2026-06-20):
+        # `pokemon_rarity="Holo Rare"` + `pokemon_reverse=false` = holo padrão
+        # (→ holofoil); `pokemon_reverse=true` = reverse (→ reverseHolofoil).
         #
         # EXCLUIR sempre: `1stEditionHolofoil`, `1stEditionNormal` (variantes
         # raras, inflam 3-10x; operador não vende 1st Ed).
         EXCLUDED = {"1stEditionHolofoil", "1stEditionNormal"}
+        is_holo = _rarity_is_holo(rarity, card.get("rarity"))
         if foil is True:
-            PRIORITY = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
+            # Listing reverse-holo (pokemon_reverse=True) → reverseHolofoil.
+            PRIORITY = ["reverseHolofoil", "holofoil", "unlimitedHolofoil", "normal"]
         elif foil is False:
-            # v2.10 Layer 4.1: normal > reverseHolofoil > holofoil > unlimited.
-            PRIORITY = ["normal", "reverseHolofoil", "holofoil", "unlimitedHolofoil"]
+            if is_holo:
+                # Holo Rare padrão (não-reverse) → printagem holo base.
+                PRIORITY = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
+            else:
+                # Carta base não-holo → normal; reverse por último.
+                PRIORITY = ["normal", "holofoil", "unlimitedHolofoil", "reverseHolofoil"]
         else:
             # Foil-flag ausente (cache miss antigo ou provider chamado direto).
             # Preserve v2.7 Layer 2 priority.
@@ -1460,7 +1522,8 @@ class JustTcgProvider(PricingProvider):
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
-                         foil: bool = False) -> Optional[float]:
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
         # TODO: implementar quando assinar JustTCG.
         # Endpoint: GET /cards?name=X&set=Y → prices.tcgplayer.marketPrice
         raise NotImplementedError("JustTCG provider: implementar ao assinar")
@@ -1475,7 +1538,8 @@ class TcgPlayerOfficialProvider(PricingProvider):
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
-                         foil: bool = False) -> Optional[float]:
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
         raise NotImplementedError(
             "TCGPlayer API oficial está fechada para novos devs em 2026. "
             "Quando obter credenciais (OAuth2 com public/private key), "
@@ -2088,7 +2152,12 @@ class Scanner:
             price_currency=currency,
             price_brl=price_brl_val,
             quantity=raw.get("quantity", 0),
-            foil=props.get("mtg_foil", False) or props.get("foil", False),
+            # v2.18: Pokémon usa `pokemon_reverse` (não `foil`/`mtg_foil`, que
+            # só existem em MTG). Antes esse campo era ignorado → TODA carta
+            # Pokémon chegava foil=False, e holo rares padrão escorregavam pra
+            # reverseHolofoil (inflado). Agora reverse-holo → foil=True.
+            foil=(props.get("mtg_foil", False) or props.get("foil", False)
+                  or props.get("pokemon_reverse", False)),
             graded=raw.get("graded", False),
             seller_username=user.get("username", ""),
             seller_can_sell_via_hub=user.get("can_sell_via_hub", False),
@@ -2322,7 +2391,8 @@ class Scanner:
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
-                    foil=l.foil,  # H2 fix: foil-aware variant selection
+                    foil=l.foil,  # H2 fix: foil/reverse-aware variant selection
+                    rarity=l.rarity,  # v2.18: holo rare → holofoil; base → normal
                 )
             except (requests.ConnectionError, requests.Timeout) as e:
                 # v2.9: erros de rede transientes — já foram retried pelo provider.
@@ -2418,17 +2488,20 @@ class Scanner:
             tcg_url = getattr(self.pricing, "last_tcg_url", None)
             # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
             variant_used = getattr(self.pricing, "last_variant_used", None)
-            # v2.14 (candidato 4): flag de baixa confiança de variante. Listing
-            # NÃO-foil que só achou preço numa variante metálica premium
-            # (holofoil/unlimitedHolofoil — nem normal nem reverseHolofoil).
-            # Preço pode ser da variante errada → margem inflada. Só sinaliza.
-            variant_low_conf = (
-                l.foil is False
-                and variant_used in ("holofoil", "unlimitedHolofoil")
-            )
             # v2.13: rarity oficial pokemontcg.io (preferida) → fallback rarity
             # do blueprint CT. Set release date pra score de valorização.
             ptcg_rarity = getattr(self.pricing, "last_ptcg_rarity", None)
+            # v2.14 (candidato 4) + v2.18: flag de baixa confiança de variante.
+            # Listing NÃO-foil que só achou preço numa variante metálica premium
+            # (holofoil/unlimitedHolofoil — nem normal nem reverseHolofoil).
+            # v2.18: NÃO dispara pra holo rare — aí holofoil é a variante CORRETA
+            # (esperada), não um casamento errado. Só sinaliza quando uma carta
+            # NÃO-holo casou preço holo (o caso Gengar não-foil → $1600).
+            variant_low_conf = (
+                l.foil is False
+                and not _rarity_is_holo(l.rarity, ptcg_rarity)
+                and variant_used in ("holofoil", "unlimitedHolofoil")
+            )
             set_release = getattr(self.pricing, "last_set_release_date", None) or ""
             rarity_for_tier = ptcg_rarity or l.rarity
             chase_tier = classify_chase_tier(rarity_for_tier)

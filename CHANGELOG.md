@@ -4,6 +4,52 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-20 — Scanner v2.18: fim da inflação de holo rare vintage (pricing por raridade + reverse)
+
+**Por quê:** a varredura vintage de 2026-06-19 entregou margens lindas (79%, 76%,
+70%) — e quase TODAS eram **falso positivo**. Investigando com dado real
+(pokemontcg.io 2026-06-20) caiu a ficha de um **bug-raiz** que vinha inflando
+sistematicamente toda carta holográfica antiga.
+
+**A causa-raiz:** o parse do listing definia `foil` lendo
+`props["mtg_foil"]`/`["foil"]` — campos que **só existem em Magic**, nunca em
+Pokémon. O campo Pokémon que diz se a carta é reverse (`pokemon_reverse`) era
+**ignorado**. Resultado: **toda** carta Pokémon chegava `foil=False`. Como uma
+"Holo Rare" padrão **não tem** variante `normal` na TCGPlayer, a prioridade
+`normal → reverseHolofoil → …` escorregava pra **`reverseHolofoil`** — a versão
+reverse, mais rara e **bem mais cara**. Referência inflada → margem fake. Reais:
+
+| Carta | holofoil (correto) | reverseHolofoil (pego antes) | inflação |
+|---|---|---|---|
+| Gengar — Legendary Collection | $146.89 | $1599.99 | **+989%** |
+| Claydol — EX Hidden Legends | $14.47 | $44.95 | +211% |
+| Shiftry — EX Hidden Legends | $19.92 | $42.95 | +116% |
+| Pinsir — EX Hidden Legends | $18.42 | $25.14 | +36% |
+
+O fix v2.10 (normal-first) só corrigia cartas **não-holo** (que têm `normal`); as
+**holo rares** continuavam inflando — incluindo o caso "Gengar não-foil $1600".
+
+**Mudanças:**
+- **Parse lê `pokemon_reverse`.** `foil=(mtg_foil or foil or pokemon_reverse)`.
+  Reverse-holo → `foil=True`; holo padrão → `foil=False`.
+- **Seleção de variante ciente de raridade.** Novo helper puro `_rarity_is_holo()`
+  + parâmetro `rarity` em `market_price_usd` (alimentado por `l.rarity`). Prioridade:
+  - `foil=True` (reverse) → `reverseHolofoil → holofoil → unlimitedHolofoil → normal`
+  - `foil=False` + holo → `holofoil → unlimitedHolofoil → normal → reverseHolofoil`
+  - `foil=False` + não-holo → `normal → holofoil → unlimitedHolofoil → reverseHolofoil`
+  - `foil=None` (legado) → inalterado (v2.7 Layer 2)
+- **Flag "Variante Baixa Confiança" recalibrada.** Não dispara pra holo rare
+  (`holofoil` é a variante correta); só p/ carta não-holo que casou preço holo.
+- **Verificado no data model CardTrader (2026-06-20):** `pokemon_rarity="Holo Rare"`
+  + `pokemon_reverse=false` = holo padrão (→ holofoil); `=true` = reverse.
+- **Escopo:** afeta holo rares de **todas as eras** (não só vintage); direção
+  sempre conservadora (referência menor → menos falso positivo).
+- **Testes:** `scripts/test_variant_disambiguation.py` reescrito (rarity+reverse;
+  +regressões Shiftry/Gengar LC/Pidgey). Suíte **106/106 verde** + 8 de script.
+
+**Inalterado:** margem bruta 30%, threshold fração, validação per-blueprint,
+skip-list, overrides de timeout por set, filtro TG##, `--skip-backcatalog`.
+
 ## 2026-06-20 — Scanner v2.17: flag `--skip-backcatalog` (escaneia só coleções modernas)
 
 **Por quê:** lição operacional mais repetida do projeto (auditoria 2026-06-08):
