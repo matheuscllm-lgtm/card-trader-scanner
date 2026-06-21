@@ -110,7 +110,7 @@ def test_unknown_errors_logged_as_warning_and_counted():
 
     call_idx = {"n": 0}
 
-    def buggy(card_name, set_code, collector_number, foil=False):
+    def buggy(card_name, set_code, collector_number, foil=False, rarity=None):
         i = call_idx["n"]
         call_idx["n"] += 1
         if i < fail_count:
@@ -165,7 +165,7 @@ def test_low_failure_rate_does_not_abort():
     s = _build_scanner()
     call_idx = {"n": 0}
 
-    def occasional_fail(card_name, set_code, collector_number, foil=False):
+    def occasional_fail(card_name, set_code, collector_number, foil=False, rarity=None):
         i = call_idx["n"]
         call_idx["n"] += 1
         if i < fail_count:
@@ -209,7 +209,7 @@ def test_network_transients_dont_flood_warnings():
     s = _build_scanner()
     call_idx = {"n": 0}
 
-    def transient(card_name, set_code, collector_number, foil=False):
+    def transient(card_name, set_code, collector_number, foil=False, rarity=None):
         i = call_idx["n"]
         call_idx["n"] += 1
         if i < 5:
