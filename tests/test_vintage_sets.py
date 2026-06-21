@@ -77,14 +77,14 @@ def test_new_aliases_present_and_correct():
 
 
 def test_vintage_flag_registered():
-    parser = scanner.parse_args.__wrapped__ if hasattr(scanner.parse_args, "__wrapped__") else None
-    # parse_args constrói o parser internamente; valida via simulação de args.
-    import argparse
-    # smoke: a flag existe no help do parser real
-    ns = _parse(["--vintage"])
-    assert ns.vintage is True
-    ns2 = _parse([])
-    assert ns2.vintage is False
+    assert _parse(["--vintage"]).vintage is True
+    assert _parse([]).vintage is False
+
+
+def test_vintage_and_skip_backcatalog_are_disjoint():
+    # As duas listas NÃO podem ter overlap, senão o guard de exclusão mútua
+    # estaria escondendo um caso legítimo.
+    assert not (set(scanner.VINTAGE_SET_CODES) & set(scanner.PRIORITY_SET_CODES))
 
 
 def _parse(argv):

@@ -1145,8 +1145,10 @@ class PokemonTcgIoProvider(PricingProvider):
     SET_ALIAS_TO_PTCG = {
         # Wizards original era
         "bs": ["base1"],          # Base Set (v2.21: alias confirmado — 102 cards,
-                                  # Alakazam holofoil $84. 1stEd/Shadowless são
-                                  # variantes EXCLUÍDAS no pricing; holo = unlimited)
+                                  # Alakazam holofoil $84). Proteção contra inflação:
+                                  # 1stEdition é EXCLUÍDA no pricing + validação
+                                  # per-blueprint (Shadowless não é variante TCGPlayer
+                                  # separada — o market holofoil é o blend unlimited).
         "ju": ["base2"],          # Jungle
         "fo": ["base3"],          # Fossil
         "b2": ["base4"],          # Base Set 2
@@ -3333,6 +3335,17 @@ def main():
 
     # --all-sets força o escopo COMPLETO: ignora --sets E a lista do config.yaml,
     # caindo no branch `else` abaixo (expansions = all_expansions ~832).
+    # v2.21: --vintage e --skip-backcatalog são mutuamente exclusivos — as listas
+    # VINTAGE_SET_CODES e PRIORITY_SET_CODES são DISJUNTAS, então combiná-las
+    # produziria um scan vazio silencioso (footgun). Falha explícita.
+    if getattr(args, "vintage", False) and args.skip_backcatalog:
+        log.error(
+            "--vintage e --skip-backcatalog são mutuamente exclusivos "
+            "(vintage core e coleções modernas/curadas são conjuntos disjuntos → "
+            "resultado vazio). Use um OU o outro."
+        )
+        sys.exit(2)
+
     sets_cfg = None if args.all_sets else (args.sets or cfg.get("sets"))
     if sets_cfg:
         wanted = {s.lower() for s in sets_cfg}
