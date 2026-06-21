@@ -132,6 +132,13 @@ Opções úteis:
 - `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),
   começando pelas mais valiosas — é o modo do rastreio **semanal**. Esse modo é
   demorado (horas).
+- `--skip-backcatalog` = **só as coleções modernas/curadas** (~30, em vez de
+  ~832). Pula o **back-catalog** (sets antigos, era Sword & Shield e anteriores),
+  que é mercado eficiente e quase nunca rende deal (a auditoria de 2026-06-08 deu
+  **0 deal** em 17 sets SWSH). Use junto com `--all-sets` pra um scan completo
+  **muito mais rápido**, focado em lançamentos novos — que é onde o gap aparece.
+  Se combinar com `--sets`, ele cruza a sua lista com as modernas (fica só a
+  interseção).
 - `--threshold 0.20` acha ~5× mais deals que `0.30`, mas com mais ruído (mais
   falso positivo pra você filtrar).
 - Rastreios longos: rode **em segundo plano** (sem travar o terminal). Nunca
@@ -329,7 +336,9 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
+*Versão do scanner: v2.17 (flag `--skip-backcatalog` — escaneia só as ~30
+coleções modernas/curadas, pulando o back-catalog que não rende deal; 2026-06-20).
+Inclui v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
 do repo, nunca à mão / nunca XLSX por padrão; coluna Flag "validar manual" nas
 linhas REVISAR; fix do `--help` do postprocess; 2026-06-17). Inclui v2.15
 (overrides de timeout por coleção pra sets vintage pesados; 2026-06-15) e v2.14

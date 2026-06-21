@@ -4,6 +4,41 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-20 — Scanner v2.17: flag `--skip-backcatalog` (escaneia só coleções modernas)
+
+**Por quê:** lição operacional mais repetida do projeto (auditoria 2026-06-08):
+o **back-catalog** (sets antigos, era Sword & Shield e anteriores) é um mercado
+**eficiente** — o preço na Europa já bate com o dos EUA, então quase nunca sobra
+deal acionável (a auditoria mostrou **0 deal** em 17 sets SWSH / ~1.000 cartas).
+O gap de arbitragem mora em **lançamentos novos**. Antes, pra focar nos modernos
+num scan completo, o operador tinha que montar a lista `--sets` à mão. Esta flag
+automatiza isso.
+
+**Mudanças:**
+- **`cardtrader_scanner.py` — nova flag `--skip-backcatalog`.** Restringe o scan
+  às coleções **modernas/curadas** (a lista `PRIORITY_SET_CODES`, que já existia
+  pra ordenação no `--all-sets`), pulando o back-catalog. Mais útil com
+  `--all-sets`: corta **~832 → ~30 sets**. Combinada com `--sets`, **intersecta**
+  com a lista do usuário (e loga quantas foram puladas). Sozinha (sem `--all-sets`
+  nem `--sets`), filtra a lista do `config.yaml`.
+- **`cardtrader_scanner.py` — helper PURO `filter_modern_sets(expansions,
+  priority_codes=PRIORITY_SET_CODES)`.** Mantém só as expansões cujo `code` está
+  na lista priority; preserva a ordem de entrada; case-insensitive; tolera `code`
+  ausente/None/"". Sem rede → **testável offline**.
+- **Testes:** novo `tests/test_skip_backcatalog.py` (11 casos: filtro modern/
+  back-catalog, ordem, case, code ausente, param custom, default, registro da
+  flag no parser). Suíte completa **106/106 verde** (era 95).
+- **Docs:** header inline do scanner v2.15 → v2.17 (v2.16 foi postprocess-only,
+  por isso o pulo); CLAUDE.md (Opções úteis + rodapé).
+- **INALTERADO:** margem bruta 30%, threshold em fração, `--hub-fee 0.0`,
+  validação per-blueprint, skip-list, overrides de timeout por set, filtro TG##,
+  NM-only. A flag só **restringe o escopo de coleções** — não toca em preço,
+  margem nem classificação.
+
+> **Histórico:** este trabalho foi recuperado do PR #22 (fechado sem merge em
+> 2026-06-19). O PR misturava uma Rodada 1 (CI offline, revertida na época) com
+> esta Rodada 2; aqui só a Rodada 2 foi reaplicada, limpa, sobre o `main` atual.
+
 ## 2026-06-17 — v2.16: entrega = tabela no chat OBRIGATÓRIA + coluna Flag + fix `--help`
 
 **Por quê:** paridade com o reforço feito no MYP (PR #36/v5.11.7). O CT já tinha
