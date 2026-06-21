@@ -4,6 +4,20 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-21 — Scanner v2.20: cache-bust da lógica de pricing (run diário não serve preço stale)
+
+**Por quê:** o fix v2.18 mudou a *seleção de variante*, mas a chave do `price_cache`
+não incluía a raridade. Entradas cacheadas **antes** do v2.18 (holo rare com preço
+`reverseHolofoil` inflado, `foil=False`) continuariam sendo servidas até o TTL (24h)
+— inclusive no **run diário do GitHub Actions**, que não usa `--no-cache`. Ou seja:
+por até 24h, o scan automático poderia ressuscitar os falsos positivos vintage a
+partir do cache.
+
+**Mudança:** nova constante `PRICE_LOGIC_VERSION` embutida na chave
+(`pokemontcg:{versão}:{set}:{nº}:{nome}:foil={foil}`). Bump `"1"→"2"` invalida de
+uma vez todas as entradas pré-v2.18 (custo único: 1 refetch). Em mudanças futuras
+na lógica de pricing/variante, bumpe a constante. Suíte **110/110 verde**.
+
 ## 2026-06-21 — Scanner v2.19: validação per-blueprint casa condição NM + reverse/variante
 
 **Por quê:** depois do v2.18 (que acertou a *seleção de variante* no scan), o

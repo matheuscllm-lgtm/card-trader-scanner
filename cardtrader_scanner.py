@@ -45,10 +45,20 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
-      | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19)
-Versão: v2.19
+      | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20)
+Versão: v2.20
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.20 (2026-06-21 — cache-bust da lógica de pricing; run diário não serve preço stale):
+  - [ROBUSTEZ] A chave do price_cache não incluía a raridade, então entradas
+    cacheadas ANTES do v2.18 (holo rare com preço reverseHolofoil inflado,
+    foil=False) continuariam sendo servidas até o TTL (24h) — inclusive no run
+    DIÁRIO do GitHub Actions, que NÃO usa --no-cache. Nova constante
+    PRICE_LOGIC_VERSION embutida na chave (`pokemontcg:{versão}:...`); bump de
+    "1"→"2" invalida todas as entradas pré-v2.18 de uma vez (custo único:
+    1 refetch). Mudanças futuras na lógica de pricing → bumpe a constante.
+  - INALTERADO: tudo o mais (seleção de variante v2.18, validação v2.19, etc.).
 
 Changelog v2.19 (2026-06-21 — validação per-blueprint casa condição NM + reverse/variante):
   - [CORREÇÃO] validate_per_blueprint casava o listing per-blueprint SÓ pelo
@@ -299,6 +309,12 @@ MIN_PRICE_USD = 10.0             # filtro extra do usuário
 LANGUAGE_FILTER = "en"           # apenas inglês
 CONDITION_FILTER = "Near Mint"   # apenas NM
 EXCLUDE_GRADED = True            # exclui PSA/BGS/CGC
+# v2.20: versão da LÓGICA de pricing/variante embutida na chave do price_cache.
+# Bumpe quando a seleção de variante/preço mudar, pra invalidar entradas antigas
+# (senão o cache serve preço calculado com a lógica velha até o TTL). Histórico:
+#   1 = pré-v2.18 (reverseHolofoil inflado em holo rare) — agora invalidado.
+#   2 = v2.18+ (seleção ciente de raridade+reverse).
+PRICE_LOGIC_VERSION = "2"
 REQUEST_DELAY_CT = 0.15          # CT tem limite 10/s → 0.15s deixa folga
 REQUEST_DELAY_PRICING = 0.1      # pokemontcg.io permite 20k/dia (~0.23/s)
 TIMEOUT = 30
@@ -1397,7 +1413,16 @@ class PokemonTcgIoProvider(PricingProvider):
         self.last_set_release_date = None
         # Cache inclui foil pra evitar colisão entre versão normal e RH
         # do mesmo card (2026-05-11 H2 fix).
-        cache_key = f"pokemontcg:{set_code}:{collector_number}:{card_name}:foil={foil}"
+        # v2.20 (2026-06-21): namespace versionado (`pricelogic`). A lógica de
+        # seleção de variante mudou em v2.18 (holo rare → holofoil, não mais
+        # reverseHolofoil inflado), MAS a chave NÃO incluía a raridade — então
+        # entradas cacheadas ANTES do fix (foil=False, preço reverse inflado)
+        # continuariam sendo servidas até o TTL (24h), inclusive no run diário
+        # do GitHub Actions (que NÃO usa --no-cache). Bumpar a versão invalida
+        # de uma vez todas as entradas pré-v2.18 (custo único: 1 refetch). Em
+        # mudanças futuras na lógica de pricing, bumpe PRICE_LOGIC_VERSION.
+        cache_key = (f"pokemontcg:{PRICE_LOGIC_VERSION}:{set_code}:"
+                     f"{collector_number}:{card_name}:foil={foil}")
         cached = self.cache.get_price(cache_key)
         if cached:
             self.last_tcg_url = cached.get("tcg_url")
