@@ -45,9 +45,24 @@ Autor: Elizandra / Claude
 Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
-Versão: v2.15
+      | 2026-06-20 (v2.17)
+Versão: v2.17
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.17 (2026-06-20 — flag --skip-backcatalog; foco em sets recentes):
+  - Nova flag --skip-backcatalog: restringe o scan às coleções modernas/curadas
+    (PRIORITY_SET_CODES), pulando o back-catalog. Lição da auditoria 2026-06-08:
+    back-catalog = mercado eficiente = ~0 deal acionável; o gap mora em
+    lançamentos novos. Mais útil com --all-sets (corta ~832 → ~30 sets);
+    combinado com --sets, intersecta com a lista do usuário.
+  - Novo helper PURO filter_modern_sets(expansions, priority_codes=PRIORITY_SET_CODES):
+    mantém só codes na lista priority, preserva ordem, case-insensitive, tolera
+    code ausente/None. Testável offline (tests/test_skip_backcatalog.py, 11 casos).
+  - INALTERADO: margem bruta, threshold fração, --hub-fee 0.0, validação
+    per-blueprint, skip-list, overrides de timeout por set, filtro TG##.
+  - Obs: v2.16 foi postprocess-only (tabela de entrega obrigatória); por isso o
+    header do scanner pula de v2.15 → v2.17.
 
 Changelog v2.15 (2026-06-15 — overrides de timeout por SET; fim do "churn" vintage):
   - [TIMEOUT vintage] Novo mapa code-level SET_TIMEOUT_OVERRIDES (código CT →
@@ -2860,6 +2875,11 @@ def parse_args():
                          "ignorando tanto --sets quanto a lista 'sets' do config.yaml. "
                          "Use para o scan COMPLETO (weekly). Sem esta flag e sem --sets, "
                          "o escopo cai na lista do config.yaml."))
+    p.add_argument("--skip-backcatalog", action="store_true",
+                   help=("Escaneia só as coleções modernas/curadas (PRIORITY_SET_CODES), "
+                         "pulando o back-catalog (mercado eficiente, ~0 deal acionável). "
+                         "Mais útil com --all-sets: corta ~832 → ~30 sets. Combinado com "
+                         "--sets, intersecta com a lista do usuário."))
     p.add_argument("--threshold", type=float, default=MARGIN_THRESHOLD,
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
@@ -2957,6 +2977,21 @@ PRIORITY_SET_CODES = [
     "sv1", "sv2", "sv3", "sv3pt5", "sv4", "sv4pt5", "sv5", "sv6", "sv6pt5",
     "sv7", "sv8", "sv8pt5", "sv9", "sv10", "zsv10pt5", "me2pt5",
 ]
+
+
+def filter_modern_sets(
+    expansions: list[dict], priority_codes: list[str] = PRIORITY_SET_CODES
+) -> list[dict]:
+    """Mantém só as expansões cujo `code` está em `priority_codes` (modernas/
+    curadas), descartando o back-catalog. É o suporte de `--skip-backcatalog`.
+
+    Lição operacional (auditoria 2026-06-08): back-catalog = mercado eficiente
+    = ~0 deal acionável; o gap de arbitragem mora em lançamentos novos. Função
+    pura (sem rede) → testável offline. Preserva a ordem de entrada;
+    case-insensitive; tolera `code` ausente/None.
+    """
+    prio = {c.lower() for c in priority_codes}
+    return [e for e in expansions if (e.get("code") or "").lower() in prio]
 
 
 def load_config() -> dict:
@@ -3089,6 +3124,16 @@ def main():
             log.warning(f"Sets não encontrados: {missing}")
     else:
         expansions = all_expansions
+
+    # v2.17: --skip-backcatalog restringe às coleções modernas/curadas
+    # (PRIORITY_SET_CODES), pulando o back-catalog (mercado eficiente, ~0 deal).
+    if args.skip_backcatalog:
+        before = len(expansions)
+        expansions = filter_modern_sets(expansions)
+        log.info(
+            f"--skip-backcatalog: {len(expansions)}/{before} expansões modernas "
+            f"(puladas {before - len(expansions)} de back-catalog)"
+        )
 
     # Reordena no escopo COMPLETO: sets de maior valor (SV/curados) PRIMEIRO.
     # O catálogo CT vem old→new; sem isso, os sets modernos (foco) ficariam no
