@@ -285,24 +285,6 @@ except (AttributeError, ValueError):
     # Python <3.7 ou stdout não-reconfigurável (raro). Fallback silencioso.
     pass
 
-
-def _clean_secret(value: "Optional[str]") -> "Optional[str]":
-    """Sanitiza um segredo (CT_JWT / API key) antes de ir pro header HTTP.
-
-    Remove BOM (U+FEFF), zero-width space (U+200B) e whitespace nas pontas. O
-    `requests` codifica headers HTTP em latin-1; um BOM grudado no token (arquivo
-    .env salvo como UTF-8-with-BOM, copy/paste do site) vira `UnicodeEncodeError:
-    'latin-1' codec can't encode '\\ufeff'` e derruba 100% das chamadas — o scan
-    fica "verde mas vazio". `str.strip()` NÃO remove BOM (U+FEFF não é whitespace
-    pra Python), então tratamos explicitamente. Retorna None se sobrar vazio.
-    Mesmo fix do scanner irmão MYP (família de erro recorrente cross-scanner).
-    """
-    if value is None:
-        return None
-    cleaned = value.replace("\ufeff", "").replace("\u200b", "").strip()
-    return cleaned or None
-
-
 # ══════════════════════════════════════════════════════════════════════
 # LOGGING — saída para stdout E arquivo (auditoria pós-execução)
 # ══════════════════════════════════════════════════════════════════════
@@ -3327,7 +3309,7 @@ def main():
             )
             sys.exit(2)
 
-    ct_jwt = _clean_secret(os.getenv("CT_JWT")) or ""
+    ct_jwt = os.getenv("CT_JWT", "").strip()
     if not ct_jwt:
         log.error("CT_JWT não definido. Configure no arquivo .env")
         log.error("Como obter: CardTrader → Settings → API Access → Create New Token")
@@ -3343,9 +3325,9 @@ def main():
     # Pricing provider
     provider_cls = PROVIDERS[args.provider]
     if args.provider == "pokemontcg":
-        pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
+        pricing = provider_cls(os.getenv("POKEMONTCG_API_KEY"), cache)
     elif args.provider == "justtcg":
-        pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
+        pricing = provider_cls(os.getenv("JUSTTCG_API_KEY"), cache)
     else:
         pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
