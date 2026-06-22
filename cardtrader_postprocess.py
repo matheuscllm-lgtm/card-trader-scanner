@@ -1013,6 +1013,9 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     for ci, cn in enumerate(summary.columns, 1):
         ws.column_dimensions[get_column_letter(ci)].width = 40
 
+    # Garante o diretório-alvo antes de salvar (outputs/ é gitignored → ausente
+    # num clone limpo): sem isto o wb.save() quebra com FileNotFoundError.
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     wb.save(output_path)
     print(f"OK: {output_path}")
 

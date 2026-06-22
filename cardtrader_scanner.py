@@ -3032,6 +3032,10 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         cell.fill = header_fill
         cell.font = header_font
 
+    # Garante o diretório-alvo antes de salvar: outputs/ é gitignored e NÃO vem
+    # num clone limpo (sessão Claude Code na nuvem) — sem isto o wb.save() quebra
+    # com FileNotFoundError DEPOIS de um rastreio inteiro (horas), perdendo tudo.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
     log.info(f"✓ Planilha salva: {out_path}")
     return out_path

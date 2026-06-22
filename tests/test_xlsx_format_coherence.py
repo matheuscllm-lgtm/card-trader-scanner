@@ -102,6 +102,28 @@ def _build_xlsx(tmp_path: Path) -> Path:
     return out
 
 
+# ─────────────── Regressão: export_xlsx cria o diretório-alvo ────────────────
+def test_export_xlsx_creates_missing_output_dir(tmp_path):
+    """export_xlsx deve CRIAR o diretório-alvo se ele não existir.
+
+    outputs/ é gitignored e NÃO vem num clone limpo (sessão Claude Code na
+    nuvem) — antes do fix o wb.save() quebrava com FileNotFoundError DEPOIS de um
+    rastreio inteiro (horas no --all-sets), perdendo todo o trabalho em memória.
+    """
+    missing = tmp_path / "outputs" / "nested"  # ainda NÃO existe
+    assert not missing.exists(), "pré-condição: dir-alvo não deve existir"
+    out = missing / "deals.xlsx"
+    export_xlsx(
+        [_make_opp(foil=True)],
+        stats={"listings_scanned": 1},
+        out_path=out,
+        usd_brl=5.05,
+        eur_brl=5.50,
+        threshold=0.25,
+    )  # não deve levantar FileNotFoundError
+    assert out.exists(), "xlsx não foi criado (dir-alvo não foi gerado)"
+
+
 # ─────────────────────────── FIX 2: number_format ──────────────────────────
 def test_number_format_money_percent_coherence(tmp_path):
     """LIVE R$ (I/idx8) money, Markup (J/idx9) %, Net REAL (R/idx17) % (NÃO money)."""
@@ -254,6 +276,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as td:
         tp = Path(td)
         for fn in (
+            test_export_xlsx_creates_missing_output_dir,
             test_number_format_money_percent_coherence,
             test_number_format_full_layout,
             test_conditional_formatting_covers_R_not_Q,
