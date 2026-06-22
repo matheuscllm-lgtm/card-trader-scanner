@@ -43,10 +43,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v5
 
-      - name: Setup Python 3.14
+      - name: Setup Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
@@ -103,6 +103,7 @@ jobs:
           path: |
             cardtrader_scan_weekly_*.xlsx
             cardtrader_relatorio_weekly_*.xlsx
+            cardtrader_relatorio_weekly_*.md
             scan-state/*.checkpoint.jsonl
             scan-state/*.log
           retention-days: 30
