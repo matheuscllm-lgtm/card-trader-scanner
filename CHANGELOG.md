@@ -4,6 +4,55 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-22 — v2.22: contrato de entrega scanner→postprocess (fim da "entrega vazia")
+
+**Por quê (bug real, run 27925869658):** o scanner precificou tudo
+(`37749 listings EN` → `223 após filtros` → `223/223 consultados` →
+`Com preço TCG: 223`), mas **0** listing bateu a margem do threshold. O
+postprocess então entregou `_(nenhum listing precificado — nada a entregar)_` —
+ou seja, **223 precificados, entrega ZERO**.
+
+**Causa-raiz (file:line):**
+- `cardtrader_scanner.py:2572` — `if margin < self.threshold: continue`. O
+  scanner descartava no **scan-time** todo listing abaixo do threshold. Com 0
+  acima de 30%, a aba `Oportunidades` do XLSX saía **só com cabeçalho**.
+- `cardtrader_postprocess.py:1066` — `pd.read_excel(args.input)` lê a primeira
+  aba (`Oportunidades`) → **df vazio** → o fallback near-miss do
+  `build_delivery_markdown` (commit #26) **não tinha dados** pra mostrar →
+  `deals.empty` → "nada a entregar". O fallback estava **derrotado na origem**:
+  as linhas near-miss nunca chegavam ao postprocess.
+- Agravante: `cardtrader_scanner.py` (filtro pós-validação) também esvaziaria a
+  lista — `validation_status NOT_VALIDATED` (near-miss fora dos top-N validados)
+  e `--min-net-margin` culavam todo near-miss.
+
+**Conserto — contrato `keep_all_priced` (default ON):**
+- O scanner agora **persiste TODO listing precificado** no XLSX, mesmo abaixo do
+  threshold (`Opportunity.below_threshold`). O threshold vira **classificação
+  downstream** (o postprocess separa COMPRA/REVISAR e, se nada bate, mostra os
+  near-miss). Contador novo `priced_below_threshold` + linha no resumo
+  (`Near-miss (< X%, no XLSX): N`) — distinção **honesta** entre "0 precificado"
+  e "precificou, 0 acima do threshold".
+- Os filtros duros pós-validação (status inválido, `--min-net-margin`) só culam
+  o **subconjunto de oportunidades**; near-misses ficam preservados como
+  referência. Re-anexados ao XLSX ordenados por margem bruta.
+- Flag legada `--opportunities-only` restaura o XLSX enxuto (filtro duro antigo).
+- `postprocess.enrich_df`: fallback de near-miss preenche `live_brl`/`net_margin`
+  a partir dos campos de **scan** (`Scan R$ (raw)` / `Net Margin % (scan)`) só
+  onde os campos REAL faltam (linha não validada) — assim a tabela near-miss sai
+  com Margem%/CT US$ preenchidos, não vazios. Não toca linhas validadas.
+- Mensagem do beco verdadeiramente-vazio reescrita: deixa explícito que df vazio
+  agora = **0 precificado** (sem cobertura TCG / 0 passou NM/EN/preço), e que
+  "precificou mas 0 acima do threshold" vira a **tabela near-miss**.
+
+**Invariantes preservadas:** margem BRUTA (sem taxa embutida, `--hub-fee 0.0`);
+coluna `Links` combinada `[oferta](url) · [TCG](url)`; classificação
+COMPRA/REVISAR; threshold em fração.
+
+**Testes:** novo `tests/test_delivery_handoff_contract.py` (4 casos) trava o
+contrato ponta-a-ponta: near-miss sobrevive ao XLSX, nomes de coluna do handoff,
+XLSX→entrega não-vazia (anti-regressão do beco), e o opt-out legado. Suíte
+**132/132 verde**.
+
 ## 2026-06-21 — Scanner v2.21: lista curada "vintage core" + flag `--vintage`
 
 **Por quê:** o operador pediu pra incorporar os sets vintage ao scanner. O
