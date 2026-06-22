@@ -696,6 +696,12 @@ class Opportunity:
     # reverseHolofoil NÃO dispara a flag de propósito: é o fallback INTENCIONAL
     # pra Holo Rare vintage (v2.10 Layer 4.1), onde non-foil↔reverse é correto.
     variant_low_confidence: bool = False
+    # v2.22 (2026-06-22): True quando o listing foi precificado mas a margem
+    # bruta ficou ABAIXO do threshold. Sob o contrato de entrega (keep_all_priced),
+    # essas linhas são persistidas no XLSX pra alimentar o fallback near-miss do
+    # postprocess — em vez de serem descartadas no scan (o que esvaziava a
+    # entrega). NÃO conta como "oportunidade" no funil; é referência near-miss.
+    below_threshold: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2117,7 +2123,8 @@ class Scanner:
                  per_set_timeout_s: float = DEFAULT_PER_SET_TIMEOUT_MIN * 60,
                  ignore_skip_list: bool = False,
                  chase_only: bool = False,
-                 max_consecutive_misses: int = 0):
+                 max_consecutive_misses: int = 0,
+                 keep_all_priced: bool = True):
         self.ct = ct
         self.pricing = pricing
         self.cache = cache
@@ -2147,6 +2154,17 @@ class Scanner:
         # list em vez de moer centenas de listings no rate limit. 0 = desativado
         # (comportamento histórico preservado). Pendência v2.4 conhecida.
         self.max_consecutive_misses = max_consecutive_misses
+        # v2.22 (2026-06-22): contrato de ENTREGA scanner→postprocess. Quando
+        # True (default), o scanner persiste TODO listing precificado no XLSX,
+        # não só os que batem o `threshold`. O threshold vira CLASSIFICAÇÃO
+        # downstream (o postprocess separa COMPRA/REVISAR e, se nada bate,
+        # mostra os near-miss — fallback do commit #26). Sem isso, um scan que
+        # precificou N>0 mas 0 acima do threshold escrevia uma aba
+        # "Oportunidades" só com cabeçalho → o postprocess lia df VAZIO →
+        # entregava "_(nenhum listing precificado — nada a entregar)_", mesmo
+        # com N precificados (run 27925869658: 223 precificados, 0 ≥ threshold,
+        # entrega vazia). `--opportunities-only` restaura o filtro duro antigo.
+        self.keep_all_priced = keep_all_priced
         # PR-F (2026-05-28): defaults seguros pra heartbeat/checkpoint quando
         # scan_expansion é chamado direto (tests/diagnose) sem passar por scan().
         # scan() reaponta esses dois quando há um CheckpointWriter ativo.
@@ -2167,6 +2185,7 @@ class Scanner:
             "expansions_mass_pricing_abort": 0,  # v2.9: sets abortados por >50% pricing fails
             "skipped_non_chase": 0,           # v2.13: listings cortados por --chase-only
             "expansions_no_coverage_abort": 0,  # v2.13: sets abortados por N misses consecutivos
+            "priced_below_threshold": 0,      # v2.22: precificados mas < threshold (near-miss, persistidos)
         }
         # v2.9 (Codex H5): threshold pra abortar set quando pricing está
         # massivamente quebrado (schema drift / SSL / endpoint down). 50% das
@@ -2569,13 +2588,21 @@ class Scanner:
             ct_brl = l.price_brl
             custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
             margin = (tcg_brl - custo_brl) / tcg_brl
-            if margin < self.threshold:
+            below_threshold = margin < self.threshold
+            if below_threshold and not self.keep_all_priced:
+                # Modo --opportunities-only (legado): descarta o near-miss.
                 continue
 
             shipping_brl = self._estimate_shipping_brl(l)
             net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
 
-            self.stats["opportunities_found"] += 1
+            if below_threshold:
+                # v2.22: precificado mas abaixo do threshold. Persistido pro
+                # XLSX (contrato de entrega → fallback near-miss do postprocess),
+                # mas NÃO conta como oportunidade no funil.
+                self.stats["priced_below_threshold"] += 1
+            else:
+                self.stats["opportunities_found"] += 1
             # v2.7.1: tcg_url vem do provider (last call). Pode ser None se
             # provider != pokemontcg ou se a card não tem entry TCGPlayer.
             tcg_url = getattr(self.pricing, "last_tcg_url", None)
@@ -2621,6 +2648,7 @@ class Scanner:
                 valorization_note=val_note,
                 set_release_date=set_release,
                 variant_low_confidence=variant_low_conf,
+                below_threshold=below_threshold,
             )
 
         self.stats["expansions_scanned"] += 1
@@ -3134,6 +3162,14 @@ def parse_args():
                          "comportamento histórico). Sugestão p/ --all-sets: 40."))
     p.add_argument("--clear-skip-list", action="store_true",
                    help="v2.4: apaga scanner_skip_list.json antes de rodar (reset total).")
+    # v2.22 (2026-06-22): contrato de entrega scanner→postprocess.
+    p.add_argument("--opportunities-only", action="store_true",
+                   help=("v2.22: comportamento LEGADO — escreve no XLSX só os "
+                         "listings que batem o --threshold. Por padrão (omitido) "
+                         "o scanner persiste TODO listing precificado, mesmo "
+                         "abaixo do threshold, pra alimentar o fallback near-miss "
+                         "do postprocess (a entrega nunca fica vazia quando há "
+                         "≥1 precificado). Use só se quiser o XLSX enxuto."))
     # v2.6 (2026-05-17): partial JSONL checkpoint crash-recovery
     p.add_argument("--checkpoint-every", type=int, default=10,
                    help=("v2.6: emite checkpoint JSONL append-only a cada N sets "
@@ -3438,6 +3474,7 @@ def main():
         ignore_skip_list=args.ignore_skip_list,
         chase_only=args.chase_only,
         max_consecutive_misses=args.max_consecutive_misses,
+        keep_all_priced=not args.opportunities_only,
     )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.
@@ -3482,7 +3519,18 @@ def main():
         log.info("Margem BRUTA (--hub-fee 0.0): custo = preço do site, SEM taxa. "
                  "Operador calcula Hub fee/frete/cartão/IOF por fora (v2.12).")
 
-    # v2.0 — validação per-blueprint dos top N
+    # v2.22 (2026-06-22): sob o contrato de entrega (keep_all_priced), os
+    # near-misses (below_threshold=True) NÃO podem ser descartados pelos
+    # filtros pós-validação, senão um scan sem deal acima do threshold volta a
+    # esvaziar o XLSX → "nenhum listing precificado". Solução: os filtros duros
+    # (status inválido, --min-net-margin) só culam o SUBCONJUNTO de
+    # OPORTUNIDADES; os near-miss precificados ficam preservados como referência
+    # pro fallback near-miss do postprocess. Em --opportunities-only (legado),
+    # não há near-miss na lista, então o comportamento é idêntico ao antigo.
+    near_misses = [o for o in opps if o.below_threshold] if scanner.keep_all_priced else []
+    opps = [o for o in opps if not o.below_threshold] if scanner.keep_all_priced else opps
+
+    # v2.0 — validação per-blueprint dos top N (só sobre as OPORTUNIDADES)
     if args.validate_top > 0 and opps:
         t1 = time.time()
         scanner.validate_per_blueprint(opps, top_n=args.validate_top)
@@ -3513,6 +3561,19 @@ def main():
         # quando houve validação, não só quando min_net_margin > 0.
         opps.sort(key=lambda o: o.real_net_margin_pct or -999, reverse=True)
 
+    # v2.22: re-anexa os near-misses precificados (ordenados por margem bruta
+    # desc) DEPOIS das oportunidades. Assim o XLSX nunca volta vazio quando há
+    # ≥1 listing precificado, e o postprocess sempre tem dados pro near-miss.
+    if near_misses:
+        near_misses.sort(key=lambda o: o.margin_pct, reverse=True)
+        if not opps:
+            log.info(
+                f"0 oportunidades ≥ {args.threshold:.0%}, mas {len(near_misses)} "
+                f"listing(s) precificado(s) abaixo do threshold — persistidos no "
+                f"XLSX como near-miss (entrega não fica vazia)."
+            )
+        opps = opps + near_misses
+
     # Export — out_path já resolvido acima (v2.6 fix: precisa antes do scan
     # pra calcular .checkpoint.jsonl sidecar)
     export_xlsx(opps, scanner.stats, out_path,
@@ -3533,6 +3594,11 @@ def main():
     print(f"  Após filtros           : {scanner.stats['listings_after_filters']}")
     print(f"  Com preço TCG          : {scanner.stats['tcg_price_found']}")
     print(f"  Oportunidades ≥ {args.threshold:.0%}   : {scanner.stats['opportunities_found']}")
+    # v2.22: near-misses precificados (abaixo do threshold). Distinção honesta
+    # "0 acima do threshold" vs "0 precificado" — os near-miss vão no XLSX e
+    # alimentam o fallback de entrega do postprocess.
+    if scanner.keep_all_priced and scanner.stats.get("priced_below_threshold", 0) > 0:
+        print(f"  Near-miss (< {args.threshold:.0%}, no XLSX): {scanner.stats['priced_below_threshold']}")
     print(f"  Câmbio USD→BRL          : {scanner.usd_brl:.4f}")
     print(f"  Câmbio EUR→BRL          : {scanner.eur_brl:.4f}")
     # v2.9 (Codex H5): expor pricing failures pra operador detectar drift cedo

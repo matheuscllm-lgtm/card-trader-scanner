@@ -518,6 +518,28 @@ def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.0
 
 def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float = HUB_FEE_RATE) -> pd.DataFrame:
     df = normalize_columns(raw_df).copy()
+    # v2.22 (2026-06-22): fallback de near-miss. Listings precificados ABAIXO do
+    # threshold (não validados per-blueprint) chegam SEM "LIVE R$ (real)" nem
+    # "Net Margin % REAL" — só com os campos de SCAN ("Scan R$ (raw)" /
+    # "Net Margin % (scan)"). Sem este fallback, a linha near-miss vinha na
+    # tabela de entrega com Margem%/CT US$ vazios. Preenche `live_brl`/
+    # `net_margin` a partir dos campos de scan SÓ onde os REAL faltam (não toca
+    # nas linhas validadas COMPRA/REVISAR — essas já têm o valor real).
+    scan_brl_col = next((c for c in raw_df.columns if str(c).strip() == "Scan R$ (raw)"), None)
+    scan_net_col = next((c for c in raw_df.columns if str(c).strip() == "Net Margin % (scan)"), None)
+    if scan_brl_col is not None:
+        if "live_brl" not in df.columns:
+            df["live_brl"] = pd.to_numeric(raw_df[scan_brl_col], errors="coerce")
+        else:
+            df["live_brl"] = pd.to_numeric(df["live_brl"], errors="coerce").fillna(
+                pd.to_numeric(raw_df[scan_brl_col], errors="coerce")
+            )
+    if scan_net_col is not None:
+        scan_net = pd.to_numeric(raw_df[scan_net_col], errors="coerce")
+        if "net_margin" not in df.columns:
+            df["net_margin"] = scan_net
+        else:
+            df["net_margin"] = pd.to_numeric(df["net_margin"], errors="coerce").fillna(scan_net)
     # v2.1 #2 fix: defensive recompute ANTES de classify_decision consumir.
     # v2.12: hub_fee_rate default 0.0 → margem BRUTA.
     df = _recompute_margin_with_fee(df, hub_fee_rate=hub_fee_rate)
@@ -886,7 +908,17 @@ def build_delivery_markdown(
         f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
     )
     if deals.empty:
-        return title + "\n\n_(nenhum listing precificado — nada a entregar)_"
+        # Sob o contrato de entrega v2.22, o scanner persiste TODO listing
+        # precificado no XLSX (mesmo abaixo do threshold). Logo, df vazio aqui
+        # significa MESMO "0 precificado" (set sem cobertura TCG / 0 listing
+        # passou os filtros NM/EN/preço), não "precificou mas nada bateu o
+        # threshold" — esse caso vira a tabela near-miss acima.
+        return title + (
+            "\n\n_(0 listing precificado — nada a entregar. Nenhuma carta passou "
+            "os filtros (NM/EN/≥preço) com preço de referência TCG. Não confundir "
+            "com 'precificou mas 0 acima do threshold' — esse caso mostra a tabela "
+            "near-miss.)_"
+        )
 
     header = "| " + " | ".join(_DELIVERY_HEADERS) + " |"
     sep = "| " + " | ".join("---" for _ in _DELIVERY_HEADERS) + " |"
