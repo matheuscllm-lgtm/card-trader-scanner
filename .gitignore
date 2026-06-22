@@ -45,6 +45,8 @@ debug_*.html
 scanner_skip_list.json
 # v2.7 portalocker sidecar
 scanner_skip_list.json.lock
+# v2.14 run guard lock (liveness runtime — concurrency guard, não código)
+scanner_run.lock
 scanner_skip_list.json.tmp*
 # skip-list backups manuais (data, não código)
 scanner_skip_list*.bak*

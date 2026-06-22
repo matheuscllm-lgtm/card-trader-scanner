@@ -41,10 +41,10 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v5
 
-      - name: Setup Python 3.14
+      - name: Setup Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install dependencies
@@ -90,6 +90,7 @@ jobs:
           path: |
             cardtrader_scan_*.xlsx
             cardtrader_relatorio_*.xlsx
+            cardtrader_relatorio_*.md
             cardtrader_scanner.log
           retention-days: 30
           if-no-files-found: error

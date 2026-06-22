@@ -860,8 +860,26 @@ def get_eur_to_brl(cache: Cache) -> float:
 #   - 200 req / 10s no total
 # Estratégia: delay de 0.15s entre requests (~6.7/s, folga de 30%)
 # ══════════════════════════════════════════════════════════════════════
+def _clean_secret(value: Optional[str]) -> Optional[str]:
+    """Sanitiza um segredo (token/API key) lido de env/.env/secret do CI.
+
+    Remove BOM (U+FEFF), zero-width space (U+200B) e espacos/quebras nas pontas.
+    Headers HTTP sao codificados em latin-1 pelo `requests`; um BOM colado por
+    engano no secret (arquivo salvo como UTF-8-with-BOM, copy/paste do site)
+    vira `UnicodeEncodeError: 'latin-1' codec can't encode '\\ufeff'` e derruba
+    100% das chamadas — foi exatamente o que abortou o scan no GitHub Actions
+    (mass pricing failure 20/20). `str.strip()` NAO remove BOM, entao tratamos
+    explicitamente. Retorna None se sobrar vazio.
+    """
+    if value is None:
+        return None
+    cleaned = value.replace("\ufeff", "").replace("\u200b", "").strip()
+    return cleaned or None
+
+
 class CardTraderClient:
     def __init__(self, jwt: str, delay: float = REQUEST_DELAY_CT):
+        jwt = _clean_secret(jwt)
         if not jwt:
             raise ValueError("CT_JWT não configurado no .env")
         self.session = requests.Session()
@@ -1072,6 +1090,7 @@ class PokemonTcgIoProvider(PricingProvider):
     def __init__(self, api_key: Optional[str], cache: Cache,
                  delay: float = REQUEST_DELAY_PRICING):
         self.session = requests.Session()
+        api_key = _clean_secret(api_key)
         if api_key:
             self.session.headers["X-Api-Key"] = api_key
         self.cache = cache
@@ -3305,7 +3324,7 @@ def main():
             )
             sys.exit(2)
 
-    ct_jwt = os.getenv("CT_JWT", "").strip()
+    ct_jwt = _clean_secret(os.getenv("CT_JWT"))
     if not ct_jwt:
         log.error("CT_JWT não definido. Configure no arquivo .env")
         log.error("Como obter: CardTrader → Settings → API Access → Create New Token")
@@ -3321,9 +3340,9 @@ def main():
     # Pricing provider
     provider_cls = PROVIDERS[args.provider]
     if args.provider == "pokemontcg":
-        pricing = provider_cls(os.getenv("POKEMONTCG_API_KEY"), cache)
+        pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
     elif args.provider == "justtcg":
-        pricing = provider_cls(os.getenv("JUSTTCG_API_KEY"), cache)
+        pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
     else:
         pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
