@@ -21,7 +21,7 @@ Invariantes que valem para TODOS os scanners:
 - **Só Near Mint** — condição por match EXATO `== "NM"`, nunca substring (já vazou SP).
 - **Nunca inventar preço** — fonte falhou → marca fallback/erro e segue; jamais fabrica número.
 - **Entrega = tabela markdown no chat** (nunca XLSX por padrão), gerada pela ferramenta do repo, mostrando TODAS as linhas (aprovadas + rejeitadas). Coluna `Carta` = nome + número; coluna `Links` combinada = `[oferta](url) · [TCG/referência](url)`.
-- ⚠️ **Convenção de threshold:** MYP = percentual inteiro (`30`); CardTrader/COMC/eBay = fração (`0.30`).
+- ⚠️ **Convenção de threshold:** MYP **e eBay** = percentual inteiro (`30`); CardTrader/COMC = fração (`0.30`).
 
 Erros recorrentes (3 famílias — detalhe no manual):
 1. **Segredo/ambiente:** BOM/zero-width numa chave → crash latin-1 no header → scan "verde mas vazio". Setar sem BOM (`printf '%s' 'KEY' | gh secret set`) **e** sanitizar ao ler no código (`.strip()` NÃO tira BOM).
