@@ -434,7 +434,16 @@ _NUMBER_IN_VERSION = re.compile(r"(\d+)\s*/\s*\d+")
 # nome. Resultado: 35 de 38 oportunidades em scan SWSH (2026-04-29 madrugada)
 # eram falsos positivos com margens "90%+ líq" estatisticamente impossíveis.
 # Solução: skipar listings cujo collector_number bate `^TG\d+`.
-_TRAINER_GALLERY_RE = re.compile(r"^TG\d+", re.IGNORECASE)
+#
+# Galarian Gallery (GG##) é o subset irmão (SWSH: Brilliant Stars / Astral
+# Radiance / Lost Origin / Silver Tempest / Crown Zenith) e sofre a MESMA
+# inflação de referência pokemontcg.io (5-10×). O postprocess já roteia GG## pra
+# NAO/manual (cardtrader_postprocess.TRAINER_GALLERY_RE = ^(?:TG|GG)\d+), mas até
+# agora só o TG## era skipado no scanner — GG## gastava chamadas de pricing e só
+# era pego downstream. Estendemos a regex pra alinhar as duas camadas (defense in
+# depth): GG## também é pulado em scan time, igual TG##. O postprocess mantém o
+# guard (belt-and-suspenders) — nada é removido lá.
+_TRAINER_GALLERY_RE = re.compile(r"^(?:TG|GG)\d+", re.IGNORECASE)
 
 
 # ══════════════════════════════════════════════════════════════════════

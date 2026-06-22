@@ -20,6 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cardtrader_postprocess as pp
+import cardtrader_scanner as cs
 
 
 def test_gallery_regex_covers_tg_and_gg():
@@ -34,6 +35,29 @@ def test_gallery_regex_covers_tg_and_gg():
     assert not re_.match("091a")   # alpha-suffix promo/League variant (own path)
     assert not re_.match("GG")     # needs a number
     assert not re_.match("EGG12")  # must anchor at start
+
+
+def test_scanner_regex_skips_tg_and_gg_at_scan_time():
+    """Scanner-level defense in depth: _TRAINER_GALLERY_RE skips both TG## and GG##.
+
+    Previously only TG## was skipped at scan time; GG## listings reached the
+    pricing calls and were only caught downstream in postprocess. Both subsets
+    inflate the pokemontcg.io reference 5-10x, so they should be dropped before
+    pricing — exactly like _passes_filters does via this regex.
+    """
+    re_ = cs._TRAINER_GALLERY_RE
+    # Both gallery subsets are skipped at scan time, case-insensitively.
+    assert re_.match("TG12")
+    assert re_.match("GG12")
+    assert re_.match("gg09")
+    assert re_.match("Gg7")
+    # Plain numbers and anchored non-gallery strings are NOT skipped.
+    assert not re_.match("199")
+    assert not re_.match("GG")     # needs a number
+    assert not re_.match("EGG12")  # must anchor at start
+    # Scanner and postprocess gallery regexes stay in lockstep (same coverage).
+    for num in ("TG12", "GG44", "gg09", "199", "091a", "EGG12", "GG"):
+        assert bool(re_.match(num)) == bool(pp.TRAINER_GALLERY_RE.match(num)), num
 
 
 def _gallery_flag(card_number):
