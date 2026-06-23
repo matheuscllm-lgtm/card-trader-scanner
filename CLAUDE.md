@@ -28,7 +28,7 @@ Erros recorrentes (3 famílias — detalhe no manual):
 2. **Git:** galho ou `main` local defasado por squash-merge PARECE pendência. O teste real de "já mergeado" é `git diff --stat origin/main <galho>` estar vazio (não `git merge-base`).
 3. **Honestidade de preço:** inflação de referência, fallback tratado como real, NM frouxo → sempre validar versão/condição e rotular fallback.
 
-**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata); chaves = `CT_JWT`, `POKEMONTCG_API_KEY` (secrets no GitHub).
+**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback tcgcsv.com** (v2.23) pra sets que a pokemontcg.io não precifica (ex.: `asc`/Ascended Heroes, que sem isso fica invisível); a fonte é rotulada (`Fonte Preço`/`price_source`); desliga com `--no-tcgcsv-fallback`. Chaves = `CT_JWT`, `POKEMONTCG_API_KEY` (secrets no GitHub).
 
 ## Em uma frase
 
@@ -354,9 +354,15 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.22 (contrato de entrega scanner→postprocess — fim da
-"entrega vazia": o scanner persiste todo listing precificado no XLSX e o
-threshold vira classificação downstream com fallback near-miss; 2026-06-22.
+*Versão do scanner: v2.23 (fonte de FALLBACK tcgcsv.com — preenche SÓ os sets
+que a pokemontcg.io não precifica, ex.: asc/Ascended Heroes, que sem isso ficava
+invisível; resolução de set unique-match-only, MESMA seleção de variante da
+pokemontcg.io — sem colapsar pro subtype mais barato —, validação per-blueprint
+como guard final, fonte rotulada via `price_source`/coluna `Fonte Preço`, opt-out
+`--no-tcgcsv-fallback`; 150 testes; 2026-06-23). Inclui v2.22 (contrato de entrega
+scanner→postprocess — fim da "entrega vazia": o scanner persiste todo listing
+precificado no XLSX e o threshold vira classificação downstream com fallback
+near-miss; 2026-06-22.
 Pós-v2.22 mergeados: GG## pulado em scan time igual TG## (regex `^(?:TG|GG)\d+`,
 #36) e write_xlsx garante o diretório-alvo antes de salvar — fim do
 FileNotFoundError em clone limpo sem `outputs/`, #37). Inclui v2.21 (lista
