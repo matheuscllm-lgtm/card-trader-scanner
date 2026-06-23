@@ -275,7 +275,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import portalocker
 import requests
@@ -354,6 +354,57 @@ PRICE_LOGIC_VERSION = "2"
 REQUEST_DELAY_CT = 0.15          # CT tem limite 10/s → 0.15s deixa folga
 REQUEST_DELAY_PRICING = 0.1      # pokemontcg.io permite 20k/dia (~0.23/s)
 TIMEOUT = 30
+
+# ── v2.23: fonte de FALLBACK de preço tcgcsv.com ───────────────────────────
+# tcgcsv.com = dump diário grátis dos preços TCGplayer (mesma fonte que a
+# pokemontcg.io agrega, capturada por outra rota). Aqui é usada SÓ como
+# FALLBACK: quando a pokemontcg.io devolve ZERO match de preço pra um set
+# inteiro (caso Ascended Heroes / asc — a pokemontcg.io lista as cartas mas SEM
+# bloco tcgplayer.prices → todo listing falha → o set estoura o timeout e cai na
+# skip-list, ficando INVISÍVEL). O tcgcsv tem o set completo (asc = 612 produtos,
+# 650/650 com preço) e é superset estrito da pokemontcg.io nos sets testados.
+# Categoria 3 = Pokémon. User-Agent é OBRIGATÓRIO (sem ele = 401).
+TCGCSV_BASE = "https://tcgcsv.com/tcgplayer/3"
+TCGCSV_USER_AGENT = (
+    "card-trader-scanner/2.23 "
+    "(+github.com/matheuscllm-lgtm/card-trader-scanner)"
+)
+
+# setcode pokemontcg.io → abreviação tcgcsv (campo `abbreviation` em /groups).
+# Portado do MYP (verificado 1-a-1 contra o dump real de /groups, 2026-06-22).
+# A ponte CT é em 2 saltos: CT set code → setcode pokemontcg.io (via
+# SET_ALIAS_TO_PTCG, já existente) → abbr tcgcsv (esta tabela). Resolução é
+# UNIQUE-MATCH-ONLY (ver resolve_tcgcsv_group_id): abbr exata, e o fallback por
+# substring de nome só aceita match ÚNICO — ambíguo → None → set pulado (NUNCA
+# chuta um group errado, que injetaria preço de promo/energy como "real").
+PTCG_SETCODE_TO_TCGCSV_ABBR = {
+    "sv10": "DRI",      # Destined Rivals
+    "sv9": "JTG",       # Journey Together
+    "sv8pt5": "PRE",    # Prismatic Evolutions
+    "sv8": "SSP",       # Surging Sparks
+    "sv7": "SCR",       # Stellar Crown
+    "sv6pt5": "SFA",    # Shrouded Fable
+    "sv6": "TWM",       # Twilight Masquerade
+    "sv5": "TEF",       # Temporal Forces
+    "sv4pt5": "PAF",    # Paldean Fates
+    "sv4": "PAR",       # Paradox Rift
+    "sv3": "OBF",       # Obsidian Flames
+    "sv3pt5": "MEW",    # 151
+    "sv2": "PAL",       # Paldea Evolved
+    "me2pt5": "ASC",    # Ascended Heroes (pokemontcg.io SEM preço → tcgcsv resgata)
+    "me2": "PFL",       # Phantasmal Flames
+    "me1": "MEG",       # Mega Evolution (base)
+    "swsh12pt5": "CRZ",   # Crown Zenith
+    "swsh12": "SWSH12",   # Silver Tempest
+    "swsh11": "SWSH11",   # Lost Origin
+    "swsh10": "SWSH10",   # Astral Radiance
+    "swsh9": "SWSH09",    # Brilliant Stars (tcgcsv usa zero-pad: SWSH09)
+    "swsh8": "SWSH08",    # Fusion Strike
+    "swsh7": "SWSH07",    # Evolving Skies
+    "pgo": "PGO",         # Pokémon GO
+    "zsv10pt5": "BLK",    # Black Bolt
+    "rsv10pt5": "WHT",    # White Flare
+}
 
 # Frete base por tier de seller (EUR — CT é europeu por origem).
 # Convertido pra BRL via FX no Scanner._estimate_shipping_brl.
@@ -698,6 +749,12 @@ class Opportunity:
     # Holofoil ($50 mesma carta). Valores: "holofoil", "reverseHolofoil",
     # "normal", "unlimitedHolofoil", "" (provider != pokemontcg ou sem variant).
     price_variant_used: Optional[str] = None
+    # v2.23: FONTE do preço de referência — "pokemontcg" (default) ou "tcgcsv"
+    # (fallback consultado só quando a pokemontcg.io não precifica o set inteiro,
+    # ex.: asc/Ascended Heroes). Ambos são preços TCGplayer REAIS; o rótulo é só
+    # proveniência (honestidade real-vs-fonte) pro operador distinguir um deal de
+    # fallback de um da pokemontcg.io. "" quando não setado.
+    price_source: Optional[str] = None
     # v2.13 (2026-06-09): frente "chase cards" — tier de raridade (TOP/MID/
     # MODEST/BULK/""). Derivado da rarity oficial pokemontcg.io quando
     # disponível, senão da rarity do blueprint CT. Usado pelo --chase-only e
@@ -1105,6 +1162,64 @@ def _rarity_is_holo(*rarities: Optional[str]) -> bool:
         if "holo" in rl or "shining" in rl:
             return True
     return False
+
+
+# Variantes 1stEdition: raras e infladas 3-10× — o operador não vende 1st Ed.
+# Excluídas SEMPRE da seleção de variante (both pokemontcg.io e tcgcsv).
+_EXCLUDED_TCG_VARIANTS = {"1stEditionHolofoil", "1stEditionNormal"}
+
+
+def select_tcgplayer_variant_price(
+    tcg_prices: dict,
+    foil: Optional[bool],
+    is_holo: bool,
+) -> tuple[Optional[str], Optional[dict]]:
+    """v2.23: seleção de variante TCGplayer CIENTE de raridade + reverse.
+
+    FONTE ÚNICA da prioridade de variante — usada pelo provider pokemontcg.io
+    (`PokemonTcgIoProvider.market_price_usd`) E pelo fallback tcgcsv
+    (`TcgCsvFallbackProvider`). Mantê-la num só lugar é o que garante FIDELIDADE
+    DE VARIANTE entre as duas fontes: o bug v2.18 (Gengar holofoil $146 vs
+    reverseHolofoil $1599, 10× inflado) volta se uma fonte colapsar pra "menor
+    subtype" (o atalho estilo MYP `_min_tcg_usd`). Aqui NUNCA se escolhe pelo
+    preço — escolhe-se pela variante CORRETA segundo o `foil`/reverse do listing
+    e a raridade (holo vs base), e só então se lê o market daquela variante.
+
+    `tcg_prices`: dict {variantName: {"market": float, "low": ..., "mid": ...}}
+      no vocabulário TCGplayer (normal / holofoil / reverseHolofoil /
+      unlimitedHolofoil / 1stEdition*). O caller adapta a forma da fonte pra
+      este vocabulário ANTES de chamar (o tcgcsv mapeia subTypeName→isto).
+    `foil`: True = listing reverse-holo (pokemon_reverse=True); False = não
+      reverse; None = sinal ausente (cache miss antigo / chamada direta).
+    `is_holo`: a carta é intrinsecamente holográfica (Holo Rare etc.) — vem de
+      `_rarity_is_holo(listing_rarity, source_rarity)`.
+
+    Retorna `(variant_name, price_dict)` da variante escolhida, ou `(None, None)`
+    se a variante REQUERIDA (e suas alternativas canônicas) não existir com
+    `market` > 0 → caller pula o card (NUNCA substitui por outro subtype).
+    """
+    if foil is True:
+        # Listing reverse-holo (pokemon_reverse=True) → reverseHolofoil.
+        priority = ["reverseHolofoil", "holofoil", "unlimitedHolofoil", "normal"]
+    elif foil is False:
+        if is_holo:
+            # Holo Rare padrão (não-reverse) → printagem holo base.
+            priority = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
+        else:
+            # Carta base não-holo → normal; reverse por último.
+            priority = ["normal", "holofoil", "unlimitedHolofoil", "reverseHolofoil"]
+    else:
+        # Foil-flag ausente (cache miss antigo ou provider chamado direto).
+        # Preserva a prioridade v2.7 Layer 2.
+        priority = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
+
+    for variant in priority:
+        if variant in _EXCLUDED_TCG_VARIANTS:
+            continue
+        entry = tcg_prices.get(variant)
+        if entry and entry.get("market"):
+            return variant, entry
+    return None, None
 
 
 class PokemonTcgIoProvider(PricingProvider):
@@ -1573,36 +1688,15 @@ class PokemonTcgIoProvider(PricingProvider):
         #
         # EXCLUIR sempre: `1stEditionHolofoil`, `1stEditionNormal` (variantes
         # raras, inflam 3-10x; operador não vende 1st Ed).
-        EXCLUDED = {"1stEditionHolofoil", "1stEditionNormal"}
+        # v2.23: seleção de variante extraída pro helper module-level
+        # `select_tcgplayer_variant_price` (fonte ÚNICA compartilhada com o
+        # fallback tcgcsv). Comportamento BYTE-IDÊNTICO ao inline v2.18.
         is_holo = _rarity_is_holo(rarity, card.get("rarity"))
-        if foil is True:
-            # Listing reverse-holo (pokemon_reverse=True) → reverseHolofoil.
-            PRIORITY = ["reverseHolofoil", "holofoil", "unlimitedHolofoil", "normal"]
-        elif foil is False:
-            if is_holo:
-                # Holo Rare padrão (não-reverse) → printagem holo base.
-                PRIORITY = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
-            else:
-                # Carta base não-holo → normal; reverse por último.
-                PRIORITY = ["normal", "holofoil", "unlimitedHolofoil", "reverseHolofoil"]
-        else:
-            # Foil-flag ausente (cache miss antigo ou provider chamado direto).
-            # Preserve v2.7 Layer 2 priority.
-            PRIORITY = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
-
-        chosen = None
-        chosen_variant = None
-        for variant in PRIORITY:
-            if variant in EXCLUDED:
-                continue
-            if variant in tcg and tcg[variant].get("market"):
-                chosen = tcg[variant]
-                chosen_variant = variant
-                break
+        chosen_variant, chosen = select_tcgplayer_variant_price(tcg, foil, is_holo)
         if not chosen:
             # Nenhuma variante canônica → return None. Pre-fix tinha fallback
             # "primeira variante disponível" que pegava 1stEdition em vintage.
-            available = [v for v in tcg.keys() if v not in EXCLUDED]
+            available = [v for v in tcg.keys() if v not in _EXCLUDED_TCG_VARIANTS]
             log.debug(
                 f"no canonical variant for {card_name} ({set_code}/{collector_number}): "
                 f"available={list(tcg.keys())} canonical_after_exclusion={available} foil={foil}"
@@ -1627,6 +1721,246 @@ class PokemonTcgIoProvider(PricingProvider):
             pass
         self.cache.set_price(cache_key, market, low, mid, card)
         return market
+
+
+# ── v2.23: helpers tcgcsv (módulo-level, sem rede nos testes via mock) ──────
+
+# subTypeName do tcgcsv → vocabulário de variante TCGplayer usado pela seleção
+# (`select_tcgplayer_variant_price`). O tcgcsv expõe um preço POR subtype; este
+# mapa é o que permite reusar a MESMA escada de variante da pokemontcg.io —
+# garantindo fidelidade (holo rare → holofoil, reverse → reverseHolofoil), NÃO
+# o colapso "menor subtype" do MYP. Subtypes desconhecidos são ignorados.
+TCGCSV_SUBTYPE_TO_VARIANT = {
+    "Normal": "normal",
+    "Holofoil": "holofoil",
+    "Reverse Holofoil": "reverseHolofoil",
+    "Unlimited": "normal",
+    "Unlimited Holofoil": "unlimitedHolofoil",
+    "1st Edition": "1stEditionNormal",
+    "1st Edition Normal": "1stEditionNormal",
+    "1st Edition Holofoil": "1stEditionHolofoil",
+}
+
+
+def tcgcsv_fetch_groups(session) -> Optional[list]:
+    """v2.23: baixa a lista de groups (sets) do tcgcsv (categoria 3 = Pokémon).
+
+    Retorna a lista `results` (cada item: {groupId, name, abbreviation, ...}) ou
+    None se a request falhar. User-Agent é OBRIGATÓRIO (sem ele = 401)."""
+    try:
+        r = session.get(f"{TCGCSV_BASE}/groups",
+                        headers={"User-Agent": TCGCSV_USER_AGENT}, timeout=20)
+        if r.status_code != 200:
+            log.debug(f"tcgcsv /groups status {r.status_code}")
+            return None
+        results = (r.json() or {}).get("results")
+        return results if isinstance(results, list) else None
+    except Exception as e:  # noqa: BLE001
+        log.debug(f"tcgcsv /groups falhou: {e!r}")
+        return None
+
+
+def resolve_tcgcsv_group_id(
+    ptcg_setcodes: list[str], set_name: str, groups: list
+) -> Optional[int]:
+    """v2.23: setcode(s) pokemontcg.io (+ nome do set CT) → tcgcsv groupId.
+
+    UNIQUE-MATCH-ONLY — nunca chuta um group errado:
+      1. Abreviação conhecida: pra cada setcode candidato (CT code → ptcg via
+         SET_ALIAS_TO_PTCG), olha PTCG_SETCODE_TO_TCGCSV_ABBR e casa o campo
+         `abbreviation` do group. Caminho primário, exato.
+      2. Fallback por NOME: o `set_name` (nome EN do set no CT) como substring do
+         `name` do group — SÓ se resolver pra EXATAMENTE 1 group. Se a substring
+         casar >1 group → AMBÍGUO → None (set pulado). NUNCA pega o primeiro:
+         injetar preço de um group errado como "real" é a classe de bug que o
+         fallback de nome do MYP evita.
+    Retorna None se nada casar UNICAMENTE → caller pula o fallback tcgcsv pro set
+    (a pokemontcg.io segue como única fonte; sem preço inventado)."""
+    if not groups:
+        return None
+    # 1) abreviação exata (determinística)
+    for setcode in ptcg_setcodes:
+        abbr = PTCG_SETCODE_TO_TCGCSV_ABBR.get(setcode)
+        if not abbr:
+            continue
+        for g in groups:
+            if str(g.get("abbreviation") or "").upper() == abbr.upper():
+                return g.get("groupId")
+    # 2) fallback por nome — exige match ÚNICO
+    name_l = (set_name or "").strip().lower()
+    if not name_l:
+        return None
+    matches = [
+        g.get("groupId") for g in groups
+        if name_l in str(g.get("name") or "").lower()
+    ]
+    uniq = list(dict.fromkeys(m for m in matches if m is not None))
+    return uniq[0] if len(uniq) == 1 else None
+
+
+class TcgCsvFallbackProvider(PricingProvider):
+    """v2.23: fonte de FALLBACK de preço via tcgcsv.com.
+
+    Só é consultada pra um SET quando a pokemontcg.io devolveu ZERO match de
+    preço pro set inteiro (caso asc/Ascended Heroes). NUNCA roda pros sets que a
+    pokemontcg.io já precifica (default path byte-for-byte inalterado).
+
+    Carrega o set inteiro de uma vez (`/{groupId}/products` + `/{groupId}/prices`)
+    e indexa por numerador do collector number → {variante TCGplayer: {market}}.
+    O preço por-card reusa `select_tcgplayer_variant_price` — a MESMA escada de
+    variante da pokemontcg.io — então a FIDELIDADE DE VARIANTE é idêntica:
+    holo rare → holofoil, reverse → reverseHolofoil. Se a variante REQUERIDA não
+    existir no tcgcsv → retorna None (pula o card), nunca substitui outro subtype
+    (o atalho "menor subtype" do MYP, que reintroduziria o bug Gengar, é proibido
+    aqui por construção: a seleção é por variante, não por preço).
+
+    Os campos de proveniência (`last_variant_used`, `last_tcg_url`,
+    `last_ptcg_rarity`, `last_set_release_date`) seguem o contrato do provider
+    pokemontcg.io pra que os sinais downstream (low_confidence_variant, Chase
+    Tier, valorização) continuem funcionando. `last_price_source` = "tcgcsv"
+    rotula a origem distintamente (honestidade real-vs-fonte)."""
+    name = "tcgcsv"
+
+    def __init__(self, cache: Cache, session: Optional[Any] = None):
+        self.cache = cache
+        self.session = session or requests.Session()
+        # /groups resolvido 1× por run (cacheado).
+        self._groups: Optional[list] = None
+        self._groups_fetched = False
+        # setcode CT → {numerador(str): {variante: {"market", "low", "mid"}}}
+        # ou {} se o set não resolve groupId / sem dados. Pré-carregado 1× por set.
+        self._set_index: dict[str, dict] = {}
+        # último source rotulado (sempre "tcgcsv" quando este provider responde).
+        self.last_price_source: Optional[str] = None
+
+    def _get_json(self, path: str) -> Optional[dict]:
+        try:
+            r = self.session.get(f"{TCGCSV_BASE}/{path}",
+                                 headers={"User-Agent": TCGCSV_USER_AGENT},
+                                 timeout=TIMEOUT)
+            if r.status_code != 200:
+                log.debug(f"tcgcsv {path} status {r.status_code}")
+                return None
+            return r.json()
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"tcgcsv {path} falhou: {e!r}")
+            return None
+
+    def prefill_set(self, ct_set_code: str, ptcg_setcodes: list[str],
+                    set_name: str) -> bool:
+        """Pré-carrega o set inteiro do tcgcsv → índice por numerador→variantes.
+
+        Retorna True se ≥1 card foi indexado; False se sem groupId/rede falhou
+        (caller então não tem o que reprecificar). Roda no máx. 1× por set."""
+        if ct_set_code in self._set_index:
+            return bool(self._set_index[ct_set_code])
+        if not self._groups_fetched:
+            self._groups = tcgcsv_fetch_groups(self.session)
+            self._groups_fetched = True
+        if not self._groups:
+            self._set_index[ct_set_code] = {}
+            return False
+        group_id = resolve_tcgcsv_group_id(ptcg_setcodes, set_name, self._groups)
+        if not group_id:
+            log.debug(
+                f"tcgcsv: sem groupId ÚNICO p/ {ct_set_code} "
+                f"(ptcg={ptcg_setcodes}, name={set_name!r}) — fallback pulado"
+            )
+            self._set_index[ct_set_code] = {}
+            return False
+
+        products = self._get_json(f"{group_id}/products")
+        prices = self._get_json(f"{group_id}/prices")
+        if not products or not prices:
+            self._set_index[ct_set_code] = {}
+            return False
+
+        # productId → numerador do collector number (extendedData "Number")
+        num_by_pid: dict[int, str] = {}
+        for p in products.get("results") or []:
+            pid = p.get("productId")
+            if pid is None:
+                continue
+            for ed in p.get("extendedData") or []:
+                if ed.get("name") == "Number" and ed.get("value"):
+                    num_by_pid[pid] = str(ed["value"])
+                    break
+
+        # productId → {variante TCGplayer: {"market","low","mid"}}
+        from collections import defaultdict
+        variants_by_pid: dict[int, dict] = defaultdict(dict)
+        for r in prices.get("results") or []:
+            pid = r.get("productId")
+            if pid is None:
+                continue
+            sub = r.get("subTypeName")
+            variant = TCGCSV_SUBTYPE_TO_VARIANT.get(sub)
+            if not variant:
+                continue  # subtype desconhecido → ignora (não inventa variante)
+            variants_by_pid[pid][variant] = {
+                "market": r.get("marketPrice"),
+                "low": r.get("lowPrice"),
+                "mid": r.get("midPrice"),
+            }
+
+        index: dict[str, dict] = {}
+        for pid, num_raw in num_by_pid.items():
+            numerator = str(num_raw).split("/")[0].strip()
+            digits = "".join(c for c in numerator if c.isdigit())
+            if not digits:
+                continue  # TG##/GG##/promo não-numérico → pula (já tratado upstream)
+            key = digits.lstrip("0") or "0"
+            variants = variants_by_pid.get(pid)
+            if variants:
+                index[key] = variants
+        self._set_index[ct_set_code] = index
+        if index:
+            log.info(
+                f"  💾 tcgcsv {ct_set_code} (group {group_id}): {len(index)} "
+                f"cards indexados (FALLBACK — pokemontcg.io sem preço pro set)"
+            )
+        return bool(index)
+
+    def market_price_usd(self, card_name: str, set_code: str,
+                         collector_number: str,
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
+        """Preço market USD do tcgcsv pra um card, com seleção de variante
+        idêntica à pokemontcg.io. None se o set não foi prefillado, o card não
+        está no índice, ou a variante REQUERIDA não existe (nunca substitui)."""
+        self.last_tcg_url = None
+        self.last_variant_used = None
+        self.last_ptcg_rarity = None
+        self.last_set_release_date = None
+        self.last_price_source = None
+
+        index = self._set_index.get(set_code)
+        if not index:
+            return None
+        key = clean_collector_number(collector_number)
+        if not key:
+            return None
+        variants = index.get(key)
+        if not variants:
+            return None
+
+        # MESMA escada de variante da pokemontcg.io (fonte única compartilhada).
+        is_holo = _rarity_is_holo(rarity)
+        chosen_variant, chosen = select_tcgplayer_variant_price(
+            variants, foil, is_holo
+        )
+        if not chosen:
+            # Variante REQUERIDA ausente no tcgcsv → pula (NUNCA substitui outra).
+            log.debug(
+                f"tcgcsv: variante ausente p/ {card_name} "
+                f"({set_code}/{collector_number}) foil={foil} — "
+                f"disponíveis={list(variants.keys())}"
+            )
+            return None
+        self.last_variant_used = chosen_variant
+        self.last_price_source = "tcgcsv"
+        market = chosen.get("market") or 0.0
+        return market if market > 0 else None
 
 
 class JustTcgProvider(PricingProvider):
@@ -2150,10 +2484,18 @@ class Scanner:
                  ignore_skip_list: bool = False,
                  chase_only: bool = False,
                  max_consecutive_misses: int = 0,
-                 keep_all_priced: bool = True):
+                 keep_all_priced: bool = True,
+                 tcgcsv: Optional["TcgCsvFallbackProvider"] = None,
+                 tcgcsv_fallback: bool = True):
         self.ct = ct
         self.pricing = pricing
         self.cache = cache
+        # v2.23: fonte de FALLBACK tcgcsv. Só consultada quando a pokemontcg.io
+        # devolve ZERO match de preço pro set inteiro (caso asc/Ascended Heroes,
+        # invisível sem isso). `tcgcsv` é o provider (None = não instanciado);
+        # `tcgcsv_fallback` é o opt-out (--no-tcgcsv-fallback → False).
+        self.tcgcsv = tcgcsv
+        self.tcgcsv_fallback = tcgcsv_fallback
         self.threshold = threshold
         self.min_price_usd = min_price_usd
         self.exclude_graded = exclude_graded
@@ -2212,6 +2554,8 @@ class Scanner:
             "skipped_non_chase": 0,           # v2.13: listings cortados por --chase-only
             "expansions_no_coverage_abort": 0,  # v2.13: sets abortados por N misses consecutivos
             "priced_below_threshold": 0,      # v2.22: precificados mas < threshold (near-miss, persistidos)
+            "tcgcsv_fallback_sets": 0,        # v2.23: sets resgatados pelo fallback tcgcsv
+            "tcgcsv_fallback_priced": 0,      # v2.23: cards precificados via tcgcsv
         }
         # v2.9 (Codex H5): threshold pra abortar set quando pricing está
         # massivamente quebrado (schema drift / SSL / endpoint down). 50% das
@@ -2501,6 +2845,12 @@ class Scanner:
         # v2.13 (frente eficiência): contador de "misses" consecutivos (preço
         # não encontrado na fonte) pra cortar sets sem cobertura cedo.
         set_consecutive_misses = 0
+        # v2.23: total de hits pokemontcg no set + lista de listings sem preço.
+        # O fallback tcgcsv SÓ entra quando set_tcg_hits == 0 (set inteiro sem
+        # cobertura na pokemontcg.io — caso asc). Se houve ≥1 hit, o default path
+        # segue intacto e o tcgcsv nunca roda pro set.
+        set_tcg_hits = 0
+        set_misses: list["Listing"] = []
         for i, l in enumerate(best_by_uid.values(), 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
             # v2.14: usa o timeout EFETIVO do set (com override vintage).
@@ -2582,8 +2932,30 @@ class Scanner:
                 # mass-pricing-failure). Distingue-se de pricing_failure (erro de
                 # rede/exceção): aqui o request foi OK, só não há match.
                 set_consecutive_misses += 1
+                # v2.23: guarda os misses pra um eventual repasse via fallback
+                # tcgcsv (só se o SET inteiro não tiver NENHUM hit pokemontcg).
+                set_misses.append(l)
                 if (self.max_consecutive_misses > 0
                         and set_consecutive_misses >= self.max_consecutive_misses):
+                    # v2.23: ANTES de abortar por "sem cobertura", tenta o
+                    # FALLBACK tcgcsv — MAS só se a pokemontcg.io não deu NENHUM
+                    # hit no set inteiro até aqui (set_tcg_hits == 0). Esse é
+                    # exatamente o cenário asc/Ascended Heroes: a pokemontcg.io
+                    # lista as cartas mas sem preço → todo listing vira miss → o
+                    # set estouraria e cairia na skip-list, ficando invisível.
+                    # Sets que a pokemontcg.io JÁ precifica (set_tcg_hits > 0)
+                    # nunca chegam aqui com hits==0 → o default path fica intacto.
+                    if set_tcg_hits == 0 and self._tcgcsv_can_fallback():
+                        # Reprecifica o SET INTEIRO (todos os listings filtrados),
+                        # não só os misses até aqui — o set é precisamente o que a
+                        # pokemontcg.io não cobre (asc), então o tcgcsv assume tudo.
+                        fb_opps = self._price_set_via_tcgcsv(
+                            exp_code, exp_name, list(best_by_uid.values())
+                        )
+                        if fb_opps:
+                            self.stats["expansions_scanned"] += 1
+                            yield from fb_opps
+                            return
                     log.warning(
                         f"  🕳️  SEM COBERTURA em {exp_code} ({exp_name}): "
                         f"{set_consecutive_misses} listings consecutivos sem preço "
@@ -2602,82 +2974,165 @@ class Scanner:
                 continue
             # Hit: zera o contador de misses consecutivos.
             set_consecutive_misses = 0
-            self.stats["tcg_price_found"] += 1
+            set_tcg_hits += 1
+            opp = self._build_opportunity(l, tcg_market, self.pricing)
+            if opp is not None:
+                yield opp
 
-            # Margem calculada em BRL (a verdade operacional pro Matheus).
-            # TCGPlayer market vem em USD → converte via Frankfurter.
-            # v2.12 (2026-06-06): custo = preço do site × (1 + hub_fee_rate).
-            # Com hub_fee_rate default 0.0, custo = preço do site → margem BRUTA
-            # `(tcg − preço)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
-            # (Passe --hub-fee 0.06 pra reembutir os 6% históricos.)
-            tcg_brl = tcg_market * self.usd_brl
-            ct_brl = l.price_brl
-            custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
-            margin = (tcg_brl - custo_brl) / tcg_brl
-            below_threshold = margin < self.threshold
-            if below_threshold and not self.keep_all_priced:
-                # Modo --opportunities-only (legado): descarta o near-miss.
-                continue
-
-            shipping_brl = self._estimate_shipping_brl(l)
-            net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
-
-            if below_threshold:
-                # v2.22: precificado mas abaixo do threshold. Persistido pro
-                # XLSX (contrato de entrega → fallback near-miss do postprocess),
-                # mas NÃO conta como oportunidade no funil.
-                self.stats["priced_below_threshold"] += 1
-            else:
-                self.stats["opportunities_found"] += 1
-            # v2.7.1: tcg_url vem do provider (last call). Pode ser None se
-            # provider != pokemontcg ou se a card não tem entry TCGPlayer.
-            tcg_url = getattr(self.pricing, "last_tcg_url", None)
-            # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
-            variant_used = getattr(self.pricing, "last_variant_used", None)
-            # v2.13: rarity oficial pokemontcg.io (preferida) → fallback rarity
-            # do blueprint CT. Set release date pra score de valorização.
-            ptcg_rarity = getattr(self.pricing, "last_ptcg_rarity", None)
-            # v2.14 (candidato 4) + v2.18: flag de baixa confiança de variante.
-            # Listing NÃO-foil que só achou preço numa variante metálica premium
-            # (holofoil/unlimitedHolofoil — nem normal nem reverseHolofoil).
-            # v2.18: NÃO dispara pra holo rare — aí holofoil é a variante CORRETA
-            # (esperada), não um casamento errado. Só sinaliza quando uma carta
-            # NÃO-holo casou preço holo (o caso Gengar não-foil → $1600).
-            variant_low_conf = (
-                l.foil is False
-                and not _rarity_is_holo(l.rarity, ptcg_rarity)
-                and variant_used in ("holofoil", "unlimitedHolofoil")
-            )
-            set_release = getattr(self.pricing, "last_set_release_date", None) or ""
-            rarity_for_tier = ptcg_rarity or l.rarity
-            chase_tier = classify_chase_tier(rarity_for_tier)
-            val_score, val_note = compute_valorization(
-                rarity_for_tier, set_release, tcg_market
-            )
-            # Filtro --chase-only: só TOP/MID passam (cartas de maior interesse).
-            if self.chase_only and chase_tier not in CHASE_ONLY_TIERS:
-                self.stats["skipped_non_chase"] += 1
-                continue
-            yield Opportunity(
-                listing=l,
-                tcg_market_usd=tcg_market,
-                tcg_market_brl=tcg_brl,
-                ct_price_brl=ct_brl,
-                margin_pct=margin,
-                margin_brl=tcg_brl - custo_brl,
-                estimated_shipping_brl=shipping_brl,
-                net_margin_pct=net_margin,
-                tcg_url=tcg_url,
-                price_variant_used=variant_used,
-                chase_tier=chase_tier,
-                valorization_score=val_score,
-                valorization_note=val_note,
-                set_release_date=set_release,
-                variant_low_confidence=variant_low_conf,
-                below_threshold=below_threshold,
-            )
+        # v2.23: fim do set sem abort. Se a pokemontcg.io não precificou NADA no
+        # set inteiro (set_tcg_hits == 0) mas houve listings (set_misses), tenta
+        # o fallback tcgcsv pra TODOS os misses — cobre o caso asc onde o set tem
+        # poucos cards (não bate o cap de misses consecutivos antes de acabar).
+        if (set_tcg_hits == 0 and set_misses
+                and self._tcgcsv_can_fallback()):
+            fb_opps = self._price_set_via_tcgcsv(exp_code, exp_name, set_misses)
+            yield from fb_opps
 
         self.stats["expansions_scanned"] += 1
+
+    def _build_opportunity(
+        self, l: "Listing", tcg_market: float, source_provider: "PricingProvider"
+    ) -> Optional["Opportunity"]:
+        """v2.23: constrói uma Opportunity a partir de um listing precificado.
+
+        Extraído do loop de scan_expansion pra ser reusado pelos DOIS caminhos
+        de pricing (pokemontcg.io direto e o fallback tcgcsv) — garante que a
+        margem/flags/sinais sejam computados IDENTICAMENTE independente da fonte.
+        `source_provider` é o provider que produziu o preço (lê last_tcg_url /
+        last_variant_used / last_ptcg_rarity / last_set_release_date dele).
+        Retorna None quando o listing deve ser descartado (--opportunities-only
+        near-miss ou --chase-only)."""
+        tcg_brl = tcg_market * self.usd_brl
+        ct_brl = l.price_brl
+        custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
+        margin = (tcg_brl - custo_brl) / tcg_brl
+        below_threshold = margin < self.threshold
+        if below_threshold and not self.keep_all_priced:
+            # Modo --opportunities-only (legado): descarta o near-miss.
+            return None
+
+        self.stats["tcg_price_found"] += 1
+        shipping_brl = self._estimate_shipping_brl(l)
+        net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
+
+        if below_threshold:
+            # v2.22: precificado mas abaixo do threshold. Persistido pro XLSX
+            # (contrato de entrega → fallback near-miss do postprocess), mas NÃO
+            # conta como oportunidade no funil.
+            self.stats["priced_below_threshold"] += 1
+        else:
+            self.stats["opportunities_found"] += 1
+        # v2.7.1: tcg_url vem do provider (last call). Pode ser None.
+        tcg_url = getattr(source_provider, "last_tcg_url", None)
+        # v2.8 Layer 4: variant usada (holofoil/reverseHolofoil/normal/etc).
+        variant_used = getattr(source_provider, "last_variant_used", None)
+        # v2.13: rarity oficial pokemontcg.io (preferida) → fallback rarity CT.
+        ptcg_rarity = getattr(source_provider, "last_ptcg_rarity", None)
+        # v2.23: fonte do preço (pokemontcg.io vs tcgcsv) pra rotular proveniência.
+        price_source = getattr(source_provider, "last_price_source", None) \
+            or getattr(source_provider, "name", None)
+        # v2.14 + v2.18: flag de baixa confiança de variante. Listing NÃO-foil
+        # que só achou preço numa variante metálica premium (holofoil/
+        # unlimitedHolofoil) sendo NÃO-holo (o caso Gengar não-foil → $1600).
+        variant_low_conf = (
+            l.foil is False
+            and not _rarity_is_holo(l.rarity, ptcg_rarity)
+            and variant_used in ("holofoil", "unlimitedHolofoil")
+        )
+        set_release = getattr(source_provider, "last_set_release_date", None) or ""
+        rarity_for_tier = ptcg_rarity or l.rarity
+        chase_tier = classify_chase_tier(rarity_for_tier)
+        val_score, val_note = compute_valorization(
+            rarity_for_tier, set_release, tcg_market
+        )
+        # Filtro --chase-only: só TOP/MID passam.
+        if self.chase_only and chase_tier not in CHASE_ONLY_TIERS:
+            self.stats["skipped_non_chase"] += 1
+            return None
+        return Opportunity(
+            listing=l,
+            tcg_market_usd=tcg_market,
+            tcg_market_brl=tcg_brl,
+            ct_price_brl=ct_brl,
+            margin_pct=margin,
+            margin_brl=tcg_brl - custo_brl,
+            estimated_shipping_brl=shipping_brl,
+            net_margin_pct=net_margin,
+            tcg_url=tcg_url,
+            price_variant_used=variant_used,
+            price_source=price_source,
+            chase_tier=chase_tier,
+            valorization_score=val_score,
+            valorization_note=val_note,
+            set_release_date=set_release,
+            variant_low_confidence=variant_low_conf,
+            below_threshold=below_threshold,
+        )
+
+    def _tcgcsv_can_fallback(self) -> bool:
+        """v2.23: True se o fallback tcgcsv está habilitado E disponível.
+
+        Habilitado por padrão; desligado por `--no-tcgcsv-fallback`. Disponível
+        só quando há um provider tcgcsv instanciado (self.tcgcsv). Mantém o
+        default path 100% intacto quando desligado."""
+        return self.tcgcsv_fallback and self.tcgcsv is not None
+
+    def _ptcg_setcodes_for(self, ct_set_code: str) -> list[str]:
+        """v2.23: CT set code → lista de setcodes pokemontcg.io candidatos.
+
+        Reusa o mapa SET_ALIAS_TO_PTCG do PokemonTcgIoProvider (CT code +
+        aliases). É o 1º salto da ponte CT→tcgcsv (o 2º é abbr tcgcsv)."""
+        code = (ct_set_code or "").lower()
+        out = [code] if code else []
+        for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
+            if alias.lower() not in out:
+                out.append(alias.lower())
+        return out
+
+    def _price_set_via_tcgcsv(
+        self, exp_code: str, exp_name: str, listings: list["Listing"]
+    ) -> list["Opportunity"]:
+        """v2.23: reprecifica os listings de um set via FALLBACK tcgcsv.
+
+        Chamado APENAS quando a pokemontcg.io não precificou nada no set
+        (set_tcg_hits == 0). Pré-carrega o set no provider tcgcsv (resolução de
+        groupId unique-match-only) e constrói Opportunities pros que casarem —
+        com a MESMA seleção de variante e o MESMO `_build_opportunity`. Retorna
+        [] se o set não resolve no tcgcsv (sem groupId único / sem dados) → o
+        caller segue com o abort/skip-list honesto (sem preço inventado)."""
+        set_name = listings[0].set_name if listings else ""
+        ptcg_codes = self._ptcg_setcodes_for(exp_code)
+        ok = self.tcgcsv.prefill_set(exp_code, ptcg_codes, set_name)
+        if not ok:
+            return []
+        log.info(
+            f"  🛟 FALLBACK tcgcsv ativo para {exp_code} ({exp_name}): "
+            f"pokemontcg.io sem preço pro set → reprecificando {len(listings)} "
+            f"listings via tcgcsv"
+        )
+        out: list["Opportunity"] = []
+        for l in listings:
+            try:
+                price = self.tcgcsv.market_price_usd(
+                    l.card_name, l.set_code, l.collector_number,
+                    foil=l.foil, rarity=l.rarity,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
+                continue
+            if not price or price <= 0:
+                continue
+            opp = self._build_opportunity(l, price, self.tcgcsv)
+            if opp is not None:
+                out.append(opp)
+        if out:
+            self.stats["tcgcsv_fallback_sets"] += 1
+            self.stats["tcgcsv_fallback_priced"] += len(out)
+            log.info(
+                f"  ✅ tcgcsv resgatou {len(out)} cards em {exp_code} "
+                f"(set ficaria INVISÍVEL sem o fallback)"
+            )
+        return out
 
     def scan(self, expansions: list[dict],
              checkpoint: Optional["CheckpointWriter"] = None) -> list[Opportunity]:
@@ -2960,6 +3415,10 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # v2.14 (candidato 4): flag de baixa confiança de variante. APPEND no
         # FIM (não realocar — testes de coerência checam índices fixos).
         "Variante Baixa Confiança",
+        # v2.23: FONTE do preço de referência (pokemontcg vs tcgcsv). APPEND no
+        # FIM. Honestidade real-vs-fonte: "tcgcsv" = preço de fallback (set que a
+        # pokemontcg.io não precificava, ex.: asc); "pokemontcg" = caminho padrão.
+        "Fonte Preço",
     ]
     ws.append(headers)
 
@@ -3002,6 +3461,8 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             opp.valorization_note or "",
             # v2.14 (candidato 4): "Sim" só quando non-foil casou variante holo.
             "Sim" if opp.variant_low_confidence else "",
+            # v2.23: fonte do preço (proveniência). Default "pokemontcg".
+            opp.price_source or "",
         ])
 
     # ─── Formatação ───
@@ -3147,6 +3608,14 @@ def parse_args():
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
     p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
                    help="Fonte de preços TCG (default: pokemontcg)")
+    p.add_argument("--no-tcgcsv-fallback", action="store_true",
+                   help=("v2.23: DESLIGA o fallback tcgcsv.com. Por padrão "
+                         "(omitido), quando a pokemontcg.io não precifica um SET "
+                         "inteiro (ex.: asc/Ascended Heroes — set fica INVISÍVEL "
+                         "sem isso), o scanner consulta o tcgcsv pra preencher SÓ "
+                         "esse buraco (com a MESMA seleção de variante e validação "
+                         "per-blueprint). Sets que a pokemontcg.io já precifica "
+                         "NÃO mudam. Use esta flag pra desabilitar o fallback."))
     p.add_argument("--output", "-o", type=str, default=None,
                    help="Arquivo de saída .xlsx (default: cardtrader_scan_<timestamp>.xlsx)")
     p.add_argument("--dry-run", action="store_true",
@@ -3413,6 +3882,19 @@ def main():
         pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
 
+    # v2.23: fonte de FALLBACK tcgcsv. Instanciada só quando o provider primário
+    # é pokemontcg.io (a única fonte que sofre o buraco de cobertura por-set) E o
+    # fallback não foi desligado. Compartilha o mesmo Cache. NUNCA roda pros sets
+    # que a pokemontcg.io já precifica — só onde o set inteiro vem sem preço.
+    tcgcsv_provider: Optional[TcgCsvFallbackProvider] = None
+    tcgcsv_fallback_on = (args.provider == "pokemontcg" and not args.no_tcgcsv_fallback)
+    if tcgcsv_fallback_on:
+        tcgcsv_provider = TcgCsvFallbackProvider(cache)
+        log.info("Fallback tcgcsv.com: HABILITADO (sets sem preço na "
+                 "pokemontcg.io serão preenchidos via tcgcsv — ex.: asc)")
+    elif args.no_tcgcsv_fallback:
+        log.info("Fallback tcgcsv.com: DESLIGADO (--no-tcgcsv-fallback)")
+
     # Seleção de expansões
     log.info("Listando expansões Pokemon no CardTrader...")
     all_expansions = ct.list_expansions(CT_POKEMON_GAME_ID)
@@ -3505,6 +3987,8 @@ def main():
         chase_only=args.chase_only,
         max_consecutive_misses=args.max_consecutive_misses,
         keep_all_priced=not args.opportunities_only,
+        tcgcsv=tcgcsv_provider,
+        tcgcsv_fallback=tcgcsv_fallback_on,
     )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.

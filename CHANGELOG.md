@@ -4,6 +4,65 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-23 — v2.23: fonte de FALLBACK tcgcsv.com (sets que a pokemontcg.io não precifica)
+
+**Por quê (sonda de cobertura):** a pokemontcg.io cobre bem a cauda SV, mas
+**falha nos side-sets da era ME** — Ascended Heroes (CT `asc` → ptcg `me2pt5`)
+devolve preço ZERO pra TODAS as cartas: cada listing vira uma chamada de API que
+sempre falha → o set inteiro vira "miss" → estoura o per-set-timeout (8min) →
+cai na skip-list → fica **INVISÍVEL** (nunca mais é escaneado). O tcgcsv.com
+cobre o `asc` completo (612 produtos, 650/650 com preço) e é superset estrito da
+pokemontcg.io em todo set testado. Solução: usar o tcgcsv pra preencher **só os
+buracos** que a pokemontcg.io deixa.
+
+**Design — FALLBACK, blast radius mínimo (NÃO uma troca de fonte):**
+- O tcgcsv é consultado pra um set **SÓ quando a pokemontcg.io devolve ZERO
+  match de preço pro set inteiro** (`set_tcg_hits == 0`). Sets que ela já
+  precifica (`dri`/`blk`/`jtg`/`meg`...) ficam **byte-for-byte inalterados** — o
+  tcgcsv nunca roda pra eles. Opt-out: `--no-tcgcsv-fallback` (default = LIGADO).
+- **Resolução de set unique-match-only** (`resolve_tcgcsv_group_id`): ponte em 2
+  saltos CT code → ptcg setcode (reusa `SET_ALIAS_TO_PTCG`) → abbr tcgcsv
+  (`PTCG_SETCODE_TO_TCGCSV_ABBR`, portado/verificado do MYP). Abbr exata primeiro;
+  fallback por substring de NOME só se resolver pra EXATAMENTE 1 group —
+  ambíguo → None → set pulado (NUNCA chuta um group errado, que injetaria preço
+  de promo/energy como "real").
+- **⚠️ FIDELIDADE DE VARIANTE (a parte load-bearing):** o tcgcsv expõe preço por
+  `subTypeName` (Normal / Holofoil / Reverse Holofoil). Mapeado pro vocabulário
+  TCGplayer e selecionado pela MESMA escada de variante ciente de raridade/foil
+  da pokemontcg.io — extraída pro helper único `select_tcgplayer_variant_price`
+  (fonte ÚNICA, compartilhada pelos dois providers). **NÃO** colapsa pro subtype
+  mais barato (o atalho estilo MYP `_min_tcg_usd` que reintroduziria o bug v2.18
+  Gengar holofoil $146 vs reverseHolofoil $1599, 10×). Variante REQUERIDA ausente
+  no tcgcsv → retorna None (pula o card), nunca substitui outro subtype.
+- `validate_per_blueprint` segue como guard FINAL **source-independente** —
+  re-precifica o top-N via per-blueprint do CT independente da fonte que setou a
+  margem bruta, podendo sobrescrever margens de origem tcgcsv.
+- **Honestidade:** preços de origem tcgcsv são rotulados distintamente
+  (`Opportunity.price_source` + coluna `Fonte Preço` no XLSX) pra o operador
+  distinguir um deal de fallback de um da pokemontcg.io. Ambos são preços
+  TCGplayer REAIS — o rótulo é só proveniência.
+
+**Arquivos (file:line):** `cardtrader_scanner.py` —
+`select_tcgplayer_variant_price` (helper de variante compartilhado),
+`TcgCsvFallbackProvider` (prefill por-set + pricing por-card),
+`tcgcsv_fetch_groups` / `resolve_tcgcsv_group_id`, `Scanner._build_opportunity`
+(construção de Opportunity reusada pelos 2 caminhos), `Scanner._price_set_via_tcgcsv`
++ gancho em `scan_expansion` (dispara só com `set_tcg_hits == 0`), flag
+`--no-tcgcsv-fallback`, campo `Opportunity.price_source` + coluna `Fonte Preço`.
+
+**Testes:** `tests/test_tcgcsv_fallback.py` (16 novos, offline/mocked) —
+(a) set precificado pela pokemontcg.io não invoca tcgcsv; (b) resolução
+unique-match-only; (c) FIDELIDADE de variante (holo rare não-reverse → holofoil;
+reverse → reverseHolofoil — falha sob colapso-pro-mais-barato); (d) variante
+ausente → None (falha sob substituição); (e) fallback dispara só com 0 cobertura;
+(f) validate_per_blueprint guarda margem de fonte tcgcsv. Suíte: **150 testes**
+verdes (134 → 150). A escada de variante v2.18 foi extraída pro helper SEM mudança
+de comportamento (134 originais seguem verdes).
+
+**Invariantes preservadas:** margem BRUTA, threshold em fração, NM-only, default
+path da pokemontcg.io inalterado, nunca inventar preço (set sem groupId único →
+sem fallback, sem preço).
+
 ## 2026-06-22 — pós-v2.22: GG## pulado em scan time (#36) + fix de criação do dir do XLSX (#37)
 
 Dois fixes mergeados na `main` logo após o v2.22 (#33). Não há bump de versão
