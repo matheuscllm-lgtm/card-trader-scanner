@@ -4,6 +4,34 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-22 — pós-v2.22: GG## pulado em scan time (#36) + fix de criação do dir do XLSX (#37)
+
+Dois fixes mergeados na `main` logo após o v2.22 (#33). Não há bump de versão
+inline — são endurecimentos pontuais sobre o v2.22.
+
+**#36 — Galarian Gallery (GG##) pulado em SCAN TIME, igual TG##**
+- **Por quê:** GG## (subset SWSH: Brilliant Stars / Astral Radiance / Lost
+  Origin / Silver Tempest / Crown Zenith) sofre a MESMA inflação de referência
+  do pokemontcg.io (5-10×) que o TG##. O postprocess JÁ roteava GG## pra
+  NÃO/manual (`TRAINER_GALLERY_RE = ^(?:TG|GG)\d+`), mas até agora **só o TG##
+  era skipado no scanner** — GG## gastava chamadas de pricing e só era pego
+  downstream.
+- **Conserto:** a regex anti-Trainer-Gallery do scanner virou
+  `_TRAINER_GALLERY_RE = ^(?:TG|GG)\d+` (antes só `^TG\d+`). GG## agora é pulado
+  em scan time, alinhando as duas camadas (defense-in-depth). O postprocess
+  mantém o guard (belt-and-suspenders) — nada removido lá.
+
+**#37 — write_xlsx garante o diretório-alvo antes de salvar**
+- **Por quê (bug real):** `outputs/` é gitignored e **não vem num clone limpo**
+  (sessão Claude Code na nuvem). Sem o diretório, `wb.save(out_path)` quebrava
+  com `FileNotFoundError` **DEPOIS** de um rastreio inteiro (horas), perdendo
+  todo o trabalho.
+- **Conserto:** `out_path.parent.mkdir(parents=True, exist_ok=True)` antes do
+  `wb.save()`. Idempotente; não toca nada quando o dir já existe.
+
+**Invariantes preservadas:** margem BRUTA, threshold em fração, classificação
+COMPRA/REVISAR, contrato de entrega v2.22 (near-miss preservado).
+
 ## 2026-06-22 — v2.22: contrato de entrega scanner→postprocess (fim da "entrega vazia")
 
 **Por quê (bug real, run 27925869658):** o scanner precificou tudo

@@ -354,7 +354,15 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.17 (flag `--skip-backcatalog` — escaneia só as ~30
+*Versão do scanner: v2.22 (contrato de entrega scanner→postprocess — fim da
+"entrega vazia": o scanner persiste todo listing precificado no XLSX e o
+threshold vira classificação downstream com fallback near-miss; 2026-06-22.
+Pós-v2.22 mergeados: GG## pulado em scan time igual TG## (regex `^(?:TG|GG)\d+`,
+#36) e write_xlsx garante o diretório-alvo antes de salvar — fim do
+FileNotFoundError em clone limpo sem `outputs/`, #37). Inclui v2.21 (lista
+curada "vintage core" + flag `--vintage`; 2026-06-21), v2.18-v2.20 (fim da
+inflação holo rare vintage + validação per-blueprint NM+reverse + cache-bust;
+2026-06-20/21). Inclui v2.17 (flag `--skip-backcatalog` — escaneia só as ~30
 coleções modernas/curadas, pulando o back-catalog que não rende deal; 2026-06-20).
 Inclui v2.16 (entrega = tabela no chat OBRIGATÓRIA via a ferramenta
 do repo, nunca à mão / nunca XLSX por padrão; coluna Flag "validar manual" nas

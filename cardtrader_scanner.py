@@ -46,9 +46,26 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
-Versão: v2.21
+      | 2026-06-22 (v2.22)
+Versão: v2.22
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.22 (2026-06-22 — contrato de entrega scanner→postprocess + GG## scan-time + fix dir XLSX):
+  - [CONTRATO] keep_all_priced (default ON): o scanner agora PERSISTE todo
+    listing precificado no XLSX, mesmo abaixo do threshold (Opportunity.below_threshold);
+    o threshold vira classificação downstream. Fim da "entrega vazia" (223
+    precificados, 0 acima do threshold → o postprocess agora mostra near-miss).
+  - [GG##] Galarian Gallery (GG##) agora é pulado em SCAN TIME, igual TG## — a
+    regex anti-Trainer-Gallery virou `^(?:TG|GG)\d+` (antes só TG##). GG## sofre
+    a mesma inflação de referência (5-10×) e era pego só downstream, gastando
+    chamadas de pricing. Defense-in-depth: o postprocess mantém o guard (#36).
+  - [ROBUSTEZ] write_xlsx garante o diretório-alvo antes de salvar
+    (out_path.parent.mkdir(parents=True, exist_ok=True)): outputs/ é gitignored
+    e NÃO vem num clone limpo (sessão na nuvem) — sem isto o wb.save() quebrava
+    com FileNotFoundError DEPOIS de horas de rastreio, perdendo tudo (#37).
+  - INALTERADO: margem bruta, threshold fração, seleção de variante v2.18,
+    validação v2.19, cache-bust v2.20, vintage core v2.21.
 
 Changelog v2.21 (2026-06-21 — lista curada vintage core + flag --vintage):
   - [ESCOPO] Nova constante VINTAGE_SET_CODES (34 sets): WOTC (bs ju fo b2 tr g1
