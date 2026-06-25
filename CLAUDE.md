@@ -28,7 +28,7 @@ Erros recorrentes (3 famílias — detalhe no manual):
 2. **Git:** galho ou `main` local defasado por squash-merge PARECE pendência. O teste real de "já mergeado" é `git diff --stat origin/main <galho>` estar vazio (não `git merge-base`).
 3. **Honestidade de preço:** inflação de referência, fallback tratado como real, NM frouxo → sempre validar versão/condição e rotular fallback.
 
-**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback tcgcsv.com** (v2.23) pra sets que a pokemontcg.io não precifica (ex.: `asc`/Ascended Heroes, que sem isso fica invisível); a fonte é rotulada (`Fonte Preço`/`price_source`); desliga com `--no-tcgcsv-fallback`. Chaves = `CT_JWT`, `POKEMONTCG_API_KEY` (secrets no GitHub).
+**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; mesma escada de variante, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`.
 
 ## Em uma frase
 
