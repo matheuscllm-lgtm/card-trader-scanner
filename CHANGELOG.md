@@ -4,6 +4,51 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-06-26 — v2.24: guard reverse-outlier (vintage barato não-holo casando em reverseHolofoil)
+
+**Por quê (bug confirmado com dados ao vivo):** o scan vintage 2026-06-26
+produziu 16/40 "deals" referenciados ao `reverseHolofoil` da pokemontcg.io. Pra
+commons/uncommons da era EX esses listings **são genuinamente reverse**
+(`foil=True`), então `select_tcgplayer_variant_price` acerta ao cair em
+`reverseHolofoil` — **mas** o `reverseHolofoil.market` pra vintage barato é um
+número fino, dirigido por outlier, **não uma âncora líquida**. Exemplos reais
+(pokemontcg.io ao vivo):
+
+| Carta | # | Raridade | normal | reverse | razão |
+|---|---|---|---|---|---|
+| Lileep | ex12-56 | Common | $0.55 | $37.50 | 68× |
+| Slugma | ex8-75 | Common | $0.45 | $25.00 | 56× |
+| Kakuna | ex6-36 | Uncommon | $0.65 | $37.00 | 57× |
+| Persian | ex6-44 | Uncommon | $2.90 | $65.00 | 22× |
+| Volbeat | ex9-42 | Uncommon | $2.06 | $29.83 | 14× |
+
+Todos passaram como **COMPRA limpa** porque a flag v2.18 "Variante Baixa
+Confiança" **deliberadamente não dispara** pra reverse genuíno (a exclusão foi
+pensada pra Holo Rares, onde reverse é o fallback intencional). O buraco:
+non-holo casando em `reverseHolofoil` com razão reverse/normal absurda.
+
+**Fix (sinal-only, mínimo, NÃO mexe na margem):** estende a flag pra TAMBÉM
+disparar quando TODOS valem: (1) variante == `reverseHolofoil`; (2) carta NÃO
+intrinsecamente holo (`_rarity_is_holo` False); (3) existe `normal.market` E
+`reverseHolofoil.market` > `REVERSE_NONHOLO_OUTLIER_RATIO` (=5.0) × `normal.market`.
+Se `normal.market` ausente → não dispara (tipicamente holo rares, já excluídas
+por #2). RATIO=5 separa os outliers acima dos prêmios reverse legítimos: NÃO
+flagga Zubat ecard3-118 (Skyridge, normal $33.47 vs reverse $104.99 = 3.1×).
+
+**Roteamento:** o `cardtrader_postprocess.py` agora LÊ a coluna "Variante Baixa
+Confiança" e **rebaixa COMPRA → REVISAR** ("validar manual") nas linhas que
+seriam COMPRA limpa — aplicado por último em `classify_decision`, então NÃO
+promove um NAO (margem baixa/TG/STALE seguem NAO). Margem/preço/bucket
+**inalterados** — sinal-only.
+
+**Arquivos (file:line):** `cardtrader_scanner.py` — `REVERSE_NONHOLO_OUTLIER_RATIO`
++ `_reverse_nonholo_market_outlier` (helper), `PricingProvider.last_normal_market`,
+`Cache.get_price` (extrai `normal.market` do raw cacheado), `PokemonTcgIoProvider`
++ `TcgCsvFallbackProvider` (setam `last_normal_market`), `Scanner._build_opportunity`
+(estende `variant_low_conf`); `cardtrader_postprocess.py` — `COLUMN_ALIASES`
+("Variante Baixa Confiança") + `_is_truthy_flag` + `classify_decision` (downgrade).
+**Testes:** +22 em `tests/test_reverse_lowvalue_guard.py` → 172 no total.
+
 ## 2026-06-23 — v2.23: fonte de FALLBACK tcgcsv.com (sets que a pokemontcg.io não precifica)
 
 **Por quê (sonda de cobertura):** a pokemontcg.io cobre bem a cauda SV, mas

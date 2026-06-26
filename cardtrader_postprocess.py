@@ -316,6 +316,19 @@ def classify_decision(row, cfg: DecisionConfig):
     if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
         return "REVISAR", f"Validation {val or 'ausente'}; chase {chase} + net {nm:.0%}"
 
+    # v2.24 (2026-06-26): sinal "Variante Baixa Confiança" do scanner (v2.18 holo/
+    # unlimited não-holo + v2.24 reverse-outlier, ex. Lileep ex12-56 reverse $37.50
+    # vs normal $0.55 = 68×). Uma linha que sobreviveu a todos os filtros acima
+    # SERIA COMPRA limpa — mas a âncora de variante é suspeita de estar inflada.
+    # Downgrade pra REVISAR ("validar manual"): nunca apresentada como COMPRA limpa.
+    # Aplicado por ÚLTIMO, então NÃO promove um NAO (margem/TG/STALE seguem NAO);
+    # só rebaixa o que viraria COMPRA. Margem/preço/bucket INALTERADOS — sinal-only.
+    if _is_truthy_flag(row.get("variant_low_confidence")):
+        return ("REVISAR",
+                "Variante Baixa Confiança — preço de referência casou numa variante "
+                "reverse/holo possivelmente inflada (não-holo); valide a variante via "
+                "Link TCG antes de comprar")
+
     # COMPRA
     return "COMPRA", f"Chase {chase} + net {nm:.0%} + lucro R${profit:.0f}"
 
@@ -373,7 +386,28 @@ COLUMN_ALIASES = {
     # matched no pokemontcg.io. Operador valida variante (ex Lusamine 1st Place
     # vs normal) antes de comprar. None aceitável (não-pokemontcg providers).
     "link_tcg": ["link_tcg","Link TCG","tcg_url","TCG URL","TCGPlayer URL","TCGPlayer Link"],
+    # v2.24 (2026-06-26): sinal "Variante Baixa Confiança" do scanner ("Sim"/"").
+    # Lê o flag de baixa confiança de variante (v2.18 holo/unlimited não-holo +
+    # v2.24 reverse-outlier) pra forçar REVISAR — fim do "clean COMPRA" em linhas
+    # com âncora de variante suspeita.
+    "variant_low_confidence": ["variant_low_confidence","Variante Baixa Confiança","Variante Baixa Confianca","low_confidence_variant"],
 }
+
+
+def _is_truthy_flag(v) -> bool:
+    """v2.24: interpreta o valor da coluna "Variante Baixa Confiança" do XLSX.
+    O scanner grava "Sim"/"" (string); aceita também bool/1/true por robustez.
+    NaN / vazio → False."""
+    if v is None:
+        return False
+    try:
+        if isinstance(v, float) and pd.isna(v):
+            return False
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("sim", "true", "1", "yes", "y")
 
 def detect_column(df, logical):
     aliases = COLUMN_ALIASES.get(logical, [logical])

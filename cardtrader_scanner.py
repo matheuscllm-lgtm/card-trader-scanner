@@ -46,10 +46,39 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-05-16 (v2.5) | 2026-05-18 (v2.7/v2.8) | 2026-05-19 (v2.9/v2.10)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
-      | 2026-06-22 (v2.22)
-Versão: v2.22
+      | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
+Versão: v2.24
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.24 (2026-06-26 — guard reverse-outlier pra vintage barato não-holo):
+  - [BUG] No scan vintage 2026-06-26, 16/40 "deals" referenciaram o
+    `reverseHolofoil` da pokemontcg.io. Pra commons/uncommons da era EX esses
+    listings SÃO genuinamente reverse (foil=True), então a seleção de variante
+    acerta ao cair em reverseHolofoil — MAS o `reverseHolofoil.market` pra
+    vintage barato é um número fino, dirigido por outlier, NÃO uma âncora líquida.
+    Ex.: Lileep ex12-56 Common normal $0.55 vs reverse $37.50 = 68×. Esses
+    passaram como COMPRA limpa porque a flag v2.18 "Variante Baixa Confiança"
+    deliberadamente NÃO dispara pra reverse genuíno (exclusão pensada pra Holo
+    Rares, onde reverse é o fallback intencional). Buraco: non-holo casando em
+    reverseHolofoil com razão reverse/normal absurda.
+  - [FIX — sinal-only, NÃO mexe na margem] Estende a flag "Variante Baixa
+    Confiança" pra TAMBÉM disparar quando: (1) variante == reverseHolofoil, (2)
+    carta NÃO intrinsecamente holo (`_rarity_is_holo` False), (3) existe
+    `normal.market` E `reverseHolofoil.market` > RATIO × normal.market (RATIO =
+    `REVERSE_NONHOLO_OUTLIER_RATIO`, default 5.0). Se `normal.market` ausente,
+    NÃO dispara (tipicamente holo rares, já excluídas por #2). Verificado nos
+    dados reais: flagga Lileep(68×)/Slugma(56×)/Kakuna(57×)/Persian(22×)/
+    Volbeat(14×); NÃO flagga Zubat ecard3-118 Skyridge (3.1×, prêmio reverse real).
+  - [ROTEAMENTO] O postprocess agora LÊ a coluna "Variante Baixa Confiança" e
+    força REVISAR ("validar manual") nas linhas que SERIAM COMPRA limpa — fim do
+    "clean COMPRA" com âncora de variante suspeita. Aplicado por último em
+    classify_decision: NÃO promove um NAO (margem/TG/STALE seguem NAO); só rebaixa
+    COMPRA→REVISAR. Margem/preço/bucket INALTERADOS.
+  - [PLUMBING] Providers expõem `last_normal_market` (pokemontcg live + cache hit
+    + tcgcsv); `Cache.get_price` extrai `normal.market` do raw cacheado (run
+    diário usa cache). Helper module-level `_reverse_nonholo_market_outlier`.
+  - Testes: +22 (`tests/test_reverse_lowvalue_guard.py`) → 172 no total.
 
 Changelog v2.22 (2026-06-22 — contrato de entrega scanner→postprocess + GG## scan-time + fix dir XLSX):
   - [CONTRATO] keep_all_priced (default ON): o scanner agora PERSISTE todo
@@ -878,6 +907,9 @@ class Cache:
         # set) e pela coluna Chase Tier (rarity oficial > rarity do CT).
         ptcg_rarity = None
         set_release_date = None
+        # v2.24: `normal.market` do raw cacheado (ZERO fetch extra) — alimenta o
+        # guard reverse-outlier mesmo em cache hit (o run diário usa cache).
+        normal_market = None
         try:
             if raw_json:
                 raw = json.loads(raw_json)
@@ -885,12 +917,15 @@ class Cache:
                 variant_used = raw.get("_variant_used")
                 ptcg_rarity = raw.get("rarity")
                 set_release_date = (raw.get("set") or {}).get("releaseDate")
+                tcg_prices = (raw.get("tcgplayer") or {}).get("prices") or {}
+                normal_market = (tcg_prices.get("normal") or {}).get("market")
         except (json.JSONDecodeError, AttributeError, TypeError):
             tcg_url = None
             variant_used = None
         return {"market_usd": market, "low_usd": low, "mid_usd": mid,
                 "tcg_url": tcg_url, "variant_used": variant_used,
-                "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date}
+                "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date,
+                "normal_market": normal_market}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -1118,6 +1153,12 @@ class PricingProvider(ABC):
     # foil-aware sobrescreve a cada chamada. scan_expansion propaga pra
     # Opportunity.price_variant_used. Reset pra None igual `last_tcg_url`.
     last_variant_used: Optional[str] = None
+    # v2.24 (2026-06-26): `normal.market` (USD) da última carta precificada, quando
+    # a fonte expõe a variante `normal`. Usado pelo guard reverse-outlier
+    # (_reverse_nonholo_market_outlier) pra comparar o reverseHolofoil casado
+    # contra a âncora líquida `normal`. None quando a fonte não tem `normal`
+    # (tipicamente holo rares — guard não dispara nesse caso).
+    last_normal_market: Optional[float] = None
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
@@ -1220,6 +1261,58 @@ def select_tcgplayer_variant_price(
         if entry and entry.get("market"):
             return variant, entry
     return None, None
+
+
+# v2.24 (2026-06-26): razão reverse/normal acima da qual o preço reverseHolofoil
+# de uma carta NÃO-holo é tratado como outlier ilíquido (não uma âncora confiável).
+# Cartas comuns/incomuns da era EX que são genuinamente reverse (foil=True) casam
+# CORRETAMENTE em reverseHolofoil — mas o `reverseHolofoil.market` da pokemontcg.io
+# pra vintage barato é um número fino, dirigido por outlier, não líquido. Exemplos
+# reais (pokemontcg.io ao vivo, 2026-06-26): Lileep ex12-56 normal $0.55 vs reverse
+# $37.50 (68×), Slugma ex8-75 (56×), Kakuna ex6-36 (57×), Persian ex6-44 (22×),
+# Volbeat ex9-42 (14×) — todos passaram como COMPRA limpa. Contra-exemplo legítimo:
+# Zubat ecard3-118 (Skyridge) normal $33.47 vs reverse $104.99 (3.1×) = prêmio
+# reverse Skyridge real, NÃO deve disparar. RATIO=5.0 separa os dois grupos.
+REVERSE_NONHOLO_OUTLIER_RATIO = 5.0
+
+
+def _reverse_nonholo_market_outlier(
+    variant_used: Optional[str],
+    is_holo: bool,
+    selected_market: Optional[float],
+    normal_market: Optional[float],
+    ratio: float = REVERSE_NONHOLO_OUTLIER_RATIO,
+) -> bool:
+    """v2.24: True quando o preço de referência casou em `reverseHolofoil` pra uma
+    carta NÃO intrinsecamente holo (Common/Uncommon/Rare não-holo) E esse preço
+    reverse é um outlier absurdo vs o preço `normal` (> `ratio`× o normal).
+
+    Estende o sinal "Variante Baixa Confiança" (v2.18) pro caso que ele
+    DELIBERADAMENTE não pegava: o v2.18 não dispara pra listings reverse genuínos
+    (foil=True → reverseHolofoil é a variante CORRETA), porque essa exclusão foi
+    pensada pra Holo Rare (onde reverse é o fallback intencional). O buraco: uma
+    common/uncommon NÃO-holo que casa em reverseHolofoil cujo market é fino e
+    inflado (68× o normal no Lileep). Aqui NÃO se exige `foil` — o sinal é
+    independente de foil; o que importa é a variante escolhida + a razão.
+
+    Dispara SÓ quando TODOS valem:
+      1. variante escolhida == `reverseHolofoil`;
+      2. a carta NÃO é intrinsecamente holo (`is_holo` False);
+      3. existe `normal.market` (> 0) E `reverseHolofoil.market` >
+         `ratio` × `normal.market`.
+    Se `normal.market` está ausente, NÃO dispara — essas são tipicamente holo
+    rares (já excluídas por #2 de qualquer modo). Sinal-only: NÃO mexe em
+    margem/preço/bucket; só roteia a linha pra validação manual (REVISAR).
+    """
+    if variant_used != "reverseHolofoil":
+        return False
+    if is_holo:
+        return False
+    if not normal_market or normal_market <= 0:
+        return False
+    if not selected_market or selected_market <= 0:
+        return False
+    return selected_market > ratio * normal_market
 
 
 class PokemonTcgIoProvider(PricingProvider):
@@ -1604,6 +1697,8 @@ class PokemonTcgIoProvider(PricingProvider):
         # chamada pra evitar carry-over do card anterior.
         self.last_ptcg_rarity = None
         self.last_set_release_date = None
+        # v2.24: reset normal.market (guard reverse-outlier).
+        self.last_normal_market = None
         # Cache inclui foil pra evitar colisão entre versão normal e RH
         # do mesmo card (2026-05-11 H2 fix).
         # v2.20 (2026-06-21): namespace versionado (`pricelogic`). A lógica de
@@ -1622,6 +1717,7 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_variant_used = cached.get("variant_used")
             self.last_ptcg_rarity = cached.get("ptcg_rarity")
             self.last_set_release_date = cached.get("set_release_date")
+            self.last_normal_market = cached.get("normal_market")
             return cached["market_usd"]
 
         card = self._search(card_name, set_code, collector_number)
@@ -1658,6 +1754,9 @@ class PokemonTcgIoProvider(PricingProvider):
         tcg = card.get("tcgplayer", {}).get("prices", {})
         if not tcg:
             return None
+        # v2.24: âncora `normal.market` pro guard reverse-outlier (capturada ANTES
+        # da seleção de variante — independe de qual variante será escolhida).
+        self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
         # v2.18 (2026-06-20): seleção de variante CIENTE de raridade + reverse.
         #
@@ -1933,6 +2032,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         self.last_ptcg_rarity = None
         self.last_set_release_date = None
         self.last_price_source = None
+        self.last_normal_market = None
 
         index = self._set_index.get(set_code)
         if not index:
@@ -1943,6 +2043,9 @@ class TcgCsvFallbackProvider(PricingProvider):
         variants = index.get(key)
         if not variants:
             return None
+        # v2.24: âncora `normal.market` pro guard reverse-outlier (mesma fonte de
+        # variantes da seleção; None se o tcgcsv não expõe Normal pra este card).
+        self.last_normal_market = (variants.get("normal") or {}).get("market")
 
         # MESMA escada de variante da pokemontcg.io (fonte única compartilhada).
         is_holo = _rarity_is_holo(rarity)
@@ -3034,10 +3137,20 @@ class Scanner:
         # v2.14 + v2.18: flag de baixa confiança de variante. Listing NÃO-foil
         # que só achou preço numa variante metálica premium (holofoil/
         # unlimitedHolofoil) sendo NÃO-holo (o caso Gengar não-foil → $1600).
+        is_holo_card = _rarity_is_holo(l.rarity, ptcg_rarity)
         variant_low_conf = (
             l.foil is False
-            and not _rarity_is_holo(l.rarity, ptcg_rarity)
+            and not is_holo_card
             and variant_used in ("holofoil", "unlimitedHolofoil")
+        )
+        # v2.24: estende o sinal pro caso reverse-outlier — common/uncommon
+        # NÃO-holo que casa em `reverseHolofoil` cujo market é um outlier absurdo
+        # vs `normal` (>5×). Ex.: Lileep ex12-56 normal $0.55 vs reverse $37.50
+        # (68×). Esses são reverse GENUÍNOS (foil=True), então o sinal v2.18 não
+        # pegava; aqui a razão reverse/normal denuncia a âncora ilíquida.
+        normal_market = getattr(source_provider, "last_normal_market", None)
+        variant_low_conf = variant_low_conf or _reverse_nonholo_market_outlier(
+            variant_used, is_holo_card, tcg_market, normal_market
         )
         set_release = getattr(source_provider, "last_set_release_date", None) or ""
         rarity_for_tier = ptcg_rarity or l.rarity
