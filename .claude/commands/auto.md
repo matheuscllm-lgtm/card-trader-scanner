@@ -33,11 +33,12 @@ de leitura-só **de uma vez** (um Explore + batch de Read/Grep), não em série.
 2. **Lê a seção "Convenções da frota"** do `CLAUDE.md` (e, se precisar de
    detalhe, o manual `scanners-commons`): 3 famílias de erro recorrente (segredo
    com BOM, branch defasada por squash, honestidade de preço).
-3. **Descobre o comando de teste** — NÃO assuma `pytest`. Ordem de descoberta:
-   (a) o que o `CLAUDE.md` manda; (b) workflow de CI em `.github/workflows/*.yml`;
-   (c) `pytest.ini`/`pyproject.toml`/`tox.ini`; (d) arquivos `test_*.py` na raiz
-   (ex.: o MYP usa `python test_v5_8_offline.py`, não `pytest`). Anote o comando
-   real que vai usar.
+3. **Descobre o comando de teste** — confirme, não assuma. Comece pela
+   **tabela quick-ref (§Q)**; hoje quase toda a frota roda `python -m pytest -q`
+   no CI, mas há nuances (o MYP tem **também** um smoke de raiz
+   `python test_v5_8_offline.py` além do pytest). Se a tabela divergir, valem,
+   nesta ordem: (a) `CLAUDE.md` do repo; (b) CI em `.github/workflows/*.yml`;
+   (c) `pytest.ini`/`pyproject.toml`. Anote o comando real que vai usar.
 4. **Recupera precedentes**: cheque memória/handoff antes de reinventar. Se
    existir `SESSION-HANDOFF.md` na raiz, leia. Se houver skill de memória no
    ambiente (`claude-mem` `mem-search`), pergunte "já resolvemos isto?". Ausência
@@ -53,6 +54,25 @@ de leitura-só **de uma vez** (um Explore + batch de Read/Grep), não em série.
    pode faltar na nuvem (use `mcp__github__*`); o **lead agent do repo**
    (ex. `card-agent`, `myp-agent`) só existe no PC local, não na nuvem. Veja a
    caixa de ferramentas (§4) e **degrade com elegância** quando algo faltar.
+
+---
+
+## Q. Quick-ref da frota (atalho do §0 — o `CLAUDE.md` do repo SEMPRE vence)
+
+Use para acelerar o pré-voo. **Se algo aqui divergir do `CLAUDE.md` do repo, o
+`CLAUDE.md` manda** (esta tabela pode envelhecer). Lead agents só existem no PC
+local, não na nuvem.
+
+| Repo | Teste (CI) | Threshold | Lead agent |
+|---|---|---|---|
+| card-trader | `python -m pytest -q` | **fração** `0.30` | `card-agent` |
+| myp | `python -m pytest -q` (+ smoke `python test_v5_8_offline.py`) | **inteiro** `30` | `myp-agent` |
+| ebay | `python -m pytest -q` | **inteiro** `30` | — |
+| liga | `pytest -q` | **inteiro** `30` | — |
+| comc | `python -m pytest -q tests/` | **fração** `0.30` | — |
+| sealed | `python -m pytest -q` | **fração** `0.30` | — |
+| integrated | `python -m pytest` | herda das fontes (meta-scanner) | — |
+| longterm-outlook | `python -m pytest tests/ -q` | N/A (score 0-100) | — |
 
 ---
 
@@ -120,6 +140,18 @@ só onde há dependência real de dados.
   refactor amplo): considere o `Workflow` (pipeline/parallel com verificação
   embutida) — mas **escale ao custo** (§3): só quando o volume justifica.
 
+**Playbook — tarefa → plano (exemplos reais da frota):**
+- *Bug/honestidade de preço* → 1 fix + **3 `Agent` em paralelo** com lentes
+  correção / honestidade-preço / regressão (§5d); maioria libera.
+- *Set novo sem cobertura no `pokemontcg.io`* → 1 `Explore` mapeia o caminho do
+  preço + **2 fontes em paralelo** (API MYP + `tcgcsv`/PriceCharting via
+  firecrawl); divergiu muito → fallback rotulado, nunca o número que confirma o
+  deal (§5c).
+- *Drift cross-scanner / refactor amplo* → `Workflow` (pipeline: descobre
+  sites → transforma → verifica), escalado ao volume (§3).
+- *Auditoria de honestidade do output* → **N× em paralelo**
+  `pr-review-toolkit:silent-failure-hunter` + `code-reviewer` sobre o diff.
+
 **Caixa de ferramentas — capacidade → ferramenta (com fallback):**
 
 | Preciso de… | Primária | Fallback / nota |
@@ -181,6 +213,19 @@ subagente seu **não é revisor independente de verdade** — lentes paralelas p
 mais que uma passada, mas não são carimbo. Use isso para **decidir e prosseguir**
 no território reversível (em vez de parar e perguntar). Só nos 4 riscos do §3 a
 verificação multi-agente **não** substitui o operador.
+
+### 5e. Definition of Done — marque ANTES de dizer "pronto"
+Não declare resolvido sem poder responder **sim** a cada item aplicável:
+- [ ] Teste rodou e **colei a saída real** (passou/falhou) — §5a.
+- [ ] CI **verde confirmado** pós-push (status colado) — §5b.
+- [ ] Mexeu em preço? Cruzei **≥2 fontes** e registrei qual deu o número — §5c.
+- [ ] Ambíguo/arriscado? Passou na **verificação multi-agente** (maioria) — §5d.
+- [ ] **PR idempotente** (chequei head antes de criar) + **diff varrido por
+  segredo** — §6.
+- [ ] Respeitei os **invariantes** (threshold, NM-only, margem 30%, sem commitar
+  scan) — §9.
+
+Item aplicável não-marcado ⇒ **não está pronto**: diga exatamente o que falta.
 
 ## 6. Merge, idempotência de PR e branch
 
