@@ -273,12 +273,17 @@ copiar e colar no chat.
   quando você for comprar, pode só restar a cara. **Confira o preço ao vivo
   antes de comprar.** (Ex. 06-08: Arceus VSTAR scan R$54 → real R$75 → virou
   prejuízo.)
-- **Coluna "Variante Baixa Confiança" (nova em jun/2026)**: quando aparece "Sim",
-  a carta foi anunciada como **não-brilhante** mas o único preço de referência
-  encontrado era de uma versão **brilhante cara**. O preço pode ser da versão
-  errada (a brilhante costuma valer várias vezes mais) → a margem pode estar
-  inflada. **Confira a versão no Link TCG antes de comprar.** É só um aviso — não
-  muda a margem nem a classificação.
+- **Coluna "Variante Baixa Confiança" (jun/2026; reforçada em v2.24)**: quando
+  aparece "Sim", a carta foi anunciada como **não-brilhante** mas o único preço
+  de referência encontrado era de uma versão **brilhante cara** — OU (novo em
+  v2.24) é uma comum/incomum **reverse** cujo preço de referência reverse é um
+  número **fino e fora da curva** vs a versão normal (mais de 5× o normal; ex.:
+  Lileep ex12-56 normal US$0,55 vs reverse US$37,50 = 68×). Em ambos os casos o
+  preço pode ser da versão errada / de pouca liquidez → a margem pode estar
+  inflada. **Confira a versão no Link TCG antes de comprar.** A margem e o preço
+  **não mudam** — mas a partir de **v2.24** essa linha é **rebaixada de COMPRA
+  para REVISAR** ("validar manual"): nunca mais aparece como COMPRA limpa. (Não
+  rebaixa o que já era NÃO: margem baixa, TG##, STALE seguem NÃO.)
 
 > **Não rode dois scanners na mesma pasta de estado ao mesmo tempo.** A partir de
 > jun/2026 o programa **recusa** iniciar um segundo scanner que use a mesma pasta
@@ -354,7 +359,12 @@ programas distintos.
 
 ---
 
-*Versão do scanner: v2.23 (fonte de FALLBACK tcgcsv.com — preenche SÓ os sets
+*Versão do scanner: v2.24 (guard reverse-outlier — common/uncommon NÃO-holo que
+casa no `reverseHolofoil` da pokemontcg.io com razão reverse/normal absurda (>5×,
+ex. Lileep ex12-56 68×) dispara "Variante Baixa Confiança" e é rebaixada COMPRA→
+REVISAR no postprocess; sinal-only, margem/preço/bucket inalterados; constante
+`REVERSE_NONHOLO_OUTLIER_RATIO=5.0`; 172 testes; 2026-06-26). Inclui v2.23
+(fonte de FALLBACK tcgcsv.com — preenche SÓ os sets
 que a pokemontcg.io não precifica, ex.: asc/Ascended Heroes, que sem isso ficava
 invisível; resolução de set unique-match-only, MESMA seleção de variante da
 pokemontcg.io — sem colapsar pro subtype mais barato —, validação per-blueprint
