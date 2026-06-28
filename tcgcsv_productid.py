@@ -20,10 +20,21 @@ cobertura: nunca chuta.
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
-# Helpers/mapas reusados do scanner (import sem efeito colateral — tudo no módulo
-# do scanner é constante/def; o trabalho roda sob `if __name__ == '__main__'`).
+# Trainer/Galarian Gallery (TG##/GG##): mesmo regex que o scanner usa p/ pular
+# essas cartas no scan. clean_collector_number colapsaria "TG01" -> "1", então o
+# resolver precisa do guard ANTES de normalizar (anti-invenção; ver resolve()).
+_GALLERY_NUM_RE = re.compile(r"^(?:TG|GG)\d+", re.IGNORECASE)
+
+# Helpers/mapas reusados do scanner. ⚠️ ATENÇÃO: importar `cardtrader_scanner`
+# TEM efeito colateral — o módulo configura logging no nível de módulo
+# (`logging.basicConfig` + `FileHandler`, cardtrader_scanner.py:326-354, roda no
+# IMPORT por causa da ordem antes do argparse). Logo este import cria um
+# `cardtrader_scanner.log` no cwd e mexe no logging raiz. É tolerável aqui (só
+# acontece com `--doubleholo` sem `--no-pid-resolve`); refatorar pra import-safe
+# exigiria mexer no setup de logging do scanner (fora do escopo da coluna DH).
 from cardtrader_scanner import (
     TCGCSV_BASE,
     TCGCSV_SUBTYPE_TO_VARIANT,
@@ -154,6 +165,13 @@ class ProductIdResolver:
         """productId TCGplayer (str) ou None se não resolver UNICAMENTE."""
         idx = self._set_index(ct_set_code, set_name)
         if not idx:
+            return None
+        # ANTI-INVENÇÃO: número Trainer/Galarian Gallery (TG##/GG##) NÃO resolve.
+        # clean_collector_number tira o prefixo alfa ("TG01" → "1"), então sem este
+        # guard um TG/GG casaria o productId da carta REGULAR de mesmo numerador
+        # (productId errado → DH fabricada). O scanner já pula TG/GG no scan (mesmo
+        # regex); aqui é a barreira p/ linhas que escapem (XLSX antigo / near-miss).
+        if _GALLERY_NUM_RE.match(str(number or "").strip()):
             return None
         key = clean_collector_number(str(number) if number is not None else "")
         if not key:

@@ -1285,10 +1285,18 @@ def main():
     dh_signals = None
     pid_resolver = None
     if args.doubleholo:
-        dh_signals = doubleholo_join.load_signals(args.doubleholo)
-        print(f"DoubleHolo: {len(dh_signals)} registros com productId TCGplayer "
-              f"carregados de {args.doubleholo} — coluna DH ativa.")
-        if not args.no_pid_resolve:
+        # A coluna DH é um EXTRA não-essencial: arquivo faltando/malformado NÃO
+        # pode derrubar a entrega dos deals (espelha run_outlook.py, que degrada
+        # com "--doubleholo ignorado"). Falhou → segue sem DH, saída idêntica.
+        try:
+            dh_signals = doubleholo_join.load_signals(args.doubleholo)
+            print(f"DoubleHolo: {len(dh_signals)} registros com productId TCGplayer "
+                  f"carregados de {args.doubleholo} — coluna DH ativa.")
+        except Exception as e:  # noqa: BLE001 — DH é opcional; não aborta os deals
+            dh_signals = None
+            print(f"[DH] aviso: --doubleholo ignorado ({e}); entrega segue sem a "
+                  f"coluna DH.")
+        if dh_signals is not None and not args.no_pid_resolve:
             # Resolver OFFLINE de productId p/ linhas via pokemontcg.io (Fix(2)).
             # Import lazy: só paga o custo (e o import do scanner) quando há DH.
             try:

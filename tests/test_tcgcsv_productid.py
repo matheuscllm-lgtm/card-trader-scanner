@@ -98,6 +98,21 @@ def test_unknown_number_returns_none():
     assert r.resolve(_CODE, _NAME, "9999", "holofoil") is None
 
 
+def test_trainer_gallery_number_never_binds_to_regular_card():
+    """ANTI-INVENÇÃO: número Trainer/Galarian Gallery (TG##/GG##) NÃO pode casar
+    com a carta regular de mesmo numerador. clean_collector_number('TG01') vira
+    '1' → sem guard, casaria o productId da carta regular #1 (productId errado,
+    DH fabricada). O resolver pula TG/GG → None (honesto, '—')."""
+    products = {"results": [
+        {"productId": 700, "extendedData": [{"name": "Number", "value": "001/197"}]},
+    ]}
+    prices = {"results": [{"productId": 700, "subTypeName": "Holofoil", "marketPrice": 5}]}
+    r = _resolver(products=products, prices=prices)
+    assert r.resolve(_CODE, _NAME, "1", "holofoil") == "700"   # carta regular casa
+    assert r.resolve(_CODE, _NAME, "TG01", "holofoil") is None  # TG NÃO casa a regular
+    assert r.resolve(_CODE, _NAME, "GG05", "holofoil") is None  # idem GG
+
+
 def test_no_groups_returns_none():
     r = _resolver(groups=None)
     assert r.resolve(_CODE, _NAME, "199", "holofoil") is None
