@@ -1929,6 +1929,11 @@ class TcgCsvFallbackProvider(PricingProvider):
         # setcode CT → {numerador(str): {variante: {"market", "low", "mid"}}}
         # ou {} se o set não resolve groupId / sem dados. Pré-carregado 1× por set.
         self._set_index: dict[str, dict] = {}
+        # v2.25: setcode CT → {numerador: {variante: productId}} — paralelo ao
+        # _set_index. SÓ pra montar o link TCGplayer real (tcgplayer.com/product/
+        # {id}) da variante priceada: tapa o furo do contrato de 2 links nos sets
+        # de fallback E dá a chave de join pro DoubleHolo. NÃO afeta preço/margem.
+        self._pid_index: dict[str, dict] = {}
         # último source rotulado (sempre "tcgcsv" quando este provider responde).
         self.last_price_source: Optional[str] = None
 
@@ -2003,6 +2008,7 @@ class TcgCsvFallbackProvider(PricingProvider):
             }
 
         index: dict[str, dict] = {}
+        pid_map: dict[str, dict] = {}
         for pid, num_raw in num_by_pid.items():
             numerator = str(num_raw).split("/")[0].strip()
             digits = "".join(c for c in numerator if c.isdigit())
@@ -2012,7 +2018,11 @@ class TcgCsvFallbackProvider(PricingProvider):
             variants = variants_by_pid.get(pid)
             if variants:
                 index[key] = variants
+                # MESMA escolha last-wins do _set_index → o productId guardado é o
+                # do MESMO card cujo preço será usado. Só identidade p/ link.
+                pid_map[key] = {v: pid for v in variants}
         self._set_index[ct_set_code] = index
+        self._pid_index[ct_set_code] = pid_map
         if index:
             log.info(
                 f"  💾 tcgcsv {ct_set_code} (group {group_id}): {len(index)} "
@@ -2062,6 +2072,12 @@ class TcgCsvFallbackProvider(PricingProvider):
             return None
         self.last_variant_used = chosen_variant
         self.last_price_source = "tcgcsv"
+        # v2.25: link TCGplayer real (product page) da variante priceada. Antes
+        # ficava None → linha de fallback saía sem [TCG] (furo do contrato de 2
+        # links) e sem chave de join DH. productId vem do MESMO card priceado.
+        pid = (self._pid_index.get(set_code, {}).get(key, {}) or {}).get(chosen_variant)
+        if pid is not None:
+            self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
         market = chosen.get("market") or 0.0
         return market if market > 0 else None
 
