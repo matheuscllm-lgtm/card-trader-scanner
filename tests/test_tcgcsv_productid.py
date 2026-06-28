@@ -162,6 +162,46 @@ def test_attach_product_ids_no_resolver_only_direct_links():
     assert n == 1
 
 
+def test_attach_product_ids_mask_gates_resolver_to_deal_rows():
+    """Follow-up #4: o resolver OFFLINE (I/O via tcgcsv) só roda nas linhas que
+    viram deal (resolve_mask). Linhas fora da máscara NÃO vão ao resolver — mas
+    o Fix(1) (productId direto do link, sem I/O) continua valendo p/ TODAS."""
+    df = _rows()
+    spy = _SpyResolver({"193": "900001", "5": "700002"})
+    mask = [True, True, False]  # row2 (número 5) fora da máscara
+    n = pp.attach_product_ids(df, spy, resolve_mask=mask)
+    # row0 = Fix(1) link direto (sem resolver); row1 = resolver; row2 = mascarada → None
+    assert _pid_list(df) == ["517816", "900001", None]
+    assert n == 2
+    # resolver chamado SÓ p/ a linha 1 (número 193); a linha 2 (número 5) foi pulada
+    assert [c[2] for c in spy.calls] == ["193"]
+
+
+def test_attach_product_ids_mask_none_resolves_all_rows():
+    """resolve_mask=None (default) preserva o comportamento antigo: resolve todas."""
+    df = _rows()
+    spy = _SpyResolver({"193": "900001", "5": "700002"})
+    n = pp.attach_product_ids(df, spy, resolve_mask=None)
+    assert _pid_list(df) == ["517816", "900001", "700002"]
+    assert n == 3
+    assert {"193", "5"} == {c[2] for c in spy.calls}
+
+
+def test_attach_product_ids_mask_aligns_on_noncontiguous_index():
+    """Regressão: o gating é POSICIONAL (enumerate(iterrows()) vs list(mask)). Com
+    índice do pandas NÃO contíguo (df filtrado), a máscara ainda casa a linha certa
+    porque ambos iteram em ORDEM DE LINHA — não pelo rótulo do índice. Sem isto, um
+    df com índice [10, 11, 12] gatearia a linha errada."""
+    df = _rows()
+    df.index = [10, 11, 12]  # índice não-contíguo, como num df filtrado/concatenado
+    spy = _SpyResolver({"193": "900001", "5": "700002"})
+    mask = [True, True, False]  # 1ª e 2ª linhas (ordem), NÃO a 3ª
+    n = pp.attach_product_ids(df, spy, resolve_mask=mask)
+    assert _pid_list(df) == ["517816", "900001", None]
+    assert n == 2
+    assert [c[2] for c in spy.calls] == ["193"]  # só a 2ª linha (número 193)
+
+
 # ─── end-to-end: DH casa via productId resolvido (linha pokemontcg) ──────────
 def _raw_for_md():
     return pd.DataFrame({
@@ -182,6 +222,42 @@ def _raw_for_md():
         # redirect pokemontcg (sem productId) — só o resolver faz casar
         "Link TCG": ["https://prices.pokemontcg.io/tcgplayer/sv4-193"],
     })
+
+
+def test_delivery_resolve_mask_uses_deals_when_present():
+    """Com COMPRA/REVISAR, a máscara de resolução = exatamente os deals."""
+    raw = pd.DataFrame({
+        "Card Name": ["A", "B", "C"], "Nº": [1, 2, 3],
+        "Set": ["X (x)"] * 3, "Rarity": ["Double Rare"] * 3, "Condição": ["NM"] * 3,
+        "Qtd": [1, 1, 1], "LIVE R$ (real)": [100, 100, 100],
+        "TCG Market (BRL)": [200, 110, 105], "TCG Market (USD)": [40, 22, 21],
+        "Net Margin % REAL": [0.50, 0.05, 0.03],  # só a 1ª é deal
+        "Lucro R$ REAL": [100, 10, 5], "Validation Status": ["VALIDATED_REAL"] * 3,
+        "Link CardTrader": ["c"] * 3, "Link TCG": ["t"] * 3,
+    })
+    cfg = pp.DecisionConfig()
+    df = pp.enrich_df(raw, hub_fee_rate=cfg.hub_fee_rate)
+    mask = list(pp._delivery_resolve_mask(df, cfg, top_md=50))
+    assert mask == [True, False, False]  # só o deal
+
+
+def test_delivery_resolve_mask_near_miss_covers_topN_by_margin():
+    """Sem nenhum deal (near-miss), a máscara cobre os top_md por margem — as
+    MESMAS linhas que a entrega markdown mostra. Sem isto, o resolver rodaria em
+    ZERO linhas e a tabela near-miss perderia a coluna DH (regressão do gating)."""
+    raw = pd.DataFrame({
+        "Card Name": ["A", "B", "C"], "Nº": [1, 2, 3],
+        "Set": ["X (x)"] * 3, "Rarity": ["Double Rare"] * 3, "Condição": ["NM"] * 3,
+        "Qtd": [1, 1, 1], "LIVE R$ (real)": [100, 100, 100],
+        "TCG Market (BRL)": [118, 112, 105], "TCG Market (USD)": [23, 22, 21],
+        "Net Margin % REAL": [0.18, 0.12, 0.05],  # TODAS NÃO (< 0.20)
+        "Lucro R$ REAL": [18, 12, 5], "Validation Status": ["VALIDATED_REAL"] * 3,
+        "Link CardTrader": ["c"] * 3, "Link TCG": ["t"] * 3,
+    })
+    cfg = pp.DecisionConfig()
+    df = pp.enrich_df(raw, hub_fee_rate=cfg.hub_fee_rate)
+    mask = list(pp._delivery_resolve_mask(df, cfg, top_md=2))
+    assert mask == [True, True, False]  # top-2 por margem (0.18, 0.12), não a 0.05
 
 
 def test_dh_binds_on_pokemontcg_row_via_resolved_pid():

@@ -919,20 +919,31 @@ def _set_name_from_label(set_label) -> str:
 def attach_product_ids(df: pd.DataFrame, resolver,
                        set_col: str = "set_code", num_col: str = "card_number",
                        variant_col: str = "variant",  # canonical pós-normalize_columns (era "Variant" → nunca casava)
-                       url_col: str = "link_tcg") -> int:
+                       url_col: str = "link_tcg",
+                       resolve_mask=None) -> int:
     """Adiciona a coluna `tcg_product_id` (str ou None) por linha — chave de join DH.
 
     Ordem (menos invasiva 1º): (1) se `link_tcg` já é tcgplayer.com/product/<id>
     (sets via tcgcsv — Fix(1) do scanner) usa esse id direto; (2) senão resolve
     OFFLINE via tcgcsv por (set CT, número, variante priceada) — Fix(2). Linha
     sem resolução UNÍVOCA → None (DH = '—', honesto). NÃO toca preço/margem; o
-    productId é só identidade p/ link/join. `resolver=None` → só o passo (1)."""
+    productId é só identidade p/ link/join. `resolver=None` → só o passo (1).
+
+    `resolve_mask` (follow-up #4): sequência booleana alinhada às linhas de `df`;
+    quando passada, o passo (2) (resolver OFFLINE, que faz I/O via tcgcsv) só roda
+    nas linhas marcadas True — tipicamente só as que viram deal (COMPRA/REVISAR).
+    Num `--all-sets` (milhares de linhas, a maioria NÃO) isso evita o I/O nas
+    linhas que nunca aparecem na entrega. O passo (1) (productId direto do link,
+    SEM I/O) continua valendo p/ TODAS as linhas. `None` = resolve todas (antigo).
+    """
     have_url = url_col in df.columns
+    mask = list(resolve_mask) if resolve_mask is not None else None
     pids = []
     n = 0
-    for _, row in df.iterrows():
+    for pos, (_, row) in enumerate(df.iterrows()):
         pid = doubleholo_join.extract_product_id(row.get(url_col)) if have_url else None
-        if pid is None and resolver is not None:
+        allow_resolve = mask is None or (pos < len(mask) and bool(mask[pos]))
+        if pid is None and resolver is not None and allow_resolve:
             label = row.get(set_col)
             try:
                 pid = resolver.resolve(
@@ -948,6 +959,26 @@ def attach_product_ids(df: pd.DataFrame, resolver,
             n += 1
     df["tcg_product_id"] = pids
     return n
+
+
+def _delivery_resolve_mask(df: pd.DataFrame, cfg: DecisionConfig, top_md: int):
+    """Máscara booleana (alinhada às linhas de `df`) das linhas que aparecem na
+    ENTREGA markdown COM coluna DH — o conjunto p/ o qual vale rodar o resolver
+    OFFLINE (Fix(2), que faz I/O). ESPELHA a seleção de `build_delivery_markdown`:
+    os deals (COMPRA/REVISAR) quando existirem; senão (near-miss) os `top_md`
+    candidatos por margem. Sem cobrir o near-miss, quando NÃO há deal o resolver
+    rodaria em ZERO linhas e a tabela near-miss entregue perderia a coluna DH."""
+    decisao = df.apply(lambda r: classify_decision(r, cfg)[0], axis=1)
+    is_deal = decisao.isin(["COMPRA", "REVISAR"])
+    if bool(is_deal.any()):
+        return is_deal
+    mask = pd.Series(False, index=df.index)
+    if "net_margin" in df.columns and len(df):
+        top_idx = df["net_margin"].sort_values(ascending=False).head(top_md).index
+        mask.loc[top_idx] = True
+    else:
+        mask.loc[:] = True  # sem margem p/ ordenar → não arrisca, resolve todas
+    return mask
 
 
 def _fmt_dh(v) -> str:
@@ -1110,11 +1141,24 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     if dh_signals is not None:
         # 1º resolve o productId TCGplayer por linha (link tcgcsv direto via
         # Fix(1) OU ponte offline tcgcsv via Fix(2)); 2º casa a nota DH por ele.
-        resolved = attach_product_ids(df, pid_resolver)
+        # Follow-up #4: o resolver OFFLINE (I/O) só roda nas linhas da ENTREGA
+        # markdown — os deals (COMPRA/REVISAR) ou, sem nenhum, os candidatos
+        # near-miss (ver _delivery_resolve_mask). Num --all-sets a maioria é NÃO e
+        # nunca entra na entrega, então evita o I/O nelas. O Fix(1) (productId do
+        # link direto, SEM I/O) segue valendo p/ TODAS as linhas — logo a coluna DH
+        # do XLSX "All Listings" tem cobertura best-effort (deal/near-miss + linhas
+        # com link tcgplayer.com/product direto); linha NÃO-deal sem link de produto
+        # mostra "—" (honesto: DH é 2ª opinião de deal, não de listing rejeitado).
+        deliver_mask = _delivery_resolve_mask(df, cfg, top_md)
+        resolved = attach_product_ids(df, pid_resolver, resolve_mask=deliver_mask)
         matched = doubleholo_join.attach_scores_df(
             df, dh_signals, url_col="link_tcg", pid_col="tcg_product_id")
+        # Follow-up #5: "casaram" (productId no índice) ≠ "com nota DH" (dh_score
+        # não-None) — separa as duas contagens p/ a telemetria não inflar.
+        scored = int(df["dh_score"].notna().sum())
         print(f"[DH] productId resolvido em {resolved}/{len(df)} linhas; "
-              f"{matched}/{len(df)} casaram com o DoubleHolo (sem match → '—').")
+              f"{matched} casaram com o DoubleHolo, {scored} com nota DH "
+              f"(sem match ou sem nota → '—').")
     wb = Workbook(); wb.remove(wb.active)
 
     deals = build_deals_sheet(df, cfg)
