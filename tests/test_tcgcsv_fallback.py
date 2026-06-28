@@ -83,6 +83,7 @@ def _provider_with(groups, products, prices):
     prov._groups = None
     prov._groups_fetched = False
     prov._set_index = {}
+    prov._pid_index = {}  # v2.25: índice de productId p/ link TCGplayer real
     prov.last_price_source = None
     prov.last_tcg_url = None
     prov.last_variant_used = None
@@ -203,6 +204,10 @@ def test_c_end_to_end_via_provider():
     assert p_rev == 1599.99, p_rev
     assert prov.last_variant_used == "reverseHolofoil"
     assert prov.last_price_source == "tcgcsv"
+    # v2.25 Fix(1): link TCGplayer real (product page) da variante priceada —
+    # tapa o furo do contrato de 2 links e dá a chave de join DH (productId 1).
+    assert prov.last_tcg_url == "https://www.tcgplayer.com/product/1", \
+        prov.last_tcg_url
 
 
 # ───────────────── (d) variante REQUERIDA ausente → skip (None) ──────────────

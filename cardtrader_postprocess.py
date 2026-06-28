@@ -60,6 +60,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+# Caminho 1 DoubleHolo (2ª opinião): join por productId TCGplayer + nota DH.
+# Opcional — só ativa com a flag --doubleholo. Sem ela, comportamento idêntico.
+import doubleholo_join
+
 # ─── v2.1 fix #3 (bug-hunt 2026-05-17): força UTF-8 no I/O ───────────────────
 # openpyxl.Workbook.save() pega encoding do interpreter locale via algum
 # caminho interno. Em Windows com locale pt-BR, sys.stdout.encoding default
@@ -650,6 +654,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
         deals = deals.sort_values("lucro_liq", ascending=False)
     # Renomeia pro display
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
+                     "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -658,7 +663,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     deals = _combine_name_number(deals)
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
-        "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
+        "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -673,6 +678,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     df["decisao"] = [r[0] for r in results]
     df["porque"] = [r[1] for r in results]
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
+                     "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -681,7 +687,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     df = _combine_name_number(df)
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
-        "fundamental_score": "Score", "set_code": "Set", "card_name": "Carta",
+        "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -901,11 +907,65 @@ def _md_escape(s) -> str:
     return str(s).replace("|", "/").strip()
 
 
+def _set_name_from_label(set_label) -> str:
+    """'Paradox Rift (par)' → 'Paradox Rift'; sem parênteses → o próprio label.
+    Usado como nome do set p/ o fallback-por-nome do resolver tcgcsv."""
+    if not set_label:
+        return ""
+    s = str(set_label).strip()
+    return s.rsplit(" (", 1)[0].strip() if " (" in s else s
+
+
+def attach_product_ids(df: pd.DataFrame, resolver,
+                       set_col: str = "set_code", num_col: str = "card_number",
+                       variant_col: str = "variant",  # canonical pós-normalize_columns (era "Variant" → nunca casava)
+                       url_col: str = "link_tcg") -> int:
+    """Adiciona a coluna `tcg_product_id` (str ou None) por linha — chave de join DH.
+
+    Ordem (menos invasiva 1º): (1) se `link_tcg` já é tcgplayer.com/product/<id>
+    (sets via tcgcsv — Fix(1) do scanner) usa esse id direto; (2) senão resolve
+    OFFLINE via tcgcsv por (set CT, número, variante priceada) — Fix(2). Linha
+    sem resolução UNÍVOCA → None (DH = '—', honesto). NÃO toca preço/margem; o
+    productId é só identidade p/ link/join. `resolver=None` → só o passo (1)."""
+    have_url = url_col in df.columns
+    pids = []
+    n = 0
+    for _, row in df.iterrows():
+        pid = doubleholo_join.extract_product_id(row.get(url_col)) if have_url else None
+        if pid is None and resolver is not None:
+            label = row.get(set_col)
+            try:
+                pid = resolver.resolve(
+                    _extract_set_code_from_label(label),
+                    _set_name_from_label(label),
+                    row.get(num_col),
+                    row.get(variant_col) if variant_col in df.columns else None,
+                )
+            except Exception:  # noqa: BLE001 — resolução é best-effort; falha → '—'
+                pid = None
+        pids.append(pid)
+        if pid is not None:
+            n += 1
+    df["tcg_product_id"] = pids
+    return n
+
+
+def _fmt_dh(v) -> str:
+    """Nota DH (0-100) → string; None/NaN → '—' (sem dado Double Holo, honesto)."""
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        return f"{int(round(float(v)))}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
     fx_usd_brl: float | None = None,
     top_n: int = 50,
+    show_dh: bool = False,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
 
@@ -954,8 +1014,16 @@ def build_delivery_markdown(
             "near-miss.)_"
         )
 
-    header = "| " + " | ".join(_DELIVERY_HEADERS) + " |"
-    sep = "| " + " | ".join("---" for _ in _DELIVERY_HEADERS) + " |"
+    # Coluna DH = 2ª opinião Double Holo (EXTRA, condicional à --doubleholo).
+    # Inserida logo após "Margem %" (perto da margem), sem remover/reordenar as
+    # colunas existentes nem colapsar a coluna Links — contrato de 2 links/linha
+    # intacto. Só aparece se a coluna `dh_score` foi anexada (flag passada).
+    show_dh = show_dh and "dh_score" in deals.columns
+    headers = list(_DELIVERY_HEADERS)
+    if show_dh:
+        headers.insert(2, "DH")  # após "#" (0) e "Margem %" (1)
+    header = "| " + " | ".join(headers) + " |"
+    sep = "| " + " | ".join("---" for _ in headers) + " |"
     lines = [title]
     if near_miss:
         lines.append(
@@ -1003,7 +1071,14 @@ def build_delivery_markdown(
             flag,
             _md_links_cell(row.get("link_ct"), row.get("link_tcg")),
         ]
+        if show_dh:
+            cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
+    if show_dh:
+        lines.append(
+            "\n_DH = 2ª opinião Double Holo 0-100 (50=neutro), não entra na "
+            "margem/decisão; '—' = sem dado._"
+        )
     return "\n".join(lines)
 
 
@@ -1026,8 +1101,20 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
 
 
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
-                 fx_usd_brl: float | None = None, top_md: int = 50) -> str:
+                 fx_usd_brl: float | None = None, top_md: int = 50,
+                 dh_signals: dict | None = None, pid_resolver=None) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
+    # Caminho 1 DoubleHolo: anexa a coluna `dh_score` (2ª opinião). Só quando
+    # --doubleholo foi passado; sem a flag a coluna não existe e a saída é
+    # idêntica. NÃO toca margem/decisão.
+    if dh_signals is not None:
+        # 1º resolve o productId TCGplayer por linha (link tcgcsv direto via
+        # Fix(1) OU ponte offline tcgcsv via Fix(2)); 2º casa a nota DH por ele.
+        resolved = attach_product_ids(df, pid_resolver)
+        matched = doubleholo_join.attach_scores_df(
+            df, dh_signals, url_col="link_tcg", pid_col="tcg_product_id")
+        print(f"[DH] productId resolvido em {resolved}/{len(df)} linhas; "
+              f"{matched}/{len(df)} casaram com o DoubleHolo (sem match → '—').")
     wb = Workbook(); wb.remove(wb.active)
 
     deals = build_deals_sheet(df, cfg)
@@ -1088,7 +1175,8 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     # ─── Entrega no chat: tabela markdown (links clicáveis) ──────────────────
     # Formato aprovado 2026-06-09. A entrega ao operador é a TABELA no chat;
     # o .md sidecar é só conveniência (mesmo conteúdo). XLSX segue cru/colunar.
-    md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md)
+    md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md,
+                                 show_dh=dh_signals is not None)
     md_path = output_path.with_suffix(".md")
     try:
         md_path.write_text(md + "\n", encoding="utf-8")
@@ -1117,6 +1205,16 @@ def main():
     p.add_argument("--top-md", type=int, default=50,
                    help=("Quantas linhas na tabela de entrega markdown do chat "
                          "(default 50). XLSX sempre traz todos os deals."))
+    p.add_argument("--doubleholo", default=None, metavar="JSON",
+                   help=("Caminho do JSON canônico do DoubleHolo (saída de "
+                         "doubleholo_signals.py ingest --json). Adiciona a coluna "
+                         "DH (2ª opinião 0-100, 50=neutro) por productId TCGplayer. "
+                         "NÃO entra na margem/decisão. Sem a flag, saída idêntica."))
+    p.add_argument("--no-pid-resolve", action="store_true",
+                   help=("Desliga a resolução OFFLINE de productId via tcgcsv "
+                         "(Fix(2)) usada p/ casar DH nas linhas via pokemontcg.io. "
+                         "Só tem efeito junto com --doubleholo; sem ela, só casam "
+                         "linhas cujo Link TCG já é tcgplayer.com/product/<id>."))
     args = p.parse_args()
 
     # Paridade com o scanner: aceita `6` ou `0.06` (auto-converte percentual).
@@ -1140,7 +1238,23 @@ def main():
         print(f"FX usd_brl_rate (Stats) = {fx:.4f} — usado p/ coluna CT US$.")
     else:
         print("FX usd_brl_rate ausente no input — coluna CT US$ ficará vazia.")
-    write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md)
+    dh_signals = None
+    pid_resolver = None
+    if args.doubleholo:
+        dh_signals = doubleholo_join.load_signals(args.doubleholo)
+        print(f"DoubleHolo: {len(dh_signals)} registros com productId TCGplayer "
+              f"carregados de {args.doubleholo} — coluna DH ativa.")
+        if not args.no_pid_resolve:
+            # Resolver OFFLINE de productId p/ linhas via pokemontcg.io (Fix(2)).
+            # Import lazy: só paga o custo (e o import do scanner) quando há DH.
+            try:
+                import tcgcsv_productid
+                pid_resolver = tcgcsv_productid.ProductIdResolver()
+            except Exception as e:  # noqa: BLE001 — sem resolver → cai p/ Fix(1) só
+                print(f"[DH] aviso: resolver de productId indisponível ({e}); "
+                      f"só linhas com link tcgplayer.com/product casam.")
+    write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md,
+                 dh_signals=dh_signals, pid_resolver=pid_resolver)
 
 if __name__ == "__main__":
     main()
