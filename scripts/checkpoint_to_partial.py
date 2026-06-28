@@ -103,6 +103,12 @@ def parse_checkpoint(path: Path):
                 continue
             typ = o.get("_type")
             if typ == "opportunity":
+                # v2.22+: o checkpoint persiste TODO listing precificado (com
+                # below_threshold=True pros que NÃO bateram a margem bruta do
+                # scan). Parcial = só candidatos que CLEARARAM o threshold bruto
+                # (below_threshold=False) — senão a tabela vira 99% ruído <30%.
+                if o.get("below_threshold") is True:
+                    continue
                 lst = o.get("listing") or {}
                 pid = lst.get("product_id")
                 row = {
@@ -126,6 +132,10 @@ def parse_checkpoint(path: Path):
                     "seller": lst.get("seller_username") or "",
                     "hub": bool(lst.get("seller_can_sell_via_hub")),
                     "url": lst.get("cardtrader_url") or "",
+                    # Link de REFERÊNCIA (TCGplayer) — obrigatório no contrato de
+                    # entrega da frota (toda linha = [oferta] · [TCG]). Vem do
+                    # campo `tcg_url` da Opportunity (card.tcgplayer.url do raw).
+                    "tcg_url": o.get("tcg_url") or "",
                 }
                 # Dedup por product_id, mantendo a maior margem bruta.
                 if pid is not None and pid in seen_pids:
@@ -146,7 +156,8 @@ def parse_checkpoint(path: Path):
                 last_progress = o
 
     deals.extend(seen_pids.values())
-    deals.sort(key=lambda r: (r["net_pct"], r["margin_pct"]), reverse=True)
+    # Ordena por margem BRUTA (critério único do operador), desempate por líquida.
+    deals.sort(key=lambda r: (r["margin_pct"], r["net_pct"]), reverse=True)
 
     total_sets = (header.get("total_sets") if header else None)
     meta = {
@@ -167,7 +178,7 @@ def write_csv(deals: list[dict], out_csv: Path) -> None:
         "rank", "net_pct", "margin_pct", "lucro_brl", "card", "set_code",
         "set_name", "collector_number", "rarity", "foil", "variant", "suspect",
         "quantity", "language", "price_ct_brl", "tcg_brl", "tcg_usd",
-        "validation", "markup_tier", "seller", "hub", "url",
+        "validation", "markup_tier", "seller", "hub", "url", "tcg_url",
     ]
     with open(out_csv, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
@@ -180,7 +191,7 @@ def write_csv(deals: list[dict], out_csv: Path) -> None:
                 r["variant"], ("SIM" if is_suspect(r) else ""),
                 r["quantity"], r["language"], round(r["price_ct_brl"], 2),
                 round(r["tcg_brl"], 2), round(r["tcg_usd"], 2), r["validation"],
-                r["markup_tier"], r["seller"], r["hub"], r["url"],
+                r["markup_tier"], r["seller"], r["hub"], r["url"], r["tcg_url"],
             ])
 
 
@@ -219,18 +230,23 @@ def write_md(deals: list[dict], meta: dict, out_md: Path, top: int) -> None:
         lines.append(f"- **Linhas inválidas no checkpoint (ignoradas):** {meta['bad_lines']}")
     lines.append("")
     shown = min(top, len(deals))
-    lines.append(f"## Top {shown} candidatos (por margem líquida)")
+    lines.append(f"## Top {shown} candidatos (por margem bruta)")
     lines.append("")
     if not deals:
         lines.append("_Nenhum candidato ainda — scan recém começou ou sets iniciais sem deals._")
     else:
-        lines.append("| # | Margem | Lucro R$ | Carta | Set | Variante | CT R$ | TCG R$ | Seller | Link |")
+        lines.append("| # | Margem | Lucro R$ | Carta | Set | Variante | CT R$ | TCG R$ | Seller | Links |")
         lines.append("|--:|--:|--:|---|---|---|--:|--:|---|---|")
         for i, r in enumerate(deals[:top], 1):
-            link = f"[abrir]({r['url']})" if r["url"] else "—"
+            # Contrato de entrega da frota: TODA linha carrega DOIS links —
+            # [oferta] (página no CardTrader, onde comprar) E [TCG] (TCGplayer,
+            # onde validar o preço de referência). Nunca dropar o de referência.
+            oferta = f"[oferta]({r['url']})" if r["url"] else "—"
+            tcg = f"[TCG]({r['tcg_url']})" if r.get("tcg_url") else "—"
+            link = f"{oferta} · {tcg}"
             var = (("⚠️ " if is_suspect(r) else "") + (r["variant"] or "—"))
             lines.append(
-                f"| {i} | {r['net_pct']*100:.0f}% | {r['lucro_brl']:.0f} | "
+                f"| {i} | {r['margin_pct']*100:.0f}% | {r['lucro_brl']:.0f} | "
                 f"{r['card']} | {r['set_code']} | {var} | {r['price_ct_brl']:.0f} | "
                 f"{r['tcg_brl']:.0f} | {r['seller']} | {link} |"
             )
