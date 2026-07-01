@@ -67,15 +67,22 @@ def test_n2_has_no_timeout_override():
     assert "n2" not in SET_TIMEOUT_OVERRIDES
 
 
-def test_mega_era_tcgcsv_sets_have_override():
-    """asc (Ascended Heroes/me2pt5) e cri (Chaos Rising/me4): a pokemontcg.io NÃO
-    precifica esses sets → 100% das listings caem no fallback tcgcsv (~1 req por
-    listing = lento). Sob o default de 8min estouravam SEMPRE e iam pra skip-list.
-    Precisam de override > default (mesmo remédio dos vintage df/n1/n4)."""
-    for code, secs in (("asc", 1800), ("cri", 1200)):
-        assert SET_TIMEOUT_OVERRIDES.get(code) == secs, f"{code} deveria ter override {secs}s"
-        assert SET_TIMEOUT_OVERRIDES[code] > _DEFAULT_S
-        assert effective_set_timeout_s(code, _DEFAULT_S) == float(secs)
+def test_cri_has_timeout_override():
+    """cri (Chaos Rising/me4): a pokemontcg.io não precifica → 100% via fallback
+    tcgcsv (~1 req/listing = lento), mas o tcgcsv REALMENTE precifica (384 rows num
+    scan real). Sob o default de 8min estourava e ia pra skip-list → precisa de
+    override > default (mesmo remédio dos vintage df/n1/n4)."""
+    assert SET_TIMEOUT_OVERRIDES.get("cri") == 1200
+    assert SET_TIMEOUT_OVERRIDES["cri"] > _DEFAULT_S
+    assert effective_set_timeout_s("cri", _DEFAULT_S) == 1200.0
+
+
+def test_asc_has_no_override_because_no_coverage():
+    """asc (Ascended Heroes/me2pt5) NÃO deve ter override: num scan de 702/901
+    listings retornou 0 preço (o tcgcsv não resolve a ASC hoje). É no-coverage
+    como n2 — timeout maior só moeria chamadas que sempre falham. Cai no default."""
+    assert "asc" not in SET_TIMEOUT_OVERRIDES
+    assert effective_set_timeout_s("asc", _DEFAULT_S) == float(_DEFAULT_S)
 
 
 def test_mega_era_ct_aliases_map_to_ptcg():
