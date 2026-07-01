@@ -490,6 +490,11 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     "ds": 1080,  # EX Delta Species — 18min (folga sobre os 12min parciais)
     "n1": 1080,  # Neo Genesis — 18min
     "n4": 1080,  # Neo Destiny — 18min
+    # Era Mega Evolution (sets novos que a pokemontcg.io NÃO precifica → TODA
+    # listing cai no fallback tcgcsv, ~1 req/listing = lento). Sem override,
+    # estouravam o default de 8min e iam pra skip-list (asc já entrava em churn).
+    "asc": 1800,  # Ascended Heroes (me2pt5) — 30min (~901 listings, 100% via tcgcsv)
+    "cri": 1200,  # Chaos Rising (me4) — 20min (~384 listings, 100% via tcgcsv)
 }
 
 
@@ -1484,6 +1489,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "pfl":   ["me2"],         # Phantasmal Flames
         "asc":   ["me2pt5"],      # Ascended Heroes (sfa was timing out → asc same family)
         "por":   ["me3"],         # Perfect Order
+        "cri":   ["me4"],         # Chaos Rising (gap pós-v2.10: api_set=me4, alias faltava → todos os cards rejeitados como set mismatch)
         # === v2.10 BATCH (added 2026-05-19 from logs/alias_gaps_2026-05-19.md) ===
         # 110 high-confidence 1-to-1 aliases extracted from 558 rejected
         # (CT_set → api_set) pairs in weekly v2.9 scan log. Criterion: log shows
