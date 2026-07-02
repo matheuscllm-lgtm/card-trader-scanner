@@ -150,7 +150,12 @@ chamadas "flags") · **os valores**. Exemplo comentado:
 > comando `/scan` (arquivo `.claude/commands/scan.md`) roda exatamente esse
 > pipeline com os valores padrão (sets do daily, threshold 0.30, validate-top
 > 30, min-net-margin 0.20) e entrega a tabela do postprocess no chat, sempre
-> igual. `/scan pre ssp` sobrescreve só a lista de sets.
+> igual. `/scan pre ssp` sobrescreve só a lista de sets. Desde jul/2026 o skill
+> cobre TODOS os modos por perfis fixos — `/scan completo` (moderno curado,
+> `--all-sets --skip-backcatalog`), `/scan vintage` (os 34 sets do vintage core
+> em 2 blocos ≤~2h30 com entrega por bloco) e `/scan total` (catálogo inteiro,
+> via workflow semanal) — então **nenhum scan roda fora do skill**; os blocos
+> são travados por teste contra `VINTAGE_SET_CODES` e o `daily-scan.yml`.
 
 Opções úteis:
 - `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),
