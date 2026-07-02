@@ -67,6 +67,37 @@ def test_n2_has_no_timeout_override():
     assert "n2" not in SET_TIMEOUT_OVERRIDES
 
 
+def test_cri_has_timeout_override():
+    """cri (Chaos Rising/me4): a pokemontcg.io não precifica → 100% via fallback
+    tcgcsv (~1 req/listing = lento), mas o tcgcsv REALMENTE precifica (384 rows num
+    scan real). Sob o default de 8min estourava e ia pra skip-list → precisa de
+    override > default (mesmo remédio dos vintage df/n1/n4)."""
+    assert SET_TIMEOUT_OVERRIDES.get("cri") == 1200
+    assert SET_TIMEOUT_OVERRIDES["cri"] > _DEFAULT_S
+    assert effective_set_timeout_s("cri", _DEFAULT_S) == 1200.0
+
+
+def test_asc_has_no_override_bulk_fallback_is_fast():
+    """asc (Ascended Heroes/me2pt5) NÃO deve ter override, mas NÃO por no-coverage:
+    a pokemontcg.io não precifica o set, porém o tcgcsv SIM (group 24541 'ASC',
+    1085 rows num teste). O resgate tcgcsv é um BULK único (rápido), então o
+    default de 8min basta. (O fallback exige --max-consecutive-misses > 0 pra
+    disparar — a skill card-trader-scan passa 40.)"""
+    assert "asc" not in SET_TIMEOUT_OVERRIDES
+    assert effective_set_timeout_s("asc", _DEFAULT_S) == float(_DEFAULT_S)
+
+
+def test_mega_era_ct_aliases_map_to_ptcg():
+    """Causa-raiz do 'Chaos Rising vazio': o matcher casa o code CT contra o
+    api_set via SET_ALIAS_TO_PTCG. Sem alias, api_set=me4 ≠ CT 'cri' → TODO card
+    rejeitado como set mismatch (0 preço). asc→me2pt5, por→me3, cri→me4 precisam
+    existir pra os sets Mega serem precificáveis."""
+    aliases = sc.PokemonTcgIoProvider.SET_ALIAS_TO_PTCG
+    assert aliases.get("cri") == ["me4"]
+    assert aliases.get("asc") == ["me2pt5"]
+    assert aliases.get("por") == ["me3"]
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 2. effective_set_timeout_s — a função de resolução
 # ──────────────────────────────────────────────────────────────────────

@@ -490,6 +490,17 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     "ds": 1080,  # EX Delta Species — 18min (folga sobre os 12min parciais)
     "n1": 1080,  # Neo Genesis — 18min
     "n4": 1080,  # Neo Destiny — 18min
+    # Era Mega Evolution: sets novos que a pokemontcg.io NÃO precifica → caem no
+    # fallback tcgcsv (~1 req/listing = lento). Sem override estouram o default de
+    # 8min e vão pra skip-list. Só entram aqui sets que o tcgcsv REALMENTE precifica.
+    "cri": 1200,  # Chaos Rising (me4) — 20min; tcgcsv precifica (384 rows num scan real)
+    # NÃO incluir asc (Ascended Heroes/me2pt5): a pokemontcg.io não precifica o set,
+    # mas o tcgcsv SIM (group 24541 'ASC' — 1085 rows num teste real). O resgate
+    # tcgcsv é um BULK único (não per-listing), então asc NÃO precisa de timeout
+    # maior — a lentidão que eu via era pokemontcg.io consultando listing-a-listing
+    # SEM o fallback disparar. ⚠️ O fallback tcgcsv só dispara com
+    # --max-consecutive-misses > 0 (a skill card-trader-scan passa 40); sem a flag,
+    # asc fica com 0 preço apesar do tcgcsv ter os dados.
 }
 
 
@@ -1484,6 +1495,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "pfl":   ["me2"],         # Phantasmal Flames
         "asc":   ["me2pt5"],      # Ascended Heroes (sfa was timing out → asc same family)
         "por":   ["me3"],         # Perfect Order
+        "cri":   ["me4"],         # Chaos Rising (gap pós-v2.10: api_set=me4, alias faltava → todos os cards rejeitados como set mismatch)
         # === v2.10 BATCH (added 2026-05-19 from logs/alias_gaps_2026-05-19.md) ===
         # 110 high-confidence 1-to-1 aliases extracted from 558 rejected
         # (CT_set → api_set) pairs in weekly v2.9 scan log. Criterion: log shows
