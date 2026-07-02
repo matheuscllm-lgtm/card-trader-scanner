@@ -494,11 +494,13 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     # fallback tcgcsv (~1 req/listing = lento). Sem override estouram o default de
     # 8min e vão pra skip-list. Só entram aqui sets que o tcgcsv REALMENTE precifica.
     "cri": 1200,  # Chaos Rising (me4) — 20min; tcgcsv precifica (384 rows num scan real)
-    # NÃO incluir asc (Ascended Heroes/me2pt5): num scan de 702/901 listings ele
-    # retornou 0 preço — o tcgcsv não resolve a ASC hoje. É NO-COVERAGE (como
-    # n2/Neo Discovery), não lentidão: dar timeout maior só moeria chamadas que
-    # sempre falham. Fica no fluxo default (8min → skip-list) até a resolução
-    # tcgcsv da ASC funcionar. TODO: investigar por que a ASC não casa no tcgcsv.
+    # NÃO incluir asc (Ascended Heroes/me2pt5): a pokemontcg.io não precifica o set,
+    # mas o tcgcsv SIM (group 24541 'ASC' — 1085 rows num teste real). O resgate
+    # tcgcsv é um BULK único (não per-listing), então asc NÃO precisa de timeout
+    # maior — a lentidão que eu via era pokemontcg.io consultando listing-a-listing
+    # SEM o fallback disparar. ⚠️ O fallback tcgcsv só dispara com
+    # --max-consecutive-misses > 0 (a skill card-trader-scan passa 40); sem a flag,
+    # asc fica com 0 preço apesar do tcgcsv ter os dados.
 }
 
 

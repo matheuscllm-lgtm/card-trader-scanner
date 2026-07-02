@@ -77,10 +77,12 @@ def test_cri_has_timeout_override():
     assert effective_set_timeout_s("cri", _DEFAULT_S) == 1200.0
 
 
-def test_asc_has_no_override_because_no_coverage():
-    """asc (Ascended Heroes/me2pt5) NÃO deve ter override: num scan de 702/901
-    listings retornou 0 preço (o tcgcsv não resolve a ASC hoje). É no-coverage
-    como n2 — timeout maior só moeria chamadas que sempre falham. Cai no default."""
+def test_asc_has_no_override_bulk_fallback_is_fast():
+    """asc (Ascended Heroes/me2pt5) NÃO deve ter override, mas NÃO por no-coverage:
+    a pokemontcg.io não precifica o set, porém o tcgcsv SIM (group 24541 'ASC',
+    1085 rows num teste). O resgate tcgcsv é um BULK único (rápido), então o
+    default de 8min basta. (O fallback exige --max-consecutive-misses > 0 pra
+    disparar — a skill card-trader-scan passa 40.)"""
     assert "asc" not in SET_TIMEOUT_OVERRIDES
     assert effective_set_timeout_s("asc", _DEFAULT_S) == float(_DEFAULT_S)
 
