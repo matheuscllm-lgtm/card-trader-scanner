@@ -146,6 +146,12 @@ chamadas "flags") · **os valores**. Exemplo comentado:
   --output outputs/relatorio_da_vez.xlsx
 ```
 
+> **Skill `/scan`**: é o jeito canônico de pedir um scan ao assistente — o
+> comando `/scan` (arquivo `.claude/commands/scan.md`) roda exatamente esse
+> pipeline com os valores padrão (sets do daily, threshold 0.30, validate-top
+> 30, min-net-margin 0.20) e entrega a tabela do postprocess no chat, sempre
+> igual. `/scan pre ssp` sobrescreve só a lista de sets.
+
 Opções úteis:
 - `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),
   começando pelas mais valiosas — é o modo do rastreio **semanal**. Esse modo é
