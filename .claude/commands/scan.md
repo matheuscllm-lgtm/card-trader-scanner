@@ -1,134 +1,145 @@
 ---
-description: Roda o scan canônico do CardTrader e entrega o resultado no formato obrigatório — pipeline fixo (scanner → postprocess → colar o .md verbatim no chat). Cobre TODOS os modos via perfis nomeados (padrão/diário, completo, vintage em blocos, total via workflow). Sempre os mesmos passos, sempre o mesmo formato. Argumento = perfil (completo/vintage/total) OU códigos de set CT.
+description: Roda o scan canônico do CardTrader por GRUPOS de sets (6 grupos por recência, ≤~2h30 cada — formato padrão da frota, igual ao scan-myp) e entrega via cardtrader_postprocess.py verbatim. SEMPRE pergunta ao operador quais grupos rodar antes de começar. Argumento = números de grupo (ex. "1 3") OU códigos de set CT; "total" = catálogo inteiro via workflow semanal.
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 ---
 
 Você foi acionado pelo comando **`/scan`** do operador. Sua missão é **uma só**:
-rodar o scan do CardTrader **exatamente pelo perfil canônico abaixo** e entregar
-o resultado **no formato obrigatório**. Não improvise flags, não invente
-formato, não pule etapa. **Nenhum scan do CardTrader roda fora destes perfis.**
-Este runbook espelha os workflows do repo (`daily-scan.yml`/`weekly-scan.yml`)
-e a regra de entrega do `CLAUDE.md` — se algo divergir do `CLAUDE.md`, ele vence.
+rodar o scanner do CardTrader **por grupos canônicos** — nunca improvisando
+flags — e entregar cada grupo no formato obrigatório do postprocess. **Nenhum
+scan do CardTrader roda fora deste runbook.** Runs longos morriam sem entregar;
+cada grupo cabe em ≤~2h30 e entrega **sozinho** (se o seguinte morrer, o
+anterior já foi entregue). Se algo aqui divergir do `CLAUDE.md`, ele vence.
 
-**Argumento recebido (perfil ou sets):** `$ARGUMENTS`
+**Argumento recebido (grupos, códigos ou "total"):** `$ARGUMENTS`
 
 ---
 
 ## 1. Pré-voo (obrigatório)
 
-1. **Python do ambiente**: no Windows local use `.venv\Scripts\python.exe`; na
-   nuvem/CI use `python` (instale `requirements.txt` se for clone limpo).
-2. **Chaves**: confirme `CT_JWT` e `POKEMONTCG_API_KEY` no ambiente ou no `.env`.
-   Ao validar, cuidado com BOM/zero-width (`.strip()` NÃO tira BOM — chave suja
-   crasha o header latin-1 e o scan sai "verde mas vazio"). **Chave ausente ou
-   suja → reporte e pare.** Nunca invente preço nem rode sem fonte.
-3. **Perfil**: resolva `$ARGUMENTS` pela tabela de perfis (§2). Argumento que
-   não é um perfil nem parece código de set CT → pergunte ao operador em vez
-   de chutar.
+1. **Python do ambiente**: Windows local `.venv\Scripts\python.exe`; nuvem/CI
+   `python` (instale `requirements.txt` em clone limpo).
+2. **Chaves**: `CT_JWT` e `POKEMONTCG_API_KEY` no ambiente ou `.env`. Cuidado
+   com BOM/zero-width (`.strip()` NÃO tira BOM — chave suja crasha o header
+   latin-1 e o scan sai "verde mas vazio"). Chave ausente/suja → reporte e
+   pare. Nunca invente preço.
+3. **Escopo**: números 1–6 em `$ARGUMENTS` → esses grupos, sem perguntar.
+   Códigos de set CT → scan custom (§3, flags canônicas). `total` → §5.
+   **Vazio ou genérico → SEMPRE pergunte** (AskUserQuestion, multiSelect; como
+   o limite é 4 opções por pergunta, divida em duas: grupos 1–4 e 5–6; seleção
+   vazia/"Other: nenhum" = não rodar aquela faixa), mostrando a tabela abaixo.
+   Nunca escolha grupos sozinho.
 
-## 2. Perfis — caminho único por modo (valores SEMPRE explícitos)
+## 2. Os 6 grupos (códigos CT VERBATIM — nunca invente/deduza outros)
 
-Todos os perfis usam os MESMOS valores canônicos: `--threshold 0.30`
-(**FRAÇÃO**; inteiro `30` = 3000% = zero deals sem erro), `--validate-top 30`,
-`--min-net-margin 0.20`, output em `outputs/`. Só o ESCOPO muda entre perfis.
+Universo = os **128 sets com referência de preço real e sem armadilha**,
+derivado de `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES` do scanner (excluídos:
+`wcd*` — decks de mundial precificados contra o set original = preço-armadilha;
+`mc*` McDonald's; variantes `p`-duplicadas). A partição é **travada por teste**
+(`tests/test_scan_skill_profiles.py`) — nunca edite um código de cabeça.
 
-### `/scan` (sem argumento) — PADRÃO (diário) · 11 sets · ~50 min
+| Grupo | Era | Sets | Est. local |
+|---|---|---|---|
+| **G1** | Mega Evolution (**inclui Chaos Rising**) + era SV | 21 | ~1h35–2h |
+| **G2** | era Sword & Shield + Pokémon GO + Detective Pikachu + SM final | 21 | ~1h35–2h |
+| **G3** | Sun & Moon restante + XY final | 21 | ~1h35–2h |
+| **G4** | XY inicial + era Black & White + HGSS | 21 | ~1h35–2h |
+| **G5** | Call of Legends + DP + Platinum + EX tardio (tem sets lentos) | 22 | ~1h50–2h15 |
+| **G6** | EX inicial + e-Card + WotC (Base…Neo, Gym, promos) | 22 | ~1h50–2h15 |
 
+**G1 — Mega Evolution + era SV:**
 ```bash
 python cardtrader_scanner.py \
-  --sets sfa scr par paf tef twm ssp dri blk jtg asc \
+  --sets meg pfl asc por cri blk wht dri pre jtg ssp scr sfa twm tef paf par mew obf pal svi \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --output outputs/scan_<AAAAMMDD_HHMM>.xlsx
+  --output outputs/scan_g1_<AAAAMMDD_HHMM>.xlsx
 ```
 
-### `/scan <códigos CT>` — sets custom (ex.: `/scan pre ssp`)
-
-Mesmo comando do padrão trocando **apenas** a lista de `--sets`; todas as
-outras flags ficam as canônicas.
-
-### `/scan completo` — moderno curado · ~30 sets · est. ~2h15 (um bloco)
-
+**G2 — SWSH + PGO + DET + SM final:**
 ```bash
 python cardtrader_scanner.py \
-  --all-sets --skip-backcatalog \
+  --sets crz sit lorg astr brs fst evs cre bst shf viv cpa daa rcl ssh pkmgo det cec unm hif teu \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --output outputs/scan_completo_<AAAAMMDD_HHMM>.xlsx
+  --output outputs/scan_g2_<AAAAMMDD_HHMM>.xlsx
 ```
 
-Roda em **background** e monitore. Se passar de ~2h30 de relógio, anote a
-duração real no resumo e proponha re-dividir — não deixe virar run infinito.
-
-### `/scan vintage` — 2 blocos fixos, SEQUENCIAIS, entrega por bloco
-
-Códigos copiados VERBATIM de `VINTAGE_SET_CODES` do scanner (travados por
-teste — `tests/test_scan_skill_profiles.py`; **nunca** edite de cabeça). Se o
-operador não disser quais blocos, **pergunte** (AskUserQuestion, multiSelect).
-Cada bloco tem XLSX próprio e passa pelo postprocess+entrega (§3-4) **assim que
-termina** — falha de um bloco não cancela o outro. Sets vintage lentos já têm
-timeout interno maior (df 20min; ds/n1/n4 18min) — não mexa em `--per-set-timeout`.
-
-**Bloco V1 — WOTC + e-Card (18 sets):**
+**G3 — SM restante + XY final:**
 ```bash
 python cardtrader_scanner.py \
-  --sets bs ju fo b2 tr g1 g2 n1 n2 n3 n4 si lc wiz bog ex aq skg \
+  --sets unb lot drm ces fli upr cinv bus slg gri sum evo sts fco bkp bkt aor gen ros prc dcr \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --output outputs/scan_vintage_v1_<AAAAMMDD_HHMM>.xlsx
+  --output outputs/scan_g3_<AAAAMMDD_HHMM>.xlsx
 ```
 
-**Bloco V2 — era EX (16 sets):**
+**G4 — XY inicial + BW + HGSS:**
 ```bash
 python cardtrader_scanner.py \
-  --sets rs ss dr exma hl rg trr dx em uf ds lm hp cg df pk \
+  --sets phf ffi flf kss xybsp ltr plb plf pls bcr drx dex nxd nvi epo blw drv tri und ul hgs \
   --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
-  --output outputs/scan_vintage_v2_<AAAAMMDD_HHMM>.xlsx
+  --output outputs/scan_g4_<AAAAMMDD_HHMM>.xlsx
 ```
 
-### `/scan total` — catálogo inteiro (~832 sets) · NUNCA local numa tacada
+**G5 — COL + DP + Platinum + EX tardio:**
+```bash
+python cardtrader_scanner.py \
+  --sets clo sft ge sw mt pdp sv rr pl nbsp pk df cg hp lm ds uf em dx trr rg hl \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --output outputs/scan_g5_<AAAAMMDD_HHMM>.xlsx
+```
 
-O caminho canônico é o **workflow `weekly-scan.yml`** (dispatch em
-`matheuscllm-lgtm/card-trader-scanner`, ref `main` — ele roda `--all-sets` com
-checkpoint recuperável e sobe artifacts). Aguarde o run, baixe o artifact e
-entregue colando o `.md` do postprocess que vem nele (se faltar, rode o
-postprocess local sobre o XLSX do artifact). Rodar o catálogo inteiro local só
-em blocos explícitos, a pedido do operador — lembrando que a auditoria
-2026-06-08 deu 0 deal no back-catalog (o gap mora nos lançamentos novos).
+**G6 — EX inicial + e-Card + WotC:**
+```bash
+python cardtrader_scanner.py \
+  --sets exma dr ss rs skg aq ex lc si n4 n3 n2 n1 g2 g1 tr b2 fo ju bs wiz bog \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --output outputs/scan_g6_<AAAAMMDD_HHMM>.xlsx
+```
 
-## 3. Postprocess obrigatório (a entrega SÓ sai daqui; um por XLSX)
+## 3. Rodar (um run por grupo, SEQUENCIAL)
+
+- Valores canônicos em TODO run: `--threshold 0.30` (**FRAÇÃO** — inteiro `30`
+  = 3000% = zero deals sem erro), `--validate-top 30`, `--min-net-margin 0.20`.
+- Scan custom (`/scan pre ssp`): mesmo comando trocando só a lista de `--sets`.
+- **Nunca dois runs ao mesmo tempo** (mesma pasta de estado — o scanner
+  recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
+  monitorado. Sets vintage lentos já têm timeout interno maior (df 20min,
+  ds/n1/n4 18min) — não mexa em `--per-set-timeout`.
+- Grupo que estourar ~2h30 de relógio: anote a duração real no resumo e
+  proponha re-dividir. Grupo que falhar não cancela os demais — registre com a
+  saída real e siga.
+- **Rota via GitHub (opcional)**: dispatch do workflow `daily-scan.yml` com o
+  input `sets` = os códigos do grupo (o timeout do workflow comporta um grupo).
+  Baixe o artifact e entregue o `.md` do postprocess que vem nele.
+
+## 4. Postprocess + entrega (por grupo, formato OBRIGATÓRIO)
+
+Assim que **cada grupo** terminar (não espere os outros):
 
 ```bash
 python cardtrader_postprocess.py \
-  --input outputs/scan_<...>.xlsx \
-  --output outputs/relatorio_<...>.xlsx \
+  --input outputs/scan_g<N>_<stamp>.xlsx \
+  --output outputs/relatorio_g<N>_<stamp>.xlsx \
   --top-md 50
 ```
 
-Ele imprime a tabela markdown no terminal E grava um `.md` ao lado do XLSX
-(mesmo nome, terminação `.md`). Esse `.md` é a entrega — vem de
-`build_delivery_markdown`, a única fonte de verdade do formato.
+- **Cole no chat, VERBATIM, o `.md`** que ele gravou/imprimiu
+  (`build_delivery_markdown` — única fonte de verdade do formato).
+- **PROIBIDO**: tabela à mão; renomear/reordenar colunas; remover link;
+  XLSX/CSV por anexo (só a pedido explícito); amostra curada.
+- **Todas as linhas** (COMPRA + REVISAR); sem deal acima do limiar, a
+  ferramenta emite os near-miss "abaixo do limiar" — não existe "veio vazio,
+  então reformato".
+- **Não recomende compra** — capital é do operador.
 
-## 4. Entrega (formato OBRIGATÓRIO — não negociável)
+## 5. `/scan total` — catálogo inteiro (~832 sets, incl. sem referência)
 
-- **Cole no chat, VERBATIM, o conteúdo do `.md`** que o postprocess gerou —
-  um por bloco/perfil, assim que ficar pronto.
-- **PROIBIDO**: montar/reformatar tabela à mão; renomear/reordenar colunas;
-  remover um link; entregar XLSX/CSV por anexo (só se o operador pedir
-  explicitamente); mostrar amostra curada.
-- **Mostre TODAS as linhas** (COMPRA + REVISAR). Se nenhum item passar o limiar,
-  a ferramenta já emite os candidatos near-miss marcados "abaixo do limiar" —
-  **não existe** o caso "veio vazio, então eu reformato".
-- **Não recomende comprar/não comprar.** Você reporta margem, flags e fontes;
-  capital é decisão do operador.
-- Se a entrega que você vai colar **não saiu do `.md` da ferramenta**, pare e
-  gere por ela.
+Nunca local numa tacada: dispatch do **`weekly-scan.yml`** (checkpoint
+recuperável + artifacts), aguardar, baixar o artifact e colar o `.md` do
+postprocess. Local só em blocos explícitos a pedido do operador.
 
-## 5. Honestidade e higiene
+## 6. Fechamento e higiene
 
-- Outputs de scan (`outputs/*.xlsx`, `*.md`, logs) são **gitignored de
-  propósito** — NUNCA commite dados de scan.
-- Fonte de preço falhou → a linha sai rotulada fallback/erro; relate com a
-  saída real. Jamais fabrique número.
-- Nunca rode dois scans na mesma pasta de estado ao mesmo tempo (o scanner
-  recusa; blocos são SEQUENCIAIS).
-- Feche com um resumo curto: perfil/blocos rodados, duração REAL de cada um,
-  quantos deals (COMPRA/REVISAR), sets pulados/falhos, e o caminho dos
+- Outputs de scan (`outputs/*`) são gitignored — NUNCA commite dados de scan.
+- Fonte falhou → linha rotulada fallback/erro; jamais fabrique número.
+- Resumo final: grupos rodados, duração REAL de cada um (pra calibrar as
+  estimativas), deals por classificação, sets pulados/falhos, caminhos dos
   XLSX/`.md` de apoio.
