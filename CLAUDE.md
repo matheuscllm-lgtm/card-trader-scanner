@@ -146,16 +146,19 @@ chamadas "flags") · **os valores**. Exemplo comentado:
   --output outputs/relatorio_da_vez.xlsx
 ```
 
-> **Skill `/scan`**: é o jeito canônico de pedir um scan ao assistente — o
-> comando `/scan` (arquivo `.claude/commands/scan.md`) roda exatamente esse
-> pipeline com os valores padrão (sets do daily, threshold 0.30, validate-top
-> 30, min-net-margin 0.20) e entrega a tabela do postprocess no chat, sempre
-> igual. `/scan pre ssp` sobrescreve só a lista de sets. Desde jul/2026 o skill
-> cobre TODOS os modos por perfis fixos — `/scan completo` (moderno curado,
-> `--all-sets --skip-backcatalog`), `/scan vintage` (os 34 sets do vintage core
-> em 2 blocos ≤~2h30 com entrega por bloco) e `/scan total` (catálogo inteiro,
-> via workflow semanal) — então **nenhum scan roda fora do skill**; os blocos
-> são travados por teste contra `VINTAGE_SET_CODES` e o `daily-scan.yml`.
+> **Skill `/scan`** (`.claude/commands/scan.md`, jul/2026): o jeito canônico de
+> pedir um scan ao assistente — formato padrão da frota, igual ao `scan-myp`.
+> Os **128 sets com preço de referência real** (derivados de
+> `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES`, sem os `wcd*`/McDonald's/duplicatas)
+> estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
+> Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um ≤~2h30 de scan —
+> runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
+> rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
+> (threshold 0.30, validate-top 30, min-net-margin 0.20) e entrega **cada grupo**
+> pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
+> `/scan total` = catálogo inteiro via workflow semanal. **Nenhum scan roda
+> fora do skill**; a partição é travada por teste
+> (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner.
 
 Opções úteis:
 - `--all-sets` = **rastreio COMPLETO** (todas as ~832 coleções de uma vez),

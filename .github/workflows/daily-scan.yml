@@ -35,7 +35,9 @@ jobs:
     # Bumped 30→60 em 2026-05-15: run 25898522951 atingiu 30min com 5/10 sets
     # processados (~1480 listings) e foi cancelado pelo timeout antes de
     # iniciar blk/jtg/twm/ssp/dri. Estimativa total p/ 10 sets: ~50min.
-    timeout-minutes: 60
+    # Bumped 60→180 em 2026-07-02: o input `sets` agora recebe um GRUPO do
+    # /scan (~21-22 sets ≈ 1h35-2h15) — 60min cortaria o grupo no meio.
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repo
