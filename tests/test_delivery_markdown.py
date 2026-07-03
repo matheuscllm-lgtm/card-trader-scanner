@@ -162,6 +162,41 @@ def test_no_deals_shows_near_miss_table():
     assert "[oferta](" in md and "[TCG](" in md       # Links combinados no fallback
 
 
+def test_near_miss_row_surfaces_with_lowered_thresholds():
+    """v2.25 regressão: linha near-miss (só campos de SCAN, sem 'Lucro R$ REAL')
+    tem que aparecer quando o operador rebaixa os limiares no postprocess.
+    Antes, o fallback v2.22 preenchia net_margin mas NÃO lucro_liq → a linha
+    caía em 'Dados insuficientes' no classify_decision e o balde near-miss
+    nunca abria, por mais que se rebaixasse --revisar-min-net."""
+    raw = pd.DataFrame({
+        "Card Name": ["Sawk"],
+        "Nº": [130],
+        "Set": ["White Flare (wht)"],
+        "Rarity": ["Illustration Rare"],
+        "Condição": ["NM"],
+        "Qtd": [1],
+        # near-miss: SEM "LIVE R$ (real)"/"Lucro R$ REAL" — só os campos de scan
+        "Scan R$ (raw)": [70.53],
+        "TCG Market (BRL)": [97.27],
+        "TCG Market (USD)": [18.72],
+        "Net Margin % (scan)": [0.2749],
+        "Validation Status": ["NOT_VALIDATED"],
+        "Link CardTrader": ["https://www.cardtrader.com/cards/342909"],
+        "Link TCG": ["https://prices.pokemontcg.io/tcgplayer/rsv10pt5-130"],
+    })
+    df = pp.enrich_df(raw, hub_fee_rate=0.0)
+    # lucro_liq preenchido pelo recompute (tcg − live), não mais NaN
+    assert not pd.isna(df["lucro_liq"].iloc[0])
+    cfg = pp.DecisionConfig(min_net_margin=0.20, min_lucro_liq=0,
+                            revisar_min_net=0.10,
+                            revisar_chase_modest_min_net=0.10)
+    decisao, porque = pp.classify_decision(df.iloc[0], cfg)
+    assert decisao != "NAO", porque
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.1962)
+    assert "Sawk" in md
+    assert "abaixo do limiar" not in md.lower()  # entrou como deal, não fallback
+
+
 def test_truly_empty_df_friendly_message():
     """df sem listing nenhum (nada precificado) → mensagem amigável, não crash."""
     df = pp.enrich_df(_raw_df().iloc[0:0], hub_fee_rate=0.0)
