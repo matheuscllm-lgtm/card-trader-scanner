@@ -550,6 +550,23 @@ def _recompute_margin_with_fee(df: pd.DataFrame, drift_threshold_pp: float = 0.0
         df.loc[drifting, "lucro_liq"] = recomputed_lucro[drifting]
         source[drifting] = "recomputed"
 
+    # v2.25 (2026-07-03): linhas near-miss chegam do scanner SEM lucro_liq (o
+    # scanner só computa lucro REAL nas validadas per-blueprint). O fallback
+    # v2.22 do enrich_df preenche live_brl/net_margin a partir dos campos de
+    # scan, mas lucro_liq ficava NaN → classify_decision rejeitava TUDO por
+    # "Dados insuficientes (margem/lucro ausentes)", mesmo com --revisar-min-net
+    # rebaixado. Preenche net_margin/lucro_liq recomputados SÓ onde faltam e os
+    # preços são válidos — linhas validadas (que já têm valor real) não mudam.
+    if "lucro_liq" not in df.columns:
+        df["lucro_liq"] = float("nan")
+    lucro_missing = valid & pd.to_numeric(df["lucro_liq"], errors="coerce").isna()
+    if lucro_missing.any():
+        df.loc[lucro_missing, "lucro_liq"] = recomputed_lucro[lucro_missing]
+    net_missing = valid & pd.to_numeric(df["net_margin"], errors="coerce").isna()
+    if net_missing.any():
+        df.loc[net_missing, "net_margin"] = recomputed_net[net_missing]
+        source[net_missing] = "recomputed"
+
     df["margin_source"] = source.values
     return df
 
