@@ -86,7 +86,7 @@ Changelog v2.22 (2026-06-22 — contrato de entrega scanner→postprocess + GG##
     o threshold vira classificação downstream. Fim da "entrega vazia" (223
     precificados, 0 acima do threshold → o postprocess agora mostra near-miss).
   - [GG##] Galarian Gallery (GG##) agora é pulado em SCAN TIME, igual TG## — a
-    regex anti-Trainer-Gallery virou `^(?:TG|GG)\d+` (antes só TG##). GG## sofre
+    regex anti-Trainer-Gallery virou `^(?:TG|GG)\\d+` (antes só TG##). GG## sofre
     a mesma inflação de referência (5-10×) e era pego só downstream, gastando
     chamadas de pricing. Defense-in-depth: o postprocess mantém o guard (#36).
   - [ROBUSTEZ] write_xlsx garante o diretório-alvo antes de salvar
@@ -311,7 +311,7 @@ import requests
 import yaml
 from dotenv import load_dotenv
 from openpyxl import Workbook
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -4264,7 +4264,7 @@ def main():
         marker = "  ⚠️  " if pricing_failures >= 5 else "  "
         print(f"{marker}Pricing failures        : {pricing_failures} ({pct:.1f}% das tentativas)")
         if pricing_failures >= 5:
-            print(f"      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
+            print("      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
     if scanner.stats.get("expansions_mass_pricing_abort", 0) > 0:
         print(f"  💥 Sets abortados (mass pricing fail): {scanner.stats['expansions_mass_pricing_abort']}")
     print(f"  Planilha                : {out_path}")
