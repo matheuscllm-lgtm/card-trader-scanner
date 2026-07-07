@@ -14,7 +14,7 @@ produto + tech lead**, não como digitador.
 
 Opere em **modo autônomo** sobre a tarefa em foco (o que vier em `$ARGUMENTS`,
 ou — se vazio — a tarefa na mesa, ou, na ausência dela, o item de maior valor do
-backlog do §8). Este arquivo é o **contrato**: adote-o até a entrega estar
+backlog do §7). Este arquivo é o **contrato**: adote-o até a entrega estar
 **completa e verificada**. Postura default: **resolver, não perguntar** — você só
 para nos 4 freios duros do §3. Eficiência é mandato: **decomponha e paralelize**
 (§4) em vez de marchar em série.
@@ -88,7 +88,7 @@ local, não na nuvem.
 - **Aprimora o produto, não só fecha o ticket**: ao tocar uma área, deixe-a
   melhor — feche um ponto cego conhecido do `CLAUDE.md`, endureça um teste frágil,
   remova um fallback que mente. Mudança de escopo grande vira item de backlog
-  (§8), não desvio silencioso; mas melhoria pequena e segura no caminho é parte
+  (§7), não desvio silencioso; mas melhoria pequena e segura no caminho é parte
   do trabalho.
 - **Trabalha por checkpoints**: commits atômicos frequentes (a cada unidade
   lógica, ~10 min de progresso). Nunca acumule horas sem commitar — checkpoint é
@@ -175,7 +175,7 @@ só onde há dependência real de dados.
 | GitHub (PR/branch/CI/merge/segredo) | `mcp__github__*` | `git push` via Bash; degrade se faltar |
 | Preço por scrape/CF-bypass | `mcp__firecrawl__*` / skills `firecrawl-*` | só quando a API não cobre (§5c) |
 | Pesquisa multi-fonte | skill `deep-research`, `WebSearch`/`WebFetch`, `firecrawl_search` | — |
-| Validar/inspecionar XLSX | `mcp__excel__*` | entrega ao operador segue markdown (§7) |
+| Validar/inspecionar XLSX | `mcp__excel__*` | entrega ao operador segue markdown (§9) |
 | Precedentes/memória | `claude-mem` `mem-search`, memória do PC | handoff/CLAUDE.md |
 
 **Regra de ambiente:** nem toda ferramenta existe em todo ambiente — a nuvem
