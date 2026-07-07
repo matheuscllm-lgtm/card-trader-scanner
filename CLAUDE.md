@@ -228,14 +228,19 @@ Opções úteis:
   `--no-pid-resolve`) — `--help` de cada script lista tudo.
 
 > ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06):** o fallback
-> `tcgcsv.com` (v2.23) **só dispara com `--max-consecutive-misses > 0`**. Um
-> comentário no código (`SET_TIMEOUT_OVERRIDES`) diz que a skill passa `40`,
+> `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap de misses consecutivos
+> (`--max-consecutive-misses > 0`) e um **resgate de fim de set** (set que
+> completa o loop de pricing com 0 hit na pokemontcg.io e listings pendentes
+> tenta o tcgcsv para todos os misses — mesmo com o cap em 0). Na prática o
+> resgate só vale se o set completar o loop dentro do per-set-timeout — e num
+> set como `asc` (Ascended Heroes, que só o tcgcsv precifica) o per-listing
+> lento da pokemontcg.io historicamente estourava o timeout antes do resgate.
+> Um comentário no código (`SET_TIMEOUT_OVERRIDES`) diz que a skill passa `40`,
 > mas o `scan.md` atual **NÃO passa essa flag** — discrepância aberta entre
-> código e skill. Consequência prática: num scan que inclua `asc` (Ascended
-> Heroes, set que só o tcgcsv precifica), sem a flag o set pode sair com **0
-> preço** apesar de o tcgcsv ter os dados. Se for rodar `asc` à mão, passe
-> `--max-consecutive-misses 40`; a correção definitiva (alinhar skill ↔ código)
-> deve ir por PR.
+> código e skill. Consequência prática: num scan que inclua `asc`, sem a flag o
+> set **pode sair com 0 preço** apesar de o tcgcsv ter os dados. Se for rodar
+> `asc` à mão, passe `--max-consecutive-misses 40`; a correção definitiva
+> (alinhar skill ↔ código) deve ir por PR.
 
 ### Workflows do GitHub Actions (nuvem)
 
