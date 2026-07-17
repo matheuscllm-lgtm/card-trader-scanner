@@ -485,6 +485,12 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   `Links` = `[oferta](cardtrader) · [TCG](tcgplayer)` em toda linha) + CSV com
   TODAS as linhas avaliadas em `outputs/` (gitignored). Cache tcgcsv em
   `outputs/dbs_cache/` (TTL 20h).
+- **Run longo nunca fica mudo:** o `.md`/`.csv` são regravados CUMULATIVAMENTE a
+  cada expansão concluída, com marcador `⏳ PARCIAL — N/M expansões` no cabeçalho
+  até o fim (dá pra entregar parcial no chat a qualquer momento). No `--all` a
+  varredura vai das expansões mais novas pras antigas. Sidecar
+  `<out>_semref.csv` lista todo blueprint COM oferta NM viva que ficou sem
+  referência TCG, com o motivo — nada some em silêncio.
 - **Como rodar:**
 
   ```bash
