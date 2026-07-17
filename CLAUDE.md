@@ -455,14 +455,58 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 
 ---
 
+## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
+
+> **Decisão do operador (2026-07-17):** a frota era Pokémon-only e deixava passar
+> deals de Dragon Ball no CardTrader (ex.: energy markers **Gold** e promos
+> **Release Event/Tournament Winner** do set Fusion World Promos — caso real que
+> motivou a ferramenta). O `dbs_scanner.py` cobre esse buraco SEM tocar o fluxo
+> Pokémon: é um script separado, que **não** passa pelo skill `/scan` (que segue
+> Pokémon-only) e não usa pokemontcg.io.
+
+- **O que faz:** varre expansões de **Dragon Ball Super** no CardTrader
+  (game_id 9 — Fusion World `fb*`/`fs*`/`fuspromo` + Masters `bt*`) com ofertas
+  **AO VIVO** do marketplace (menor NM inglês não-graded) e compara com o
+  **market price do TCGplayer** via tcgcsv.com (categorias 80 + 27).
+- **Join oferta↔referência DETERMINÍSTICO:** `blueprint.tcg_player_id` ==
+  `productId` do tcgcsv (mesma filosofia do join DH por productId). Blueprint sem
+  `tcg_player_id` ou sem market price fica **FORA com contagem explícita** —
+  nunca fuzzy por nome, nunca preço inventado.
+- **Convenções:** margem BRUTA base compra `(TCG_BRL − CT_BRL)/CT_BRL`;
+  `--threshold` em **FRAÇÃO** (0.30; passar `30` aborta com erro); piso de
+  relevância na referência (`--min-price-usd 10`); NM por match **EXATO**
+  `== "Near Mint"`; graded/assinada nunca entram; oferta <50% da referência vai
+  pro bucket 🚨 REVISAR (possível lixo/scam), nunca vira COMPRA limpa.
+- **Câmbio:** `--fx` manual OU automático (open.er-api.com) — sem fonte real o
+  run **falha alto** (nunca chuta). Ofertas em moeda sem taxa conhecida são
+  puladas e contadas.
+- **Entrega:** tabela markdown canônica da frota gerada pelo próprio script
+  (buckets 🟢 COMPRA / 🚨 REVISAR / 🔎 Quase + contagens honestas de cobertura;
+  `Links` = `[oferta](cardtrader) · [TCG](tcgplayer)` em toda linha) + CSV com
+  TODAS as linhas avaliadas em `outputs/` (gitignored). Cache tcgcsv em
+  `outputs/dbs_cache/` (TTL 20h).
+- **Como rodar:**
+
+  ```bash
+  python dbs_scanner.py --list-expansions              # códigos disponíveis
+  python dbs_scanner.py --expansions fuspromo --threshold 0.30
+  python dbs_scanner.py --all --threshold 0.30         # catálogo DBS inteiro (lento)
+  ```
+
+- **Contratos travados em teste:** `tests/test_dbs_scanner.py` (24 testes
+  offline — filtros NM/EN/graded, conversão de moeda, join por tcg_player_id,
+  piso, guarda anti-lixo, fração no threshold, 2 links por linha).
+- Primeira prova real (2026-07-17, `fuspromo`): 545 blueprints → 163 avaliadas →
+  21 COMPRA ≥30%, incluindo os casos que motivaram a ferramenta.
+
 ## Testes
 
 ```bash
 python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ```
 
-- **209 testes** coletados (verificado com `pytest --collect-only -q` em
-  2026-07-06, após `pip install -r requirements.txt`).
+- **233 testes** coletados (verificado com `pytest --collect-only -q` em
+  2026-07-17, após `pip install -r requirements.txt`).
 - O `pytest.ini` escopa a coleta a `testpaths=tests` **de propósito**: os
   `scripts/test_*.py` são run-scripts standalone (testes operacionais rodados à
   mão), deliberadamente fora da suíte do pytest.
@@ -477,12 +521,13 @@ python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ```
 cardtrader_scanner.py       o scanner: varre o CardTrader, precifica (pokemontcg.io → fallback tcgcsv) e grava o XLSX cru
 cardtrader_postprocess.py   o relatório: classifica COMPRA/REVISAR/NÃO e gera a tabela de ENTREGA (build_delivery_markdown)
+dbs_scanner.py              scanner PARALELO de DRAGON BALL (Fusion World/Masters): CT ao vivo vs TCGplayer — ver seção própria
 doubleholo_join.py          coluna DH (2ª opinião Double Holo) — só lê a nota do JSON canônico, join por productId
 tcgcsv_productid.py         resolver offline de productId TCGplayer (pro join DH; identidade, nunca toca preço)
 config.yaml                 configuração
 CHANGELOG.md                histórico narrativo completo (desde 2026-04-29)
 pytest.ini                  escopo da suíte (testpaths=tests)
-tests/                      a suíte do pytest (209 testes)
+tests/                      a suíte do pytest (233 testes)
 scripts/                    utilitários operacionais: recover_from_checkpoint.py, checkpoint_to_partial.py,
                             peek_deals.py, launchers .ps1 do PC do operador, e run-scripts test_*.py (fora do pytest)
 diagnose_*.py (raiz)        scripts de diagnóstico pontual (jtg, no_deals, pricing)
