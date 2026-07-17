@@ -7,6 +7,8 @@ import pytest
 
 from dbs_scanner import (
     JUNK_RATIO,
+    VOLATILE_REF_RATIO,
+    ref_volatile,
     build_markdown,
     build_rows,
     carta_label,
@@ -119,6 +121,41 @@ def test_classify_compra_revisar_quase_resto():
 
 def test_junk_ratio_e_50_por_cento():
     assert JUNK_RATIO == 0.5
+
+
+# ── referência volátil (market vs menor anúncio atual — caso Bulma SB01-057) ──
+
+def test_ref_volatile_simetrica_nas_duas_direcoes():
+    assert VOLATILE_REF_RATIO == 2.0
+    assert ref_volatile(506.74, 1999.99)      # anúncios MUITO acima do market (Bulma)
+    assert ref_volatile(100.0, 40.0)          # anúncios muito abaixo do market
+    assert not ref_volatile(100.0, 60.0)      # divergência < 2× = ok
+    assert not ref_volatile(100.0, None)      # sem lowPrice → sem flag (não inventa sinal)
+    assert not ref_volatile(100.0, 0.0)
+
+
+def test_ref_volatil_rebaixa_compra_para_revisar():
+    tcg_index = {555: {"name": "Bulma", "url": "https://www.tcgplayer.com/product/555/x",
+                       "prices": {"Holofoil": 506.74}, "lows": {"Holofoil": 1999.99}}}
+    offers = {10: [make_offer(cents=134600)]}  # R$1346 → margem ~88% com RATES BRL=5
+    rows, stats, _ = build_rows(EXP, [_bp()], offers, tcg_index, RATES, 10.0)
+    assert rows[0]["ref_volatil"] is True
+    meta = {"data": "t", "expansoes": "x", "fx": 5.0, "fx_fonte": "teste",
+            "threshold": 0.30, "min_price_usd": 10.0}
+    md = build_markdown(rows, stats, meta)
+    assert "🟢 COMPRA (margem ≥ 30%) — 0" in md          # não sai como compra limpa
+    assert "ref volátil" in md                            # vai pro REVISAR com o motivo
+
+
+def test_ref_estavel_continua_compra_limpa():
+    tcg_index = {555: {"name": "x", "url": "https://www.tcgplayer.com/product/555/x",
+                       "prices": {"Holofoil": 74.0}, "lows": {"Holofoil": 62.89}}}
+    offers = {10: [make_offer(cents=26871)]}  # R$268,71 → ~37.7%% com BRL=5
+    rows, stats, _ = build_rows(EXP, [_bp()], offers, tcg_index, RATES, 10.0)
+    assert rows[0]["ref_volatil"] is False
+    md = build_markdown(rows, stats, {"data": "t", "expansoes": "x", "fx": 5.0,
+                                      "fx_fonte": "t", "threshold": 0.30, "min_price_usd": 10.0})
+    assert "🟢 COMPRA (margem ≥ 30%) — 1" in md
 
 
 # ── join determinístico + linhas ──

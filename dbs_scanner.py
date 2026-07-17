@@ -60,6 +60,8 @@ TCGCSV_CATEGORIES = (80, 27)       # 80 = Fusion World · 27 = DBS Masters
 USER_AGENT = "MasterBox-TCG-Scanner/1.0 (contato via cardtrader.com)"
 FX_URL = "https://open.er-api.com/v6/latest/USD"
 JUNK_RATIO = 0.5                   # oferta < 50% da ref = possível lixo/scam (padrão da frota)
+VOLATILE_REF_RATIO = 2.0           # market vs menor anúncio atual divergindo >2× (qualquer direção)
+                                   # = referência volátil/fina → COMPRA vira REVISAR (sinal-only)
 CT_CALL_SLEEP = 0.5                # gentileza com a API do CT
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -216,11 +218,17 @@ def load_tcg_index(cache_hours: float = 20.0, log=print) -> dict:
             prices = _cached_json(f"{TCGCSV}/{cat}/{gid}/prices",
                                   CACHE_DIR / f"prices_{cat}_{gid}.json", cache_hours)
             for p in prods.get("results", []):
-                index[int(p["productId"])] = {"name": p.get("name", ""), "url": p.get("url", ""), "prices": {}}
+                index[int(p["productId"])] = {"name": p.get("name", ""), "url": p.get("url", ""),
+                                              "prices": {}, "lows": {}}
             for r in prices.get("results", []):
                 pid = int(r["productId"])
-                if pid in index and r.get("marketPrice") is not None:
-                    index[pid]["prices"][r.get("subTypeName") or "?"] = float(r["marketPrice"])
+                if pid not in index:
+                    continue
+                sub = r.get("subTypeName") or "?"
+                if r.get("marketPrice") is not None:
+                    index[pid]["prices"][sub] = float(r["marketPrice"])
+                if r.get("lowPrice") is not None:
+                    index[pid]["lows"][sub] = float(r["lowPrice"])
     return index
 
 
@@ -245,6 +253,17 @@ def pick_subtype(version: str | None, prices: dict) -> tuple[str, float] | None:
 
 
 # ───────────────────────── linha / classificação ─────────────────────────
+
+def ref_volatile(market_usd: float, low_usd: float | None) -> bool:
+    """Referência volátil: menor anúncio ATUAL do TCGplayer diverge do market price
+    em >2× em QUALQUER direção (caso real: Bulma SB01-057 market US$506 vs menor
+    anúncio US$2.000 — market arrastado por vendas antigas de promo fino).
+    Sinal-only: rebaixa COMPRA→REVISAR, nunca muda margem/preço."""
+    if not low_usd or low_usd <= 0 or market_usd <= 0:
+        return False
+    ratio = max(market_usd, low_usd) / min(market_usd, low_usd)
+    return ratio > VOLATILE_REF_RATIO
+
 
 def carta_label(bp: dict) -> str:
     name = bp.get("name", "").strip()
@@ -308,6 +327,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         if tcg_usd < min_price_usd:
             stats["abaixo_piso"] += 1
             continue
+        tcg_low = (product.get("lows") or {}).get(subtype)
         tcg_brl = tcg_usd * brl_per_usd
         margin = (tcg_brl - ct_brl) / ct_brl
         stats["avaliadas"] += 1
@@ -316,6 +336,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
             "set": expansion.get("name", ""),
             "raridade": (bp.get("fixed_properties") or {}).get("dragonball_rarity") or "—",
             "ct_brl": ct_brl, "tcg_usd": tcg_usd, "tcg_brl": tcg_brl,
+            "tcg_low_usd": tcg_low, "ref_volatil": ref_volatile(tcg_usd, tcg_low),
             "dif_brl": tcg_brl - ct_brl, "margem": margin,
             "qtd": qty, "ofertas_nm": n_valid, "subtipo": subtype,
             "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}",
@@ -334,17 +355,24 @@ HEADER = "| # | Margem % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond
 SEP = "|---|---|---|---|---|---|---|---|---|---|---|"
 
 
-def _table(rows: list[dict], bold: bool) -> list[str]:
-    out = [HEADER, SEP]
+def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
+    """Tabela canônica; o bucket REVISAR ganha coluna Flag com o MOTIVO por linha
+    (possível lixo vs referência volátil), no estilo da entrega do CT Pokémon."""
+    if with_flag:
+        out = ["| # | Margem % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |",
+               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    else:
+        out = [HEADER, SEP]
     for i, r in enumerate(rows, 1):
         marg = f"{r['margem'] * 100:.1f}%"
         if bold:
             marg = f"**{marg}**"
         links = f"[oferta]({r['oferta_url']}) · [TCG]({r['tcg_url']})"
+        flag_col = f"{r.get('flag') or '—'} | " if with_flag else ""
         out.append(
             f"| {i} | {marg} | {fmt_brl(r['ct_brl'])} | US${r['tcg_usd']:.2f} | "
             f"{fmt_brl(r['dif_brl'])} | {r['carta']} | {r['set']} | {r['raridade']} | NM | "
-            f"{r['qtd']} | {links} |"
+            f"{r['qtd']} | {flag_col}{links} |"
         )
     return out
 
@@ -355,6 +383,10 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     buckets = {"compra": [], "revisar": [], "quase": [], "resto": []}
     for r in rows:
         bucket, flag = classify(r["margem"], r["ct_brl"], r["tcg_brl"], threshold)
+        if bucket == "compra" and r.get("ref_volatil"):
+            low = r.get("tcg_low_usd")
+            bucket = "revisar"
+            flag = f"⚠️ ref volátil (menor anúncio US${low:.2f} vs market US${r['tcg_usd']:.2f})"
         r["flag"] = flag
         buckets[bucket].append(r)
     for b in buckets.values():
@@ -391,9 +423,9 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     out.append("")
 
     if buckets["revisar"]:
-        out.append(f"### 🚨 REVISAR — validar manualmente (margem ≥ corte, mas <50% da ref = possível lixo/scam) — {len(buckets['revisar'])}")
+        out.append(f"### 🚨 REVISAR — validar manualmente (possível lixo/scam OU referência volátil) — {len(buckets['revisar'])}")
         out.append("")
-        out.extend(_table(buckets["revisar"], bold=False))
+        out.extend(_table(buckets["revisar"], bold=False, with_flag=True))
         out.append("")
 
     out.append(f"### 🔎 Quase (entre {threshold * 50:.0f}% e {threshold * 100:.0f}%) — {len(buckets['quase'])}")
@@ -412,7 +444,7 @@ def write_csv(rows: list[dict], path: Path) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
-    cols = ["margem", "ct_brl", "tcg_usd", "tcg_brl", "dif_brl", "carta", "set", "raridade",
+    cols = ["margem", "ct_brl", "tcg_usd", "tcg_low_usd", "ref_volatil", "tcg_brl", "dif_brl", "carta", "set", "raridade",
             "qtd", "ofertas_nm", "subtipo", "flag", "oferta_url", "tcg_url"]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
