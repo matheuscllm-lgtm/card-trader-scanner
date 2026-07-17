@@ -7,6 +7,8 @@ import pytest
 
 from dbs_scanner import (
     JUNK_RATIO,
+    build_secondary_index,
+    _num_tail,
     VOLATILE_REF_RATIO,
     ref_volatile,
     build_markdown,
@@ -200,6 +202,57 @@ def test_build_rows_semref_distingue_motivos():
     # sem oferta NM viva → não entra no sidecar (não é deal possível)
     _, _, semref = build_rows(EXP, [_bp(tcg=None)], {}, {}, RATES, 10.0)
     assert semref == []
+
+
+def test_num_tail_normaliza_convencoes():
+    assert _num_tail("BT12-041") == "41"
+    assert _num_tail("041") == "41"
+    assert _num_tail("FB04-130") == "130"
+    assert _num_tail("") == ""
+
+
+def _idx_masters():
+    # produto estilo Masters antigo: nome limpo, number completo, sem tcg_player_id no CT
+    return {700: {"name": "Gotenks, Battling the Forces of Evil", "number": "BT12-041",
+                  "url": "https://www.tcgplayer.com/product/700/x",
+                  "prices": {"Normal": 0.64}, "lows": {"Normal": 0.55}}}
+
+
+def test_join_secundario_resgata_match_unico_sem_versao():
+    idx = _idx_masters()
+    sec = build_secondary_index(idx)
+    bp = _bp(tcg=None, version=None, num="041", name="Gotenks, Battling the Forces of Evil")
+    rows, stats, semref = build_rows(EXP, [bp], {10: [make_offer(cents=705)]}, idx, RATES, 0.0,
+                                     sec_index=sec)
+    assert stats["resgatadas_join2"] == 1 and semref == []
+    assert rows[0]["join"] == "nome+numero(unico)"
+    assert rows[0]["tcg_usd"] == 0.64
+
+
+def test_join_secundario_ambiguo_nao_casa_e_registra():
+    idx = _idx_masters()
+    idx[701] = dict(idx[700], url="u2")  # reprint: mesmo nome+número em outro grupo
+    sec = build_secondary_index(idx)
+    bp = _bp(tcg=None, version=None, num="041", name="Gotenks, Battling the Forces of Evil")
+    rows, stats, semref = build_rows(EXP, [bp], {10: [make_offer()]}, idx, RATES, 0.0,
+                                     sec_index=sec)
+    assert rows == [] and stats["resgatadas_join2"] == 0
+    assert "ambíguo (2 produtos)" in semref[0]["motivo"]
+
+
+def test_join_secundario_nunca_com_versao_nem_nome_diferente():
+    idx = _idx_masters()
+    sec = build_secondary_index(idx)
+    # blueprint COM versão (Gold etc.) nunca usa o join secundário
+    bp_gold = _bp(tcg=None, version="Gold", num="041", name="Gotenks, Battling the Forces of Evil")
+    rows, stats, semref = build_rows(EXP, [bp_gold], {10: [make_offer()]}, idx, RATES, 0.0,
+                                     sec_index=sec)
+    assert rows == [] and stats["resgatadas_join2"] == 0
+    # nome diferente não casa (igualdade exata normalizada, nunca fuzzy)
+    bp_nome = _bp(tcg=None, version=None, num="041", name="Gotenks the Grim Reaper")
+    rows, stats, _ = build_rows(EXP, [bp_nome], {10: [make_offer()]}, idx, RATES, 0.0,
+                                sec_index=sec)
+    assert rows == [] and stats["resgatadas_join2"] == 0
 
 
 def test_build_rows_piso_de_referencia():

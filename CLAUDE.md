@@ -470,8 +470,11 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   **market price do TCGplayer** via tcgcsv.com (categorias 80 + 27).
 - **Join oferta↔referência DETERMINÍSTICO:** `blueprint.tcg_player_id` ==
   `productId` do tcgcsv (mesma filosofia do join DH por productId). Blueprint sem
-  `tcg_player_id` ou sem market price fica **FORA com contagem explícita** —
-  nunca fuzzy por nome, nunca preço inventado.
+  `tcg_player_id` (comum nos sets Masters antigos) passa por um **join
+  SECUNDÁRIO** também determinístico: nome EXATO normalizado + cauda do número,
+  **match único obrigatório e só blueprint SEM versão** (variante Gold/Alt Art
+  nunca entra) — rotulado por linha na coluna `join` do CSV. O que sobrar fica
+  **FORA com contagem explícita** — nunca fuzzy por nome, nunca preço inventado.
 - **Convenções:** margem BRUTA base compra `(TCG_BRL − CT_BRL)/CT_BRL`;
   `--threshold` em **FRAÇÃO** (0.30; passar `30` aborta com erro); piso de
   relevância na referência (`--min-price-usd 10`); NM por match **EXATO**
@@ -499,9 +502,10 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   python dbs_scanner.py --all --threshold 0.30         # catálogo DBS inteiro (lento)
   ```
 
-- **Contratos travados em teste:** `tests/test_dbs_scanner.py` (24 testes
-  offline — filtros NM/EN/graded, conversão de moeda, join por tcg_player_id,
-  piso, guarda anti-lixo, fração no threshold, 2 links por linha).
+- **Contratos travados em teste:** `tests/test_dbs_scanner.py` (34 testes
+  offline — filtros NM/EN/graded, conversão de moeda, joins por tcg_player_id e
+  secundário nome+número, piso, guardas anti-lixo e de referência volátil,
+  fração no threshold, marcador PARCIAL, motivos do semref, 2 links por linha).
 - Primeira prova real (2026-07-17, `fuspromo`): 545 blueprints → 163 avaliadas →
   21 COMPRA ≥30%, incluindo os casos que motivaram a ferramenta.
 
@@ -511,7 +515,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ```
 
-- **233 testes** coletados (verificado com `pytest --collect-only -q` em
+- **243 testes** coletados (verificado com `pytest --collect-only -q` em
   2026-07-17, após `pip install -r requirements.txt`).
 - O `pytest.ini` escopa a coleta a `testpaths=tests` **de propósito**: os
   `scripts/test_*.py` são run-scripts standalone (testes operacionais rodados à
@@ -533,7 +537,7 @@ tcgcsv_productid.py         resolver offline de productId TCGplayer (pro join DH
 config.yaml                 configuração
 CHANGELOG.md                histórico narrativo completo (desde 2026-04-29)
 pytest.ini                  escopo da suíte (testpaths=tests)
-tests/                      a suíte do pytest (233 testes)
+tests/                      a suíte do pytest (243 testes)
 scripts/                    utilitários operacionais: recover_from_checkpoint.py, checkpoint_to_partial.py,
                             peek_deals.py, launchers .ps1 do PC do operador, e run-scripts test_*.py (fora do pytest)
 diagnose_*.py (raiz)        scripts de diagnóstico pontual (jtg, no_deals, pricing)

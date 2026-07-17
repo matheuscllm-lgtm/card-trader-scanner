@@ -218,8 +218,10 @@ def load_tcg_index(cache_hours: float = 20.0, log=print) -> dict:
             prices = _cached_json(f"{TCGCSV}/{cat}/{gid}/prices",
                                   CACHE_DIR / f"prices_{cat}_{gid}.json", cache_hours)
             for p in prods.get("results", []):
+                num = next((ed.get("value") for ed in (p.get("extendedData") or [])
+                            if ed.get("name") == "Number"), "") or ""
                 index[int(p["productId"])] = {"name": p.get("name", ""), "url": p.get("url", ""),
-                                              "prices": {}, "lows": {}}
+                                              "number": num, "prices": {}, "lows": {}}
             for r in prices.get("results", []):
                 pid = int(r["productId"])
                 if pid not in index:
@@ -253,6 +255,31 @@ def pick_subtype(version: str | None, prices: dict) -> tuple[str, float] | None:
 
 
 # ───────────────────────── linha / classificação ─────────────────────────
+
+def _norm_name(s: str) -> str:
+    return " ".join((s or "").casefold().split())
+
+
+def _num_tail(s: str) -> str:
+    """Cauda do número de coleção p/ casar convenções: 'BT12-041' e '041' → '41'."""
+    s = (s or "").strip().upper()
+    tail = s.split("-")[-1] if s else ""
+    return tail.lstrip("0") or tail
+
+
+def build_secondary_index(tcg_index: dict) -> dict:
+    """(nome normalizado, cauda do número) → {productIds}. Base do join SECUNDÁRIO
+    para blueprint sem tcg_player_id: nome EXATO + número, match ÚNICO obrigatório
+    — nunca fuzzy (lição da frota). Colisão (ex. reprint com mesmo nome+número em
+    2 grupos) fica ambígua e NÃO casa."""
+    sec: dict = {}
+    for pid, info in tcg_index.items():
+        num = info.get("number") or ""
+        if not num or not info.get("name"):
+            continue
+        sec.setdefault((_norm_name(info["name"]), _num_tail(num)), set()).add(pid)
+    return sec
+
 
 def ref_volatile(market_usd: float, low_usd: float | None) -> bool:
     """Referência volátil: menor anúncio ATUAL do TCGplayer diverge do market price
@@ -290,13 +317,15 @@ def classify(margin: float, ct_brl: float, tcg_brl: float, threshold: float) -> 
 
 
 def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
-               tcg_index: dict, rates: dict, min_price_usd: float) -> tuple[list[dict], dict, list[dict]]:
+               tcg_index: dict, rates: dict, min_price_usd: float,
+               sec_index: dict | None = None) -> tuple[list[dict], dict, list[dict]]:
     """Cruza blueprints × ofertas × referência.
     Retorna (linhas, contadores honestos, sem_ref) — sem_ref lista todo blueprint
     COM oferta NM viva que ficou sem referência TCG, com o motivo: nada some em
     silêncio (vai pro sidecar _semref.csv para conferência manual)."""
     stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
-             "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
+             "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0,
+             "resgatadas_join2": 0}
     brl_per_usd = rates["BRL"]
     rows = []
     semref: list[dict] = []
@@ -311,6 +340,20 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         tcg_pid = bp.get("tcg_player_id")
         product = tcg_index.get(int(tcg_pid)) if tcg_pid else None
         chosen = pick_subtype(bp.get("version"), product["prices"]) if product else None
+        join_via = "tcg_player_id"
+        amb = 0
+        if chosen is None and sec_index is not None and not bp.get("version"):
+            # resgate: nome EXATO + cauda do número, match ÚNICO, só blueprint SEM
+            # versão (evita casar variante errada — Gold/Alt Art nunca entram aqui)
+            num = (bp.get("fixed_properties") or {}).get("collector_number") or ""
+            cands = sec_index.get((_norm_name(bp.get("name")), _num_tail(num))) or set()
+            amb = len(cands)
+            if amb == 1:
+                product = tcg_index[next(iter(cands))]
+                chosen = pick_subtype(None, product["prices"])
+                if chosen is not None:
+                    join_via = "nome+numero(unico)"
+                    stats["resgatadas_join2"] += 1
         if chosen is None:
             stats["sem_ref_tcg"] += 1
             if not tcg_pid:
@@ -319,6 +362,8 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
                 motivo = "productId fora do índice tcgcsv"
             else:
                 motivo = "produto tcgcsv sem market price"
+            if amb > 1:
+                motivo += f" | join secundário ambíguo ({amb} produtos)"
             semref.append({"set": expansion.get("name", ""), "carta": carta_label(bp),
                            "ct_brl": round(ct_brl, 2), "motivo": motivo,
                            "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}"})
@@ -338,7 +383,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
             "ct_brl": ct_brl, "tcg_usd": tcg_usd, "tcg_brl": tcg_brl,
             "tcg_low_usd": tcg_low, "ref_volatil": ref_volatile(tcg_usd, tcg_low),
             "dif_brl": tcg_brl - ct_brl, "margem": margin,
-            "qtd": qty, "ofertas_nm": n_valid, "subtipo": subtype,
+            "qtd": qty, "ofertas_nm": n_valid, "subtipo": subtype, "join": join_via,
             "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}",
             "tcg_url": product["url"],
         })
@@ -411,6 +456,8 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     out.append(
         f"Cobertura honesta: {stats['blueprints']} blueprints · {stats['sem_oferta_nm']} sem oferta NM · "
         f"{stats['sem_ref_tcg']} sem referência TCG (join `tcg_player_id` vazio ou sem market price — ficam FORA, nunca inventamos) · "
+        f"{stats.get('resgatadas_join2', 0)} com referência recuperada pelo join secundário "
+        f"(nome+número, match único; contadas antes do piso) · "
         f"{stats['abaixo_piso']} abaixo do piso · **{stats['avaliadas']} avaliadas**"
     )
     if stats.get("ofertas_moeda_pulada"):
@@ -447,7 +494,7 @@ def write_csv(rows: list[dict], path: Path) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
-    cols = ["margem", "ct_brl", "tcg_usd", "tcg_low_usd", "ref_volatil", "tcg_brl", "dif_brl", "carta", "set", "raridade",
+    cols = ["margem", "ct_brl", "tcg_usd", "tcg_low_usd", "ref_volatil", "tcg_brl", "dif_brl", "carta", "set", "raridade", "join",
             "qtd", "ofertas_nm", "subtipo", "flag", "oferta_url", "tcg_url"]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
@@ -511,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[fx] US$1 = R${rates['BRL']:.4f} ({rates['_fonte']})")
     print("[tcgcsv] carregando índice de referência (cats 80 + 27)…")
     tcg_index = load_tcg_index(cache_hours=args.cache_hours)
-    print(f"[tcgcsv] {len(tcg_index)} produtos indexados")
+    sec_index = build_secondary_index(tcg_index)
+    print(f"[tcgcsv] {len(tcg_index)} produtos indexados ({len(sec_index)} chaves de join secundário)")
 
     try:
         tcg_dump = requests.get("https://tcgcsv.com/last-updated.txt",
@@ -536,12 +584,14 @@ def main(argv: list[str] | None = None) -> int:
     all_rows: list[dict] = []
     all_semref: list[dict] = []
     total_stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
-                   "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
+                   "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0,
+                   "resgatadas_join2": 0}
     for i, exp in enumerate(targets, 1):
         print(f"[scan] ({i}/{len(targets)}) {exp.get('code')} — {exp.get('name')}…", flush=True)
         bps = fetch_blueprints(exp["id"], headers)
         offers = fetch_offers(exp["id"], headers)
-        rows, stats, semref = build_rows(exp, bps, offers, tcg_index, rates, args.min_price_usd)
+        rows, stats, semref = build_rows(exp, bps, offers, tcg_index, rates, args.min_price_usd,
+                                         sec_index=sec_index)
         for k in total_stats:
             total_stats[k] += stats[k]
         all_rows.extend(rows)
