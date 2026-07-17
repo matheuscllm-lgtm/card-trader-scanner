@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║     CardTrader Arbitrage Scanner — Pokémon TCG Singles             ║
+║   CardTrader Arbitrage Scanner — Pokémon TCG + Dragon Ball Singles  ║
 ║                                                                      ║
 ║  Compara preços de singles (EN, Near Mint, não-graded) no           ║
 ║  cardtrader.com vs preço TCG Player (market price).                 ║
 ║  Gera planilha .xlsx com alertas de arbitragem (default ≥ 30%).     ║
+║  v2.26: --game dragonball cobre Dragon Ball Super Card Game         ║
+║  (Masters + Fusion World) com referência TCGplayer via tcgcsv.      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
 Por que CardTrader em vez de MYP?
@@ -32,6 +34,8 @@ Uso:
     python cardtrader_scanner.py --min-price-usd 15       # Preço mín USD
     python cardtrader_scanner.py --dry-run                # Usa só cache
     python cardtrader_scanner.py --provider justtcg       # Troca pricing API
+    python cardtrader_scanner.py --game dragonball --sets fb10 bt31
+                                                          # Dragon Ball (v2.26)
 
 Env vars (arquivo .env na mesma pasta):
     CT_JWT=<JWT do CardTrader: Settings → API Access → Create New Token>
@@ -47,9 +51,38 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
-Versão: v2.24
+      | 2026-07-17 (v2.26)
+Versão: v2.26
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
-     de changelog abaixo.)
+     de changelog abaixo. v2.25 foi um fix só no postprocess — rotulado lá.)
+
+Changelog v2.26 (2026-07-17 — suporte a Dragon Ball Super / skill /scan-dbz):
+  - [FEATURE] Flag `--game {pokemon,dragonball}` (default pokemon = caminho
+    atual INTACTO). Em `--game dragonball` o scanner varre o game_id 9 do
+    CardTrader ("Dragon Ball Super": Masters bt1..bt31 + Fusion World fb01+)
+    e precifica via `TcgCsvDragonBallProvider` — fonte PRIMÁRIA tcgcsv.com
+    (espelho diário do TCGplayer), categorias 27 (DBS Masters) e 80 (Fusion
+    World). pokemontcg.io é Pokémon-only e NUNCA é consultada nesse modo.
+  - [MAPA] `DBZ_SET_TO_TCGCSV` (code CT → categoria+groupId tcgcsv) verificado
+    por CONTEÚDO contra dumps reais em 2026-07-17: match por overlap de
+    collector_number entre blueprints CT e products tcgcsv — zero heurística
+    de nome em runtime; set fora do mapa é pulado com aviso (nunca chuta).
+    Expansões promo/pre-release ficam FORA por design (números repetem o set
+    principal com stamp → precificaria promo contra referência do set base).
+  - [VARIANTE] Fidelidade de variante DBZ: alt art (sufixo CT `a`/`sa`) casa o
+    produto "(Alternate Art)"/"(Super Alternate Art)"; SPR/SLR (sufixo `sr`)
+    casam "(SPR)"/"(SLR)"; SCR/GDR idem; ambiguidade → miss honesto (nunca
+    colapsa pro subtype mais barato). Foil por `dragonball_foil`: Masters tem
+    Normal+Foil por produto (segue o foil do listing; variante requerida
+    ausente → None); carta de impressão ÚNICA (SR/SCR/leader foil-only) usa a
+    única impressão existente sem flag de baixa confiança
+    (`last_single_printing` no provider).
+  - [PROPS] Propriedades por jogo via GAME_PROFILES: dragonball_language /
+    dragonball_rarity / dragonball_foil (Pokémon segue byte-idêntico:
+    pokemon_language/pokemon_rarity/pokemon_reverse).
+  - [SKILL] /scan-dbz (.claude/commands/scan-dbz.md): grupos canônicos por
+    recência, valores canônicos 0.30/30/0.20, entrega via postprocess —
+    partição travada por tests/test_scan_dbz_skill_profiles.py.
 
 Changelog v2.24 (2026-06-26 — guard reverse-outlier pra vintage barato não-holo):
   - [BUG] No scan vintage 2026-06-26, 16/40 "deals" referenciaram o
@@ -367,6 +400,33 @@ FX_BASE = "https://api.frankfurter.app/latest"  # BCE — grátis, sem auth
 # Game ID no CardTrader. Pokemon = 5 (MTG=1, Yu-Gi-Oh=4, One Piece=15, etc).
 # Descobrível via GET /games se quebrar no futuro.
 CT_POKEMON_GAME_ID = 5
+# v2.26: Dragon Ball. O CT tem UM game pra franquia: id 9, "Dragon Ball Super"
+# (verificado via GET /games em 2026-07-17) — cobre o card game clássico
+# (Masters: bt1..bt31, decks, expansion sets) E o Fusion World (fb01+, fs*).
+# O DBZ TCG antigo da Panini (categoria 23 no TCGplayer) NÃO existe no CT.
+CT_DRAGONBALL_GAME_ID = 9
+
+# v2.26: chaves de properties_hash/fixed_properties variam POR JOGO na API CT
+# (verificado contra listings reais em 2026-07-17: Pokémon usa pokemon_language/
+# pokemon_rarity/pokemon_reverse; Dragon Ball usa dragonball_language/
+# dragonball_rarity/dragonball_foil). O perfil default é o de Pokémon —
+# o caminho histórico do scanner segue byte-idêntico.
+GAME_PROFILES: dict[str, dict] = {
+    "pokemon": {
+        "ct_game_id": CT_POKEMON_GAME_ID,
+        "language_key": "pokemon_language",
+        "rarity_key": "pokemon_rarity",
+        # ordem preservada do código pré-v2.26 (or de booleanos — inócua, mas
+        # mantida idêntica por fidelidade).
+        "foil_keys": ("mtg_foil", "foil", "pokemon_reverse"),
+    },
+    "dragonball": {
+        "ct_game_id": CT_DRAGONBALL_GAME_ID,
+        "language_key": "dragonball_language",
+        "rarity_key": "dragonball_rarity",
+        "foil_keys": ("dragonball_foil", "foil"),
+    },
+}
 
 # Defaults do scanner (sobrescritos por CLI)
 MARGIN_THRESHOLD = 0.30          # 30% margem mínima (requisito do usuário)
@@ -569,11 +629,19 @@ CHASE_TIER_PATTERNS = {
         "special illustration rare", "sir", "illustration rare",
         "special art rare", "sar", "hyper rare", "ultra hyper rare",
         "secret rare", "rara secreta",
+        # v2.26 — chases do Dragon Ball Super (vocabulário CT/tcgcsv real:
+        # "Special Rare"/SPR, "Special Leader Rare"/SLR, "God Rare"/GDR).
+        # Substrings NÃO colidem com o vocabulário Pokémon ("special
+        # illustration rare" não contém "special rare" contíguo).
+        "special leader rare", "special rare", "god rare",
     ],
     "MID": [
         "full art", "alt art", "alternate art", "alternative art",
         "rainbow rare", "gold rare", "trainer gallery", "double rare",
         "rara hiper", "ultra rare",
+        # v2.26 — Dragon Ball Super: "Super Rare"/SR e "Concept Rare"/CR são o
+        # tier médio de chase; vocabulário inexistente em Pokémon/CT.
+        "super rare", "concept rare",
     ],
     "MODEST": [
         "holo rare", "reverse holo", "reverse foil", "promo",
@@ -1170,6 +1238,13 @@ class PricingProvider(ABC):
     # contra a âncora líquida `normal`. None quando a fonte não tem `normal`
     # (tipicamente holo rares — guard não dispara nesse caso).
     last_normal_market: Optional[float] = None
+    # v2.26: True quando a carta só EXISTE numa impressão na fonte (ex.: SR/SCR/
+    # leader do Dragon Ball, que só saem foil). Um listing foil=False casado na
+    # única impressão foil NÃO é variante duvidosa — não existe versão mais
+    # barata pra confundir — então _build_opportunity suprime o flag
+    # low_confidence_variant nesse caso. Providers Pokémon nunca setam (fica
+    # False → comportamento byte-idêntico).
+    last_single_printing: bool = False
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
@@ -2094,6 +2169,452 @@ class TcgCsvFallbackProvider(PricingProvider):
         return market if market > 0 else None
 
 
+# ══════════════════════════════════════════════════════════════════════
+# v2.26 — DRAGON BALL SUPER (--game dragonball): fonte PRIMÁRIA tcgcsv.com
+#
+# Por que um provider próprio (e não o fallback v2.23)?
+#   - pokemontcg.io é Pokémon-ONLY → no modo dragonball ela nunca é consultada;
+#     o tcgcsv vira a fonte PRIMÁRIA (mesmos preços TCGplayer, outra categoria).
+#   - As categorias TCGplayer com Dragon Ball no tcgcsv: 27 = Dragon Ball Super
+#     CCG (Masters: bt1..bt31, decks, expansion sets) e 80 = Fusion World
+#     (fb01+, fs*, sb*, st*). A 23 (Panini DBZ TCG antigo) NÃO tem equivalente
+#     no CT (o game_id 9 do CT é só "Dragon Ball Super") → fica fora.
+#   - Prefill BULK por set (2 requests: /products + /prices) e lookup em
+#     memória por listing → sem per-listing HTTP, sem cap de misses, sem
+#     estourar per-set-timeout (a lição do asc não se repete aqui).
+# ══════════════════════════════════════════════════════════════════════
+TCGCSV_ROOT = "https://tcgcsv.com/tcgplayer"
+
+# Code CT (game_id 9) → (categoria TCGplayer, groupId tcgcsv). VERIFICADO POR
+# CONTEÚDO em 2026-07-17: pra cada expansão CT, o group tcgcsv foi escolhido
+# pelo OVERLAP de collector_number (blueprints CT × products tcgcsv, números
+# normalizados de zero-padding) — nada de heurística de nome em runtime; set
+# fora do mapa é PULADO com aviso (nunca chuta — chutar group errado injetaria
+# preço de outra carta como "real", a classe de bug que a resolução
+# unique-match-only do v2.23 já bloqueia no lado Pokémon).
+# Regras de exclusão (decisões documentadas):
+#   - Expansões promo/pre-release do CT (bt31-pre, fb08p, fuspromo, jdg, wp,
+#     op, r, vpp, event, champ...) NUNCA entram: os números repetem o set
+#     principal com stamp → precificaria promo contra a referência do set base.
+#   - bt10/bt11 ficam FORA: o tcgcsv tem groups gêmeos "(2nd Edition)" com os
+#     MESMOS números e o listing CT não diz a edição → referência ambígua.
+#   - Set novo do CT que ainda não estiver aqui: adicionar POR PR depois de
+#     verificar o groupId contra o dump real (mesmo ritual do mapa Pokémon).
+# 88 sets verificados (overlap ≥ 0.5 e ≥1 produto com marketPrice no group;
+# ov=1.0 = todos os números CT existem no group). Ordem do literal = ordem
+# DEFAULT de scan (recente → antigo, id CT desc).
+DBZ_SET_TO_TCGCSV: dict[str, tuple[int, int]] = {
+    "csv3": (27, 22874),  # Collector's Selection Vol. 3 — ov=1.0, 18 c/ market
+    "bt31": (27, 24670),  # Impact Beyond Dimensions — ov=1.0, 218 c/ market
+    "fb10": (80, 24604),  # Cross Force — ov=1.0, 167 c/ market
+    "bt30": (27, 24632),  # Three Glorious Fighters — ov=1.0, 260 c/ market
+    "fb09": (80, 24569),  # Dual Evolution — ov=1.0, 167 c/ market
+    "fs12": (80, 24571),  # Starter Deck EX: The Beat of Ki — ov=1.0, 39 c/ market
+    "fs11": (80, 24570),  # Starter Deck EX: The Phase of Evolution — ov=1.0, 39 c/ market
+    "bt29": (27, 24565),  # Fearsome Rivals — ov=1.0, 231 c/ market
+    "fb08": (80, 24450),  # Saiyan's Pride — ov=0.976, 159 c/ market
+    "sb02": (80, 24288),  # Manga Booster 02 — ov=1.0, 137 c/ market
+    "bt28": (27, 24402),  # Prismatic Clash — ov=1.0, 243 c/ market
+    "fs10": (80, 24336),  # Starter Deck 10: Giblet — ov=1.0, 39 c/ market
+    "fs09": (80, 24251),  # Starter Deck 9: Shallot — ov=0.947, 38 c/ market
+    "sb01": (80, 24335),  # Manga Booster 01 — ov=0.84, 209 c/ market
+    "fb07": (80, 24397),  # Wish For Shenron — ov=0.984, 159 c/ market
+    "be25": (27, 24359),  # Expansion Deck Box Set 25: Premium Anniversary Box 2025 — ov=1.0, 70 c/ market
+    "fb06": (80, 24247),  # Rivals Clash — ov=1.0, 145 c/ market
+    "fs08": (80, 24239),  # Starter Deck 8: Vegeta (Mini) Super Saiyan 3 — ov=1.0, 25 c/ market
+    "bt-27": (27, 24166),  # History of Z — ov=1.0, 202 c/ market
+    "fb05": (80, 23928),  # New Adventure — ov=0.902, 145 c/ market
+    "fs06": (80, 23654),  # Starter Deck 6: Son Goku (Mini) — ov=1.0, 21 c/ market
+    "fs07": (80, 23655),  # Starter Deck 7: Vegeta (Mini) — ov=1.0, 21 c/ market
+    "fb04": (80, 23658),  # Ultra Limit — ov=0.977, 159 c/ market
+    "be24": (27, 23593),  # Expansion Deck Box Set 24: Premium 7th Anniversary Box 2024 — ov=1.0, 57 c/ market
+    "bt26": (27, 23646),  # Ultimate Advent — ov=0.993, 173 c/ market
+    "fs05": (80, 23519),  # Starter Deck 5: Bardock — ov=1.0, 26 c/ market
+    "fb03": (80, 23517),  # Raging Roar — ov=0.979, 163 c/ market
+    "bt25": (27, 23415),  # Legend of the Dragon Balls — ov=1.0, 158 c/ market
+    "fb02": (80, 23470),  # Blazing Aura — ov=0.972, 163 c/ market
+    "bt24": (27, 23325),  # Beyond Generations — ov=0.993, 308 c/ market
+    "fb01": (80, 23401),  # Awakened Pulse — ov=1.0, 171 c/ market
+    "fs04": (80, 23411),  # Starter Deck 4: Frieza — ov=1.0, 25 c/ market
+    "fs03": (80, 23410),  # Starter Deck 3: Broly — ov=1.0, 27 c/ market
+    "fs02": (80, 23409),  # Starter Deck 2: Vegeta — ov=1.0, 24 c/ market
+    "fs01": (80, 23408),  # Starter Deck 1: Son Goku — ov=1.0, 26 c/ market
+    "bt23": (27, 23258),  # Perfect Combination — ov=1.0, 275 c/ market
+    "sd23": (27, 23175),  # Critical Blow — ov=1.0, 283 c/ market
+    "bt21": (27, 23115),  # Wild Resurgence — ov=0.811, 276 c/ market
+    "be22": (27, 23187),  # Expansion Deck Box Set 23: Premium Anniversary Box 2023 — ov=1.0, 61 c/ market
+    "bt22": (27, 23175),  # Critical Blow — ov=1.0, 283 c/ market
+    "csvol2": (27, 3028),  # Collector's Selection Vol. 2 — ov=1.0, 19 c/ market
+    "ex22": (27, 23018),  # Expansion Deck Box Set 22: Ultimate Deck 2023 — ov=1.0, 28 c/ market
+    "bt20": (27, 17696),  # Power Absorbed — ov=0.869, 389 c/ market
+    "bt19": (27, 17672),  # Fighter's Ambition — ov=1.0, 278 c/ market
+    "sd20": (27, 3132),  # Dawn of the Z-Legends — ov=1.0, 315 c/ market
+    "sd19": (27, 3132),  # Dawn of the Z-Legends — ov=1.0, 315 c/ market
+    "bt18": (27, 3132),  # Dawn of the Z-Legends — ov=0.847, 315 c/ market
+    "ts02": (27, 3090),  # Theme Selection: History of Vegeta — ov=1.0, 16 c/ market
+    "ts01": (27, 3089),  # Theme Selection: History of Son Goku — ov=1.0, 17 c/ market
+    "bt17": (27, 3030),  # Ultimate Squad — ov=0.798, 296 c/ market
+    "ex20": (27, 3027),  # Expansion Deck Box Set 20: Ultimate Deck 2022 — ov=1.0, 21 c/ market
+    "csv1": (27, 2871),  # Collector's Selection Vol. 1 — ov=1.0, 19 c/ market
+    "bt16": (27, 2986),  # Realm of the Gods — ov=0.709, 292 c/ market
+    "mb01": (27, 2912),  # Mythic Booster — ov=0.924, 129 c/ market
+    "db1": (27, 2515),  # Draft Box 04 - Dragon Brawl — ov=0.893, 128 c/ market
+    "db2": (27, 2618),  # Draft Box 05 - Divine Multiverse — ov=0.701, 188 c/ market
+    "bt6": (27, 2392),  # Destroyer Kings — ov=0.921, 209 c/ market
+    "db3": (27, 2720),  # Draft Box 06 - Giant Force — ov=1.0, 124 c/ market
+    "vpp2": (27, 2656),  # Special Anniversary Set 2020 — ov=1.0, 113 c/ market
+    "vpp3": (27, 2873),  # Special Anniversary Set 2021 — ov=1.0, 118 c/ market
+    "ex03": (27, 2219),  # Expansion Deck Box Set 03: Ultimate Box — ov=1.0, 61 c/ market
+    "ex17": (27, 2825),  # Expansion Deck Box Set 17: Saiyan Boost — ov=1.0, 6 c/ market
+    "ex05": (27, 2431),  # Expansion Deck Box Set 05: Unity of Destruction — ov=1.0, 9 c/ market
+    "ex08": (27, 2533),  # Expansion Deck Box Set 08: Magnificent Collection - Forsaken Warrior — ov=1.0, 31 c/ market
+    "ex06": (27, 2433),  # Special Anniversary Set — ov=0.917, 108 c/ market
+    "ex10": (27, 2587),  # Expansion Deck Box Set 10: Namekian Surge — ov=1.0, 12 c/ market
+    "xd2": (27, 2536),  # Malicious Machinations — ov=0.6, 246 c/ market
+    "sd1": (27, 1962),  # Galactic Battle — ov=1.0, 123 c/ market
+    "bt13": (27, 2796),  # Supreme Rivalry — ov=0.916, 296 c/ market
+    "bt3": (27, 2173),  # Cross Worlds — ov=0.595, 210 c/ market
+    "bt2": (27, 2070),  # Union Force — ov=1.0, 127 c/ market
+    "tb2": (27, 2297),  # World Martial Arts Tournament — ov=1.0, 127 c/ market
+    "bt1": (27, 1962),  # Galactic Battle — ov=0.955, 123 c/ market
+    "bt9": (27, 2590),  # Universal Onslaught — ov=0.926, 240 c/ market
+    "bt15": (27, 2913),  # Saiyan Showdown — ov=1.0, 295 c/ market
+    "tb01": (27, 2217),  # Tournament of Power — ov=1.0, 140 c/ market
+    "bt8": (27, 2536),  # Malicious Machinations — ov=0.934, 246 c/ market
+    "bt12": (27, 2755),  # Vicious Rejuvenation — ov=1.0, 284 c/ market
+    "tb3": (27, 2367),  # Clash of Fates — ov=1.0, 97 c/ market
+    "bt5": (27, 2285),  # Miraculous Revival — ov=0.975, 212 c/ market
+    "ex07": (27, 2532),  # Expansion Deck Box Set 07: Magnificent Collection - Fusion Hero — ov=0.964, 35 c/ market
+    "ex01": (27, 2170),  # Expansion Deck Box Set 01: Mighty Heroes — ov=1.0, 14 c/ market
+    "ex09": (27, 2586),  # Expansion Deck Box Set 09: Saiyan Surge — ov=1.0, 13 c/ market
+    "bt7": (27, 2473),  # Assault of the Saiyans — ov=0.87, 229 c/ market
+    "ex04": (27, 2432),  # Expansion Deck Box Set 04: Unity of Saiyans — ov=1.0, 8 c/ market
+    "bt4": (27, 2218),  # Colossal Warfare — ov=0.96, 214 c/ market
+    "eb1": (27, 2759),  # Battle Evolution Booster — ov=0.71, 184 c/ market
+    "bt14": (27, 2858),  # Cross Spirits — ov=1.0, 306 c/ market
+}
+
+_DBZ_NUM_SUFFIX_RE = re.compile(r"^(.*\d)([A-Za-z]+)$")
+_DBZ_NUM_SEG_RE = re.compile(r"^([A-Z]*)(\d+)$")
+_DBZ_NAME_MARKER_RE = re.compile(r"\(([^()]+)\)\s*$")
+
+# Sufixo de variante nos collector_number do CT → marcadores "(...)" aceitos no
+# NOME do produto tcgcsv (vocabulário real verificado em 2026-07-17):
+#   CT 'BT31-043sr' (version "Special Rare")        ↔ 'Pan, ... (SPR)'
+#   CT 'BT31-001sr' (version "Special Leader Rare") ↔ 'Son Goku ... (SLR)'
+#   CT 'BT31-151sec'                                ↔ '... (SCR)'
+#   CT 'FB10-013a'                                  ↔ '... (Alternate Art)'
+#   CT 'FB10-123sa'                                 ↔ '... (Super Alternate Art)'
+# 'sr' aceita SPR e SLR porque o CT usa o MESMO sufixo pros dois; um número
+# base nunca tem ambos (SLR = líder, SPR = carta de batalha) — se um dia tiver,
+# o match exige unicidade e devolve None (miss honesto).
+DBZ_SUFFIX_TO_MARKERS: dict[str, tuple[str, ...]] = {
+    "": ("",),
+    "a": ("alternate art",),
+    "sa": ("super alternate art",),
+    "sr": ("spr", "slr"),
+    "sec": ("scr",),
+}
+
+
+def dbz_canon_number(raw: str) -> str:
+    """Normaliza zero-padding POR SEGMENTO, preservando prefixos e a estrutura:
+    'BT08-001' → 'BT8-1'; 'TB01-05' → 'TB1-5'; 'FB10-013' → 'FB10-13'.
+    Necessário porque o CT e o tcgcsv divergem no padding de sets antigos
+    (verificado: CT 'BT08-...' × tcgcsv 'BT8-...')."""
+    n = str(raw or "").strip().upper()
+    parts = []
+    for seg in n.split("-"):
+        m = _DBZ_NUM_SEG_RE.match(seg)
+        parts.append(f"{m.group(1)}{int(m.group(2))}" if m else seg)
+    return "-".join(parts)
+
+
+def dbz_split_number(raw: str) -> tuple[str, str]:
+    """Separa o sufixo de VARIANTE do número CT e canoniza a base:
+    'BT31-043sr' → ('BT31-43', 'sr'); 'FB10-013a' → ('FB10-13', 'a');
+    'BT31-150' → ('BT31-150'→'BT31-150' canônico, ''). Sufixo em minúsculas."""
+    n = str(raw or "").strip().upper()
+    if not n:
+        return "", ""
+    m = _DBZ_NUM_SUFFIX_RE.match(n)
+    if m:
+        return dbz_canon_number(m.group(1)), m.group(2).lower()
+    return dbz_canon_number(n), ""
+
+
+def dbz_marker_class(product_name: str) -> str:
+    """Classe de variante de um produto tcgcsv, extraída do marcador '(...)'
+    FINAL do nome ('' = sem marcador = impressão base). Ex.: 'Pan, Adorable
+    Supporter (SPR)' → 'spr'; 'Vegito - FB10-041 (Alternate Art)' →
+    'alternate art'. Marcadores de stamp/promo ('(Winner)', '(Gold Stamped)',
+    '(Reprint)'...) viram classes próprias — NUNCA se misturam com a base."""
+    m = _DBZ_NAME_MARKER_RE.search(product_name or "")
+    return m.group(1).strip().lower() if m else ""
+
+
+class TcgCsvDragonBallProvider(PricingProvider):
+    """v2.26: fonte PRIMÁRIA de preço pra Dragon Ball Super via tcgcsv.com.
+
+    Espelho diário dos preços TCGplayer (mesma fonte real usada pelo MYP v5.15+
+    e pelo fallback v2.23 daqui) nas categorias 27 (Masters) e 80 (Fusion
+    World). Um set é resolvido EXCLUSIVAMENTE pelo mapa verificado
+    DBZ_SET_TO_TCGCSV; set fora do mapa → prefill vazio → todo listing miss
+    (com aviso), nunca um group "parecido".
+
+    Fidelidade de variante (o equivalente DBZ da escada holo/reverse Pokémon):
+      - produto tcgcsv indexado por (número canônico, classe de marcador do
+        nome) — alt art/SPR/SLR/SCR/GDR/stamps são produtos SEPARADOS com o
+        MESMO número, distinguidos pelo marcador '(...)' final do nome;
+      - o sufixo do collector_number CT ('a'/'sa'/'sr'/'sec') seleciona a
+        classe; sem sufixo → impressão base;
+      - número que só existe numa variante (SCR-only, Concept Rare) casa a
+        única classe existente; ambiguidade real (ex.: SCR+GDR no mesmo
+        número) desempata por igualdade de raridade CT×tcgcsv; persiste
+        ambíguo → None (miss honesto, NUNCA escolhe o mais barato).
+    Subtipo de preço (Normal/Foil no Masters; Normal|Holofoil no Fusion
+    World): listing foil=True exige subtipo foil (ausente → None); foil=False
+    usa Normal, e carta de IMPRESSÃO ÚNICA (SR/SCR/leader foil-only — no
+    marketplace ninguém marca foil porque a carta só existe foil, mesma lição
+    do "Extra: Foil" da Liga) usa a única impressão com `last_single_printing`
+    sinalizado (suprime o flag de variante duvidosa sem afetar Pokémon).
+    Linha `market` ausente/zero conta como subtipo INEXISTENTE — low/mid nunca
+    substituem market (nunca inventar preço)."""
+    name = "tcgcsv-dbz"
+
+    def __init__(self, cache: Cache, session: Optional[Any] = None):
+        self.cache = cache
+        self.session = session or requests.Session()
+        # set CT → {base_num: {classe: produto | None(=classe duplicada)}}
+        self._set_index: dict[str, dict] = {}
+        # set CT → {cauda numérica única: base_num}. Sets ANTIGOS do CT guardam
+        # o collector_number PELADO ('096') enquanto o tcgcsv usa 'BT1-96'
+        # (verificado no bt1 em 2026-07-17); a cauda resolve o prefixo — mas SÓ
+        # quando é única no group (grupos antigos misturam BT1-xxx e SD1-xx;
+        # cauda repetida → fora do índice → miss honesto).
+        self._tail_index: dict[str, dict] = {}
+        # set CT → releaseDate (YYYY-MM-DD, do publishedOn do group) p/ o
+        # componente de maturidade do score de valorização.
+        self._set_published: dict[str, Optional[str]] = {}
+        # meta de groups por categoria (fetch 1× por run por categoria).
+        self._groups_by_cat: dict[int, Optional[dict]] = {}
+        self.last_price_source: Optional[str] = None
+
+    def _get_json(self, path: str) -> Optional[dict]:
+        try:
+            r = self.session.get(f"{TCGCSV_ROOT}/{path}",
+                                 headers={"User-Agent": TCGCSV_USER_AGENT},
+                                 timeout=TIMEOUT)
+            if r.status_code != 200:
+                log.debug(f"tcgcsv-dbz {path} status {r.status_code}")
+                return None
+            return r.json()
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"tcgcsv-dbz {path} falhou: {e!r}")
+            return None
+
+    def _group_published_on(self, cat: int, group_id: int) -> Optional[str]:
+        """publishedOn (YYYY-MM-DD) do group — via /groups da categoria,
+        cacheado por run. None se a request falhar (idade vira 'desconhecida'
+        no score de valorização; nunca inventa data)."""
+        if cat not in self._groups_by_cat:
+            payload = self._get_json(f"{cat}/groups")
+            results = (payload or {}).get("results")
+            self._groups_by_cat[cat] = (
+                {g.get("groupId"): g for g in results} if isinstance(results, list)
+                else None
+            )
+        meta = self._groups_by_cat.get(cat) or {}
+        g = meta.get(group_id)
+        published = (g or {}).get("publishedOn") or ""
+        return published[:10] if published else None
+
+    def prefill_set(self, ct_set_code: str) -> bool:
+        """Pré-carrega um set (2 requests bulk) → índice em memória.
+        Retorna True se ≥1 card foi indexado. Roda no máximo 1× por set."""
+        code = (ct_set_code or "").lower()
+        if code in self._set_index:
+            return bool(self._set_index[code])
+        mapping = DBZ_SET_TO_TCGCSV.get(code)
+        if not mapping:
+            log.warning(
+                f"  🕳️  set DBZ {code!r} SEM referência mapeada em "
+                f"DBZ_SET_TO_TCGCSV — pulado (adicione ao mapa por PR após "
+                f"verificar o group tcgcsv; nunca chutamos group por nome)"
+            )
+            self._set_index[code] = {}
+            self._tail_index[code] = {}
+            self._set_published[code] = None
+            return False
+        cat, group_id = mapping
+        products = self._get_json(f"{cat}/{group_id}/products")
+        prices = self._get_json(f"{cat}/{group_id}/prices")
+        if not products or not prices:
+            log.warning(
+                f"  tcgcsv-dbz: sem dados p/ {code} (cat {cat}, group "
+                f"{group_id}) — rede/fonte indisponível; set sem preço neste run"
+            )
+            self._set_index[code] = {}
+            self._tail_index[code] = {}
+            self._set_published[code] = None
+            return False
+
+        prices_by_pid: dict[int, dict] = {}
+        for row in prices.get("results") or []:
+            pid = row.get("productId")
+            sub = row.get("subTypeName")
+            if pid is None or not sub:
+                continue
+            prices_by_pid.setdefault(pid, {})[sub] = {
+                "market": row.get("marketPrice"),
+                "low": row.get("lowPrice"),
+                "mid": row.get("midPrice"),
+            }
+
+        index: dict[str, dict] = {}
+        for p in products.get("results") or []:
+            pid = p.get("productId")
+            if pid is None:
+                continue
+            number_raw = None
+            rarity = None
+            for ed in p.get("extendedData") or []:
+                if ed.get("name") == "Number" and ed.get("value"):
+                    number_raw = str(ed["value"])
+                elif ed.get("name") == "Rarity" and ed.get("value"):
+                    rarity = str(ed["value"])
+            if not number_raw:
+                continue  # sealed (booster box/pack) — não-card
+            base = dbz_canon_number(number_raw)
+            klass = dbz_marker_class(p.get("name") or "")
+            record = {
+                "pid": pid,
+                "rarity": rarity or "",
+                "prices": prices_by_pid.get(pid) or {},
+            }
+            bucket = index.setdefault(base, {})
+            # classe duplicada no mesmo número → AMBÍGUA → None (miss honesto;
+            # nunca escolhe um dos dois no escuro).
+            bucket[klass] = None if klass in bucket else record
+        self._set_index[code] = index
+        # cauda numérica ÚNICA → base ('96' → 'BT1-96'). Cauda que aparece em
+        # 2+ bases do group (BT1-5 × SD1-5) fica FORA (ambígua).
+        tails: dict[str, Optional[str]] = {}
+        for base in index:
+            m = _DBZ_NUM_SEG_RE.match(base.split("-")[-1])
+            if not m:
+                continue
+            t = str(int(m.group(2)))
+            tails[t] = None if t in tails else base
+        self._tail_index[code] = {t: b for t, b in tails.items() if b}
+        self._set_published[code] = self._group_published_on(cat, group_id)
+        if index:
+            log.info(
+                f"  💾 tcgcsv-dbz {code} (cat {cat}, group {group_id}): "
+                f"{len(index)} números indexados (fonte PRIMÁRIA Dragon Ball)"
+            )
+        return bool(index)
+
+    @staticmethod
+    def _pick_product(cands: dict, suffix: str,
+                      ct_rarity: Optional[str]) -> Optional[dict]:
+        """Escolhe o produto tcgcsv pra (número base, sufixo CT). None = miss.
+        Ver docstring da classe pra hierarquia de regras."""
+        wanted = DBZ_SUFFIX_TO_MARKERS.get(suffix, (suffix,))
+        present = [cands[c] for c in wanted if cands.get(c) is not None]
+        if len(present) == 1:
+            return present[0]
+        pool = present
+        if not pool:
+            valid = [p for p in cands.values() if p is not None]
+            # número que só existe numa variante (SCR-only, Concept Rare...)
+            if suffix == "" and len(valid) == 1:
+                return valid[0]
+            pool = valid
+        # desempate por raridade EXATA (case-insensitive) — resolve o par
+        # SCR/GDR no mesmo número (CT: GDR = número puro + rarity "God Rare").
+        rl = (ct_rarity or "").strip().lower()
+        if rl:
+            matches = [p for p in pool
+                       if (p.get("rarity") or "").strip().lower() == rl]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
+    def market_price_usd(self, card_name: str, set_code: str,
+                         collector_number: str,
+                         foil: bool = False,
+                         rarity: Optional[str] = None) -> Optional[float]:
+        self.last_tcg_url = None
+        self.last_variant_used = None
+        self.last_ptcg_rarity = None
+        self.last_set_release_date = None
+        self.last_price_source = None
+        self.last_normal_market = None
+        self.last_single_printing = False
+
+        code = (set_code or "").lower()
+        if code not in self._set_index:
+            self.prefill_set(code)
+        index = self._set_index.get(code)
+        if not index:
+            return None
+        base, suffix = dbz_split_number(collector_number)
+        if not base:
+            return None
+        cands = index.get(base)
+        if cands is None and "-" not in base and base.isdigit():
+            # número PELADO (sets antigos do CT: '096' sem prefixo) → resolve
+            # pela cauda numérica ÚNICA do group; ambígua/ausente → miss.
+            resolved = self._tail_index.get(code, {}).get(str(int(base)))
+            if resolved:
+                cands = index.get(resolved)
+        if not cands:
+            return None
+        product = self._pick_product(cands, suffix, rarity)
+        if product is None:
+            log.debug(
+                f"tcgcsv-dbz: variante ambígua/ausente p/ {card_name} "
+                f"({code}/{collector_number}) — classes={sorted(cands.keys())}"
+            )
+            return None
+        # subtipo com market REAL (>0); low/mid NUNCA substituem market.
+        rows = {sub: r for sub, r in (product.get("prices") or {}).items()
+                if (r.get("market") or 0) > 0}
+        if not rows:
+            return None
+        if foil:
+            chosen_sub = ("Foil" if "Foil" in rows
+                          else "Holofoil" if "Holofoil" in rows else None)
+        else:
+            if "Normal" in rows:
+                chosen_sub = "Normal"
+            elif len(rows) == 1:
+                # impressão única (SR/SCR/leader foil-only): a carta só existe
+                # assim — usa a única impressão e sinaliza single_printing.
+                chosen_sub = next(iter(rows))
+            else:
+                chosen_sub = None
+        if not chosen_sub:
+            log.debug(
+                f"tcgcsv-dbz: subtipo requerido ausente p/ {card_name} "
+                f"({code}/{collector_number}) foil={foil} — "
+                f"disponíveis={sorted(rows.keys())}"
+            )
+            return None
+        self.last_single_printing = len(rows) == 1
+        self.last_variant_used = chosen_sub.lower()
+        self.last_ptcg_rarity = product.get("rarity") or None
+        self.last_set_release_date = self._set_published.get(code)
+        self.last_price_source = "tcgcsv"
+        self.last_normal_market = ((product.get("prices") or {})
+                                   .get("Normal") or {}).get("market")
+        self.last_tcg_url = (
+            f"https://www.tcgplayer.com/product/{product['pid']}"
+        )
+        return rows[chosen_sub]["market"]
+
+
 class JustTcgProvider(PricingProvider):
     """
     JustTCG — PAGO (~$19-49/mês). Atualiza várias vezes ao dia.
@@ -2605,6 +3126,11 @@ class CheckpointWriter:
 
 
 class Scanner:
+    # v2.26: default de CLASSE do perfil de jogo — instâncias montadas via
+    # Scanner.__new__ (padrão dos testes/diagnósticos, que pulam o __init__)
+    # continuam funcionando como Pokémon sem setar nada.
+    game_profile: dict = GAME_PROFILES["pokemon"]
+
     def __init__(self, ct: CardTraderClient, pricing: PricingProvider, cache: Cache,
                  threshold: float = MARGIN_THRESHOLD,
                  min_price_usd: float = MIN_PRICE_USD,
@@ -2617,10 +3143,15 @@ class Scanner:
                  max_consecutive_misses: int = 0,
                  keep_all_priced: bool = True,
                  tcgcsv: Optional["TcgCsvFallbackProvider"] = None,
-                 tcgcsv_fallback: bool = True):
+                 tcgcsv_fallback: bool = True,
+                 game_profile: Optional[dict] = None):
         self.ct = ct
         self.pricing = pricing
         self.cache = cache
+        # v2.26: perfil do JOGO (chaves de properties_hash por jogo — ver
+        # GAME_PROFILES). Default = Pokémon → todo caller existente segue
+        # byte-idêntico sem passar nada.
+        self.game_profile = game_profile or GAME_PROFILES["pokemon"]
         # v2.23: fonte de FALLBACK tcgcsv. Só consultada quando a pokemontcg.io
         # devolve ZERO match de preço pro set inteiro (caso asc/Ascended Heroes,
         # invisível sem isso). `tcgcsv` é o provider (None = não instanciado);
@@ -2757,10 +3288,11 @@ class Scanner:
                 or ""
             ),
             condition=props.get("condition", "Unknown"),
-            # Pokemon usa sempre properties_hash.pokemon_language; mtg_language
-            # é sempre None pra cartas Pokemon. Sem valor → string vazia (não "en")
+            # A chave de idioma varia POR JOGO (pokemon_language /
+            # dragonball_language — v2.26 via game_profile); mtg_language é
+            # sempre None fora de MTG. Sem valor → string vazia (não "en")
             # para não deixar passar carta sem metadados de idioma.
-            language=(props.get("pokemon_language") or "").lower(),
+            language=(props.get(self.game_profile["language_key"]) or "").lower(),
             price_cents=cents,
             price_currency=currency,
             price_brl=price_brl_val,
@@ -2769,8 +3301,9 @@ class Scanner:
             # só existem em MTG). Antes esse campo era ignorado → TODA carta
             # Pokémon chegava foil=False, e holo rares padrão escorregavam pra
             # reverseHolofoil (inflado). Agora reverse-holo → foil=True.
-            foil=(props.get("mtg_foil", False) or props.get("foil", False)
-                  or props.get("pokemon_reverse", False)),
+            # v2.26: chaves por jogo via game_profile (Dragon Ball usa
+            # dragonball_foil); Pokémon segue com o MESMO trio de chaves.
+            foil=any(props.get(k, False) for k in self.game_profile["foil_keys"]),
             graded=raw.get("graded", False),
             seller_username=user.get("username", ""),
             seller_can_sell_via_hub=user.get("can_sell_via_hub", False),
@@ -2780,10 +3313,11 @@ class Scanner:
             # NÃO no campo `rarity` raiz (verificado via inspect do bp[0] de sfa).
             # Patterns esperados: "Common"/"Uncommon"/"Rare"/"Ultra Rare"/"Secret Rare"/etc.
             # Vazio = sealed product (booster, ETB) — não-card, será filtrado downstream.
+            # v2.26: chave por jogo (pokemon_rarity / dragonball_rarity).
             rarity=(
-                (bp.get("fixed_properties") or {}).get("pokemon_rarity")
+                (bp.get("fixed_properties") or {}).get(self.game_profile["rarity_key"])
                 or bp.get("rarity")
-                or props.get("pokemon_rarity")
+                or props.get(self.game_profile["rarity_key"])
                 or props.get("rarity")
                 or ""
             ).strip(),
@@ -3170,6 +3704,10 @@ class Scanner:
             l.foil is False
             and not is_holo_card
             and variant_used in ("holofoil", "unlimitedHolofoil")
+            # v2.26: impressão ÚNICA na fonte (SR/SCR/leader DBZ foil-only) não
+            # é variante duvidosa — não há versão barata alternativa. Providers
+            # Pokémon nunca setam o atributo (default False → inalterado).
+            and not getattr(source_provider, "last_single_printing", False)
         )
         # v2.24: estende o sinal pro caso reverse-outlier — common/uncommon
         # NÃO-holo que casa em `reverseHolofoil` cujo market é um outlier absurdo
@@ -3437,9 +3975,13 @@ class Scanner:
                 p = (listing_dict.get("properties_hash")
                      or listing_dict.get("properties") or {})
                 cond = p.get("condition", "")
-                is_rev = bool(p.get("pokemon_reverse", False)
-                              or p.get("mtg_foil", False)
-                              or p.get("foil", False))
+                # v2.26: chaves de foil por jogo via game_profile (Pokémon:
+                # mtg_foil/foil/pokemon_reverse — mesmo trio de antes; Dragon
+                # Ball: dragonball_foil/foil). OR booleano → ordem inócua.
+                is_rev = any(
+                    bool(p.get(k, False))
+                    for k in self.game_profile["foil_keys"]
+                )
                 return cond == o.listing.condition and is_rev == bool(o.listing.foil)
 
             seller_matches = [
@@ -3747,6 +4289,18 @@ def parse_args():
                    help=f"Preço mínimo por carta em USD (default: {MIN_PRICE_USD})")
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
+    p.add_argument("--game", choices=["pokemon", "dragonball", "dbz"],
+                   default="pokemon",
+                   help=("v2.26: jogo a escanear no CardTrader. 'pokemon' "
+                         "(default) = comportamento histórico INTACTO. "
+                         "'dragonball' (alias 'dbz') = Dragon Ball Super Card "
+                         "Game (Masters + Fusion World, game_id 9 no CT), com "
+                         "referência TCGplayer via tcgcsv.com (categorias "
+                         "27/80) e escopo restrito aos sets verificados de "
+                         "DBZ_SET_TO_TCGCSV (promos/pre-release fora por "
+                         "design). Nesse modo --provider é ignorado e "
+                         "--skip-backcatalog/--vintage (listas Pokémon) são "
+                         "recusados."))
     p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
                    help="Fonte de preços TCG (default: pokemontcg)")
     p.add_argument("--no-tcgcsv-fallback", action="store_true",
@@ -3961,6 +4515,20 @@ def main():
         )
         args.hub_fee = args.hub_fee / 100.0
 
+    # v2.26: normaliza o alias 'dbz' e resolve o perfil do jogo cedo — tudo
+    # abaixo (provider, expansões, Scanner) deriva daqui.
+    if args.game == "dbz":
+        args.game = "dragonball"
+    game_profile = GAME_PROFILES[args.game]
+    if args.game == "dragonball" and (
+            args.skip_backcatalog or getattr(args, "vintage", False)):
+        log.error(
+            "--skip-backcatalog e --vintage são listas de sets POKÉMON — "
+            "não valem com --game dragonball (o escopo DBZ já é o mapa "
+            "verificado DBZ_SET_TO_TCGCSV). Remova a flag."
+        )
+        sys.exit(2)
+
     load_dotenv(ENV_FILE)
     cfg = load_config()
 
@@ -4014,13 +4582,23 @@ def main():
     ct = CardTraderClient(ct_jwt)
 
     # Pricing provider
-    provider_cls = PROVIDERS[args.provider]
-    if args.provider == "pokemontcg":
-        pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
-    elif args.provider == "justtcg":
-        pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
+    if args.game == "dragonball":
+        # v2.26: Dragon Ball usa a fonte tcgcsv PRÓPRIA (pokemontcg.io é
+        # Pokémon-only). --provider não se aplica nesse modo.
+        pricing = TcgCsvDragonBallProvider(cache)
+        if args.provider != "pokemontcg":
+            log.info(
+                f"--provider {args.provider} ignorado: --game dragonball usa "
+                f"a fonte tcgcsv própria (categorias 27/80 do TCGplayer)"
+            )
     else:
-        pricing = provider_cls()
+        provider_cls = PROVIDERS[args.provider]
+        if args.provider == "pokemontcg":
+            pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
+        elif args.provider == "justtcg":
+            pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
+        else:
+            pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
 
     # v2.23: fonte de FALLBACK tcgcsv. Instanciada só quando o provider primário
@@ -4028,7 +4606,11 @@ def main():
     # fallback não foi desligado. Compartilha o mesmo Cache. NUNCA roda pros sets
     # que a pokemontcg.io já precifica — só onde o set inteiro vem sem preço.
     tcgcsv_provider: Optional[TcgCsvFallbackProvider] = None
-    tcgcsv_fallback_on = (args.provider == "pokemontcg" and not args.no_tcgcsv_fallback)
+    # v2.26: em --game dragonball a fonte primária JÁ é tcgcsv → o fallback
+    # v2.23 (que é a ponte pokemontcg.io→tcgcsv de Pokémon) não se aplica.
+    tcgcsv_fallback_on = (args.game == "pokemon"
+                          and args.provider == "pokemontcg"
+                          and not args.no_tcgcsv_fallback)
     if tcgcsv_fallback_on:
         tcgcsv_provider = TcgCsvFallbackProvider(cache)
         log.info("Fallback tcgcsv.com: HABILITADO (sets sem preço na "
@@ -4037,9 +4619,30 @@ def main():
         log.info("Fallback tcgcsv.com: DESLIGADO (--no-tcgcsv-fallback)")
 
     # Seleção de expansões
-    log.info("Listando expansões Pokemon no CardTrader...")
-    all_expansions = ct.list_expansions(CT_POKEMON_GAME_ID)
+    log.info(f"Listando expansões ({args.game}) no CardTrader...")
+    all_expansions = ct.list_expansions(game_profile["ct_game_id"])
     log.info(f"Total: {len(all_expansions)} expansões")
+
+    # v2.26: escopo Dragon Ball = SÓ os sets com referência tcgcsv verificada
+    # (DBZ_SET_TO_TCGCSV), na ordem do mapa (recente → antigo). Promos/
+    # pre-release e sets sem group verificado ficam fora por design — scanear
+    # sem referência = 100% miss; e promo contra preço do set base = margem
+    # falsa. `--sets` continua filtrando DENTRO desse escopo (código fora do
+    # mapa sai no warning "Sets não encontrados" abaixo).
+    if args.game == "dragonball":
+        before = len(all_expansions)
+        dbz_order = {c: i for i, c in enumerate(DBZ_SET_TO_TCGCSV)}
+        all_expansions = [
+            e for e in all_expansions
+            if (e.get("code") or "").lower() in dbz_order
+        ]
+        all_expansions.sort(
+            key=lambda e: dbz_order[(e.get("code") or "").lower()])
+        log.info(
+            f"--game dragonball: {len(all_expansions)}/{before} expansões com "
+            f"referência tcgcsv mapeada (promos/pre-release/sem-referência "
+            f"fora por design)"
+        )
 
     # --all-sets força o escopo COMPLETO: ignora --sets E a lista do config.yaml,
     # caindo no branch `else` abaixo (expansions = all_expansions ~832).
@@ -4054,7 +4657,10 @@ def main():
         )
         sys.exit(2)
 
-    sets_cfg = None if args.all_sets else (args.sets or cfg.get("sets"))
+    # v2.26: a lista `sets` do config.yaml é POKÉMON — não vaza pro modo
+    # dragonball (o default DBZ é o escopo mapeado inteiro, já filtrado acima).
+    cfg_sets = cfg.get("sets") if args.game == "pokemon" else None
+    sets_cfg = None if args.all_sets else (args.sets or cfg_sets)
     if sets_cfg:
         wanted = {s.lower() for s in sets_cfg}
         expansions = [e for e in all_expansions if e.get("code", "").lower() in wanted]
@@ -4095,7 +4701,8 @@ def main():
     # O catálogo CT vem old→new; sem isso, os sets modernos (foco) ficariam no
     # fim e poderiam ser cortados pelo timeout. sort é estável → o resto mantém
     # a ordem do catálogo. Só afeta --all-sets (em --sets a ordem é do usuário).
-    if args.all_sets and not getattr(args, "vintage", False):
+    if args.all_sets and not getattr(args, "vintage", False) \
+            and args.game == "pokemon":  # v2.26: DBZ já sai ordenado do mapa
         prio = {c.lower(): i for i, c in enumerate(PRIORITY_SET_CODES)}
         expansions.sort(key=lambda e: prio.get((e.get("code") or "").lower(), 10_000))
         matched = [e.get("code") for e in expansions if (e.get("code") or "").lower() in prio]
@@ -4130,6 +4737,7 @@ def main():
         keep_all_priced=not args.opportunities_only,
         tcgcsv=tcgcsv_provider,
         tcgcsv_fallback=tcgcsv_fallback_on,
+        game_profile=game_profile,  # v2.26: chaves de propriedades por jogo
     )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.

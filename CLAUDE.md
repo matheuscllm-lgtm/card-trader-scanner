@@ -18,6 +18,11 @@ em inglês, estado Near Mint / "quase perfeita") no site europeu
 aponta onde dá pra comprar barato na Europa e revender caro. É o caminho
 **inverso** do scanner MYP (que garimpa barato no Brasil).
 
+> **Desde v2.26 (2026-07-17) o mesmo programa também varre DRAGON BALL** (o
+> card game "Dragon Ball Super": jogo clássico Masters + Fusion World) com
+> `--game dragonball` e o skill **`/scan-dbz`** — mesmas regras, outra
+> franquia. O default continua sendo Pokémon; ver a seção do `/scan-dbz`.
+
 ---
 
 ## 🛰️ Convenções da frota (cross-scanner)
@@ -40,7 +45,7 @@ Erros recorrentes (3 famílias — detalhe no manual):
 2. **Git:** branch ou `main` local defasado por squash-merge PARECE pendência. O teste real de "já mergeado" é `git diff --stat origin/main <branch>` estar vazio (não `git merge-base`).
 3. **Honestidade de preço:** inflação de referência, fallback tratado como real, NM frouxo → sempre validar versão/condição e rotular fallback.
 
-**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; mesma escada de variante, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`.
+**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; mesma escada de variante, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`. **Modo Dragon Ball (v2.26, `--game dragonball`):** referência = `tcgcsv.com` como fonte PRIMÁRIA (categorias 27 Masters / 80 Fusion World; pokemontcg.io nunca é consultada), mapa de 88 sets verificado por conteúdo (`DBZ_SET_TO_TCGCSV`), fidelidade de variante por sufixo (alt art/SPR/SLR/SCR); só `CT_JWT` é necessária.
 
 ---
 
@@ -165,9 +170,28 @@ pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
 teste (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner. **Nenhum
 scan do CardTrader roda fora do skill.**
 
+### 🐉 Dragon Ball: o caminho canônico é o skill `/scan-dbz` (v2.26)
+
+**Skill `/scan-dbz`** (`.claude/commands/scan-dbz.md`, jul/2026): o análogo do
+`/scan` para **Dragon Ball Super Card Game** (Masters + Fusion World) no
+CardTrader. Os **88 sets com referência tcgcsv verificada por conteúdo**
+(chaves de `DBZ_SET_TO_TCGCSV`) estão divididos em **5 grupos por era**
+(G1 = Fusion World completo · G2 = Masters 2023+ · G3 = Masters 2021-22 ·
+G4 = Masters 2019-20 · G5 = gênese 2017-18). O skill **sempre pergunta quais
+grupos rodar**, roda um por vez com os valores canônicos (`--game dragonball`,
+threshold 0.30, validate-top 30, min-net-margin 0.20) e entrega **cada grupo**
+pela tabela do postprocess. A partição é travada por teste
+(`tests/test_scan_dbz_skill_profiles.py`). **Nenhum scan Dragon Ball roda fora
+do skill.** Particularidades do modo (referência tcgcsv primária, variantes
+por sufixo, exclusões bt10/bt11/st01/promos) estão documentadas no próprio
+skill e no changelog v2.26. Runs DBZ são bem mais leves que os de Pokémon
+(pricing bulk em memória, sem per-listing HTTP) — estimativas iniciais de
+~15–60min por grupo, a calibrar na primeira rodada real.
+
 Existe também o skill **`/auto`** (`.claude/commands/auto.md`): modo autônomo
 de trabalho no repo (tarefas de código/manutenção ponta a ponta, com os freios
-duros descritos nele). Ele **não** substitui o `/scan` para scans.
+duros descritos nele). Ele **não** substitui o `/scan` (nem o `/scan-dbz`)
+para scans.
 
 ### Os comandos que o skill executa (referência — pra manutenção e debug)
 
@@ -461,13 +485,15 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ```
 
-- **209 testes** coletados (verificado com `pytest --collect-only -q` em
-  2026-07-06, após `pip install -r requirements.txt`).
+- **240 testes** coletados (verificado em 2026-07-17, após
+  `pip install -r requirements.txt`; eram 209 antes do v2.26).
 - O `pytest.ini` escopa a coleta a `testpaths=tests` **de propósito**: os
   `scripts/test_*.py` são run-scripts standalone (testes operacionais rodados à
   mão), deliberadamente fora da suíte do pytest.
 - Testes que travam contratos importantes: `tests/test_scan_skill_profiles.py`
-  (partição dos 6 grupos do `/scan`) e `tests/test_doubleholo_join.py`
+  (partição dos 6 grupos do `/scan`), `tests/test_scan_dbz_skill_profiles.py`
+  (partição dos 5 grupos do `/scan-dbz`), `tests/test_dbz_provider.py`
+  (matching/variantes do modo Dragon Ball) e `tests/test_doubleholo_join.py`
   (join da coluna DH).
 
 ---
@@ -486,7 +512,7 @@ tests/                      a suíte do pytest (209 testes)
 scripts/                    utilitários operacionais: recover_from_checkpoint.py, checkpoint_to_partial.py,
                             peek_deals.py, launchers .ps1 do PC do operador, e run-scripts test_*.py (fora do pytest)
 diagnose_*.py (raiz)        scripts de diagnóstico pontual (jtg, no_deals, pricing)
-.claude/commands/           skills /scan (canônico de scan) e /auto (modo autônomo)
+.claude/commands/           skills /scan (canônico Pokémon), /scan-dbz (canônico Dragon Ball, v2.26) e /auto (modo autônomo)
 .github/workflows/          tests.yml, daily-scan.yml, weekly-scan.yml (ver "Workflows")
 outputs/                    planilhas/relatórios locais (gitignored — dados, não programa)
 cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referência
@@ -536,17 +562,22 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.24** — mas o
-`main` já contém código **pós-v2.24 mergeado**, incluindo um fix rotulado
-**v2.25** no postprocess. Pendência de bookkeeping: registrar o v2.25 no
-`CHANGELOG.md` e atualizar o cabeçalho. Uma linha por versão (o detalhe
-narrativo completo vive no `CHANGELOG.md`):
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.26.** Uma linha
+por versão (o detalhe narrativo completo vive no `CHANGELOG.md`):
 
-- **v2.25** (2026-07-03, #52 — rotulado no código do postprocess; ainda fora do
-  CHANGELOG): linhas near-miss chegam do scanner **sem `lucro_liq`** e caíam
-  todas em "Dados insuficientes" no `classify_decision`, mesmo com
-  `--revisar-min-net` rebaixado; agora `net_margin`/`lucro_liq` são recomputados
-  **só onde faltam** (linhas validadas, que já têm valor real, não mudam).
+- **v2.26** (2026-07-17): **modo Dragon Ball** — `--game dragonball` (Masters +
+  Fusion World, game_id 9 do CT), provider tcgcsv primário (categorias 27/80),
+  mapa `DBZ_SET_TO_TCGCSV` de 88 sets verificado por conteúdo, fidelidade de
+  variante por sufixo (alt art/SPR/SLR/SCR), propriedades por jogo
+  (`GAME_PROFILES`), skill `/scan-dbz` em 5 grupos travado por teste; caminho
+  Pokémon byte-idêntico. Também registrou o v2.25 no CHANGELOG (era a
+  pendência de bookkeeping) e bumpou o cabeçalho.
+- **v2.25** (2026-07-03, #52 — rotulado no código do postprocess; registrado no
+  CHANGELOG em 2026-07-17): linhas near-miss chegam do scanner **sem
+  `lucro_liq`** e caíam todas em "Dados insuficientes" no `classify_decision`,
+  mesmo com `--revisar-min-net` rebaixado; agora `net_margin`/`lucro_liq` são
+  recomputados **só onde faltam** (linhas validadas, que já têm valor real, não
+  mudam).
 - **Pós-v2.24 mergeados** (sem bump de versão): coluna **DH** / integração
   Double Holo (`--doubleholo`, `doubleholo_join.py`, `tcgcsv_productid.py`);
   alias `cri`→me4 + timeout override do `cri` (#47); skill `/scan` v1–v3
@@ -584,6 +615,10 @@ narrativo completo vive no `CHANGELOG.md`):
 - **v2.12** (2026-06-06): margem BRUTA — sem taxa embutida.
 - **2026-06-05**: este guia reescrito em linguagem acessível pro operador.
 
-**Pendências vivas:** (a) registrar o v2.25 no CHANGELOG e no cabeçalho de
-versão; (b) resolver a discrepância skill↔código do `--max-consecutive-misses`
-no fallback tcgcsv (ver o gotcha em "Como rodar").
+**Pendências vivas:** (a) resolver a discrepância skill↔código do
+`--max-consecutive-misses` no fallback tcgcsv (ver o gotcha em "Como rodar");
+(b) quando o CT preencher os collector numbers do `st01` (Fusion World Story
+Booster) — e quando saírem fb11/bt32 —, adicionar os sets a
+`DBZ_SET_TO_TCGCSV` por PR (o teste de partição vai exigir alocá-los num grupo
+do `/scan-dbz`). *(A antiga pendência "registrar o v2.25 no CHANGELOG/cabeçalho"
+foi resolvida no v2.26, 2026-07-17.)*

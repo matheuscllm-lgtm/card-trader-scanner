@@ -207,11 +207,17 @@ CHASE_TIER_PATTERNS = {
         "special illustration rare", "sir", "illustration rare",
         "special art rare", "sar", "hyper rare", "ultra hyper rare",
         "secret rare", "rara secreta",
+        # v2.26 — chases do Dragon Ball Super (--game dragonball no scanner);
+        # espelha o CHASE_TIER_PATTERNS do cardtrader_scanner.py — manter os
+        # dois em sincronia. Substrings sem colisão com o vocabulário Pokémon.
+        "special leader rare", "special rare", "god rare",
     ],
     "MID": [
         "full art", "alt art", "alternate art", "alternative art",
         "rainbow rare", "gold rare", "trainer gallery", "double rare",
         "rara hiper", "ultra rare",
+        # v2.26 — Dragon Ball Super (tier médio de chase)
+        "super rare", "concept rare",
     ],
     "MODEST": [
         "holo rare", "reverse holo", "reverse foil", "promo",

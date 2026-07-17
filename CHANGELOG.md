@@ -4,6 +4,80 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-07-17 — v2.26: modo Dragon Ball (--game dragonball) + skill /scan-dbz
+
+**Por quê (pedido do operador):** cobrir cartas de **Dragon Ball** com a mesma
+máquina de arbitragem do CardTrader. Verificação ao vivo (2026-07-17): o CT tem
+UM game pra franquia — `game_id 9` "Dragon Ball Super", 164 expansões, cobrindo
+o card game clássico (**Masters**: bt1..bt31, decks, expansion sets) e o
+**Fusion World** (fb01+, fs*, sb*). O DBZ TCG antigo da Panini não existe no
+CT. A pokemontcg.io é Pokémon-only → a referência de preço vem do
+**tcgcsv.com** (espelho diário do TCGplayer, mesma fonte real do fallback
+v2.23 e do MYP v5.15+), categorias **27** (Masters) e **80** (Fusion World).
+
+**O que entrou:**
+
+- **Flag `--game {pokemon,dragonball}`** (alias `dbz`; default `pokemon` =
+  caminho histórico INTACTO). No modo dragonball: expansões do game 9,
+  provider `TcgCsvDragonBallProvider` como fonte PRIMÁRIA (prefill BULK de 2
+  requests por set + lookup em memória — sem per-listing HTTP, sem cap de
+  misses, sem estourar timeout), `--provider` ignorado com aviso,
+  `--skip-backcatalog`/`--vintage` (listas Pokémon) recusados com erro claro.
+- **Mapa `DBZ_SET_TO_TCGCSV` (88 sets) verificado por CONTEÚDO**: pra cada
+  expansão CT, o group tcgcsv foi escolhido pelo overlap de collector_number
+  (blueprints CT × products tcgcsv, com normalização de zero-padding
+  'BT08-001'↔'BT8-1') — zero heurística de nome em runtime; set fora do mapa
+  é pulado com aviso. Exclusões documentadas: expansões promo/pre-release
+  (números repetem o set principal com stamp → margem falsa); bt10/bt11
+  (groups gêmeos "(2nd Edition)" no tcgcsv com números idênticos e o CT não
+  distingue a edição → referência ambígua); st01 (CT ainda sem números).
+- **Fidelidade de variante DBZ** (o análogo da escada holo/reverse): alt art
+  (sufixo CT `a`/`sa`) casa "(Alternate Art)"/"(Super Alternate Art)"; SPR/SLR
+  (sufixo `sr`) casam "(SPR)"/"(SLR)"; `sec`→"(SCR)"; par SCR/GDR no mesmo
+  número desempata por raridade; ambiguidade → miss honesto (nunca colapsa pro
+  subtype mais barato). Subtipo por foil (`dragonball_foil`): foil=True exige
+  Foil/Holofoil; carta de IMPRESSÃO ÚNICA (SR/SCR/leader foil-only) usa a
+  única impressão com `last_single_printing` — que suprime o flag "Variante
+  Baixa Confiança" SÓ nesse caso (providers Pokémon não setam → inalterados).
+- **Números "pelados" dos sets antigos** (CT bt1 guarda '096'; tcgcsv usa
+  'BT1-096'): resolvidos por cauda numérica ÚNICA no group; colisão (BT×SD no
+  mesmo group antigo) → miss honesto.
+- **Propriedades por jogo** (`GAME_PROFILES`): dragonball_language/
+  dragonball_rarity/dragonball_foil vs pokemon_* — usados por `_parse_listing`
+  e pela validação per-blueprint (`_variant_matches`). Perfil default =
+  Pokémon byte-idêntico (inclusive pra instâncias via `Scanner.__new__` dos
+  testes, via default de classe).
+- **Chase tiers DBS** em `CHASE_TIER_PATTERNS`: SPR/SLR/GDR → TOP; Super
+  Rare/Concept Rare → MID (vocabulário sem colisão com o Pokémon).
+- **Skill `/scan-dbz`** (`.claude/commands/scan-dbz.md`): 5 grupos por era
+  (G1 = Fusion World completo … G5 = gênese 2017-18), valores canônicos
+  0.30/30/0.20, entrega via postprocess verbatim; partição travada por
+  `tests/test_scan_dbz_skill_profiles.py`.
+
+**Arquivos:** `cardtrader_scanner.py` (constantes CT_DRAGONBALL_GAME_ID/
+GAME_PROFILES/TCGCSV_ROOT/DBZ_SET_TO_TCGCSV/DBZ_SUFFIX_TO_MARKERS, helpers
+dbz_canon_number/dbz_split_number/dbz_marker_class, classe
+TcgCsvDragonBallProvider, PricingProvider.last_single_printing,
+Scanner.game_profile + _parse_listing/_variant_matches game-aware,
+_build_opportunity, parse_args --game, main() — provider/expansões/escopo/
+guards); `.claude/commands/scan-dbz.md`; **testes:** +31 (26 em
+`tests/test_dbz_provider.py`, 5 em `tests/test_scan_dbz_skill_profiles.py`)
+→ **240 no total**, suíte Pokémon intocada.
+
+## 2026-07-03 — v2.25: near-miss sem lucro_liq caía em "Dados insuficientes" (postprocess, #52)
+
+*(Registro retroativo — o fix entrou mergeado em 2026-07-03 rotulado v2.25 no
+código do postprocess, mas ficou fora do CHANGELOG até 2026-07-17; era a
+pendência de bookkeeping (a) do CLAUDE.md.)*
+
+**Por quê:** linhas near-miss chegam do scanner **sem `lucro_liq`** (não
+passam pela validação per-blueprint) e caíam TODAS em "Dados insuficientes"
+no `classify_decision` do postprocess — mesmo quando o operador rebaixava
+`--revisar-min-net` pra explorar abaixo do threshold.
+
+**Fix:** `net_margin`/`lucro_liq` são recomputados **só onde faltam**; linhas
+validadas (que já têm valor real per-blueprint) não mudam.
+
 ## 2026-06-26 — v2.24: guard reverse-outlier (vintage barato não-holo casando em reverseHolofoil)
 
 **Por quê (bug confirmado com dados ao vivo):** o scan vintage 2026-06-26
