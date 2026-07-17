@@ -135,7 +135,7 @@ def test_build_rows_join_por_tcg_player_id_e_margem_base_compra():
     tcg_index = {555: {"name": "Energy Marker (E-18) (Gold)", "url": "https://tcg/x",
                        "prices": {"Holofoil": 74.0}}}
     offers = {10: [make_offer(cents=20000)]}  # R$200
-    rows, stats = build_rows(EXP, [_bp()], offers, tcg_index, RATES, min_price_usd=10.0)
+    rows, stats, _ = build_rows(EXP, [_bp()], offers, tcg_index, RATES, min_price_usd=10.0)
     assert stats["avaliadas"] == 1
     row = rows[0]
     assert row["tcg_usd"] == 74.0 and row["ct_brl"] == 200.0
@@ -144,13 +144,30 @@ def test_build_rows_join_por_tcg_player_id_e_margem_base_compra():
 
 
 def test_build_rows_sem_tcg_player_id_fica_fora_com_contagem():
-    rows, stats = build_rows(EXP, [_bp(tcg=None)], {10: [make_offer()]}, {}, RATES, 10.0)
+    rows, stats, semref = build_rows(EXP, [_bp(tcg=None)], {10: [make_offer()]}, {}, RATES, 10.0)
     assert rows == [] and stats["sem_ref_tcg"] == 1
+    # sidecar de honestidade: o blueprint COM oferta viva não some em silêncio
+    assert len(semref) == 1
+    assert semref[0]["motivo"] == "tcg_player_id vazio no blueprint CT"
+    assert semref[0]["oferta_url"].endswith("/cards/10")
+
+
+def test_build_rows_semref_distingue_motivos():
+    # tcg_player_id aponta pra produto que não existe no índice
+    _, _, semref = build_rows(EXP, [_bp(tcg=999)], {10: [make_offer()]}, {}, RATES, 10.0)
+    assert semref[0]["motivo"] == "productId fora do índice tcgcsv"
+    # produto existe mas sem nenhum market price
+    idx = {555: {"name": "x", "url": "u", "prices": {}}}
+    _, _, semref = build_rows(EXP, [_bp()], {10: [make_offer()]}, idx, RATES, 10.0)
+    assert semref[0]["motivo"] == "produto tcgcsv sem market price"
+    # sem oferta NM viva → não entra no sidecar (não é deal possível)
+    _, _, semref = build_rows(EXP, [_bp(tcg=None)], {}, {}, RATES, 10.0)
+    assert semref == []
 
 
 def test_build_rows_piso_de_referencia():
     tcg_index = {555: {"name": "x", "url": "u", "prices": {"Normal": 3.0}}}
-    rows, stats = build_rows(EXP, [_bp()], {10: [make_offer()]}, tcg_index, RATES, 10.0)
+    rows, stats, _ = build_rows(EXP, [_bp()], {10: [make_offer()]}, tcg_index, RATES, 10.0)
     assert rows == [] and stats["abaixo_piso"] == 1
 
 
@@ -166,7 +183,7 @@ def test_build_markdown_todas_as_linhas_tem_os_dois_links():
     tcg_index = {555: {"name": "x", "url": "https://www.tcgplayer.com/product/555/x",
                        "prices": {"Holofoil": 74.0}}}
     offers = {10: [make_offer(cents=20000)]}
-    rows, stats = build_rows(EXP, [_bp()], offers, tcg_index, RATES, 10.0)
+    rows, stats, _ = build_rows(EXP, [_bp()], offers, tcg_index, RATES, 10.0)
     meta = {"data": "t", "expansoes": "fuspromo", "fx": 5.0, "fx_fonte": "teste",
             "threshold": 0.30, "min_price_usd": 10.0}
     md = build_markdown(rows, stats, meta)
@@ -176,6 +193,16 @@ def test_build_markdown_todas_as_linhas_tem_os_dois_links():
         assert "[oferta](https://www.cardtrader.com/cards/" in linha
         assert "[TCG](https://www.tcgplayer.com/product/" in linha
     assert "COMPRA" in md and "Cobertura honesta" in md
+
+
+def test_build_markdown_marcador_parcial():
+    stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
+             "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
+    meta = {"data": "t", "expansoes": "x", "fx": 5.0, "fx_fonte": "teste",
+            "threshold": 0.30, "min_price_usd": 10.0}
+    assert "PARCIAL" not in build_markdown([], stats, dict(meta))
+    md = build_markdown([], stats, dict(meta, parcial="3/10"))
+    assert "PARCIAL — 3/10 expansões" in md
 
 
 def test_threshold_em_fracao_guard():

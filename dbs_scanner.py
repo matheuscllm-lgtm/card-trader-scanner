@@ -271,12 +271,16 @@ def classify(margin: float, ct_brl: float, tcg_brl: float, threshold: float) -> 
 
 
 def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
-               tcg_index: dict, rates: dict, min_price_usd: float) -> tuple[list[dict], dict]:
-    """Cruza blueprints × ofertas × referência. Retorna (linhas, contadores honestos)."""
+               tcg_index: dict, rates: dict, min_price_usd: float) -> tuple[list[dict], dict, list[dict]]:
+    """Cruza blueprints × ofertas × referência.
+    Retorna (linhas, contadores honestos, sem_ref) — sem_ref lista todo blueprint
+    COM oferta NM viva que ficou sem referência TCG, com o motivo: nada some em
+    silêncio (vai pro sidecar _semref.csv para conferência manual)."""
     stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
              "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
     brl_per_usd = rates["BRL"]
     rows = []
+    semref: list[dict] = []
     for bp in blueprints:
         stats["blueprints"] += 1
         cheapest = cheapest_offer_brl(offers_by_bp.get(int(bp["id"]), []), rates)
@@ -290,6 +294,15 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         chosen = pick_subtype(bp.get("version"), product["prices"]) if product else None
         if chosen is None:
             stats["sem_ref_tcg"] += 1
+            if not tcg_pid:
+                motivo = "tcg_player_id vazio no blueprint CT"
+            elif product is None:
+                motivo = "productId fora do índice tcgcsv"
+            else:
+                motivo = "produto tcgcsv sem market price"
+            semref.append({"set": expansion.get("name", ""), "carta": carta_label(bp),
+                           "ct_brl": round(ct_brl, 2), "motivo": motivo,
+                           "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}"})
             continue
         subtype, tcg_usd = chosen
         if tcg_usd < min_price_usd:
@@ -308,7 +321,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
             "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}",
             "tcg_url": product["url"],
         })
-    return rows, stats
+    return rows, stats, semref
 
 
 # ───────────────────────── entrega ─────────────────────────
@@ -348,8 +361,13 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
         b.sort(key=lambda x: -x["margem"])
 
     out = [f"## Scan DBS CardTrader → TCGplayer — {meta['data']}", ""]
+    if meta.get("parcial"):
+        out.append(f"⏳ **PARCIAL — {meta['parcial']} expansões varridas** (entrega incremental; "
+                   f"a tabela cresce a cada expansão concluída).")
+        out.append("")
     out.append(
-        f"Expansões: **{meta['expansoes']}** · Referência: TCGplayer market via tcgcsv.com · "
+        f"Expansões: **{meta['expansoes']}** · Referência: TCGplayer market via tcgcsv.com "
+        f"(dump {meta.get('tcg_dump', 'n/d')}) · "
         f"Câmbio: US$1 = R${meta['fx']:.4f} ({meta['fx_fonte']}) · "
         f"Threshold: {threshold:.2f} (fração = {threshold * 100:.0f}%) · Piso ref: US${meta['min_price_usd']:.2f} · "
         f"Margem bruta = (TCG R$ − CT R$) ÷ CT R$, sem taxas · Ofertas: menor NM/EN não-graded AO VIVO"
@@ -403,6 +421,15 @@ def write_csv(rows: list[dict], path: Path) -> None:
             w.writerow(r)
 
 
+def write_semref(semref: list[dict], path: Path) -> None:
+    """Sidecar de honestidade: blueprints com oferta NM viva mas SEM referência TCG."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["set", "carta", "ct_brl", "motivo", "oferta_url"])
+        w.writeheader()
+        for r in semref:
+            w.writerow(r)
+
+
 # ───────────────────────── main ─────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -435,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.all:
-        targets = exps
+        # mais novas primeiro: parciais entregam cedo onde os deals costumam morar
+        targets = sorted(exps, key=lambda e: -(e.get("id") or 0))
     else:
         if not args.expansions:
             sys.exit("ERRO: informe --expansions <codes> (ou --all, ou --list-expansions).")
@@ -450,36 +478,50 @@ def main(argv: list[str] | None = None) -> int:
     tcg_index = load_tcg_index(cache_hours=args.cache_hours)
     print(f"[tcgcsv] {len(tcg_index)} produtos indexados")
 
-    all_rows: list[dict] = []
-    total_stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
-                   "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
-    for exp in targets:
-        print(f"[scan] {exp.get('code')} — {exp.get('name')}…")
-        bps = fetch_blueprints(exp["id"], headers)
-        offers = fetch_offers(exp["id"], headers)
-        rows, stats = build_rows(exp, bps, offers, tcg_index, rates, args.min_price_usd)
-        for k in total_stats:
-            total_stats[k] += stats[k]
-        all_rows.extend(rows)
-        print(f"       {stats['avaliadas']} avaliadas / {stats['blueprints']} blueprints")
+    try:
+        tcg_dump = requests.get("https://tcgcsv.com/last-updated.txt",
+                                headers={"User-Agent": USER_AGENT}, timeout=15).text.strip()
+    except requests.RequestException:
+        tcg_dump = "n/d"
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     prefix = Path(args.out) if args.out else REPO_DIR / "outputs" / f"dbs_scan_{stamp}"
     prefix.parent.mkdir(parents=True, exist_ok=True)
+    md_path = prefix.with_suffix(".md")
 
     meta = {
         "data": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "expansoes": ", ".join(e.get("code") or "?" for e in targets),
+        "expansoes": (", ".join(e.get("code") or "?" for e in targets)
+                      if len(targets) <= 12 else f"{len(targets)} expansões DBS (--all)"),
         "fx": rates["BRL"], "fx_fonte": rates["_fonte"],
         "threshold": args.threshold, "min_price_usd": args.min_price_usd,
+        "tcg_dump": tcg_dump,
     }
-    md = build_markdown(all_rows, total_stats, meta)
-    md_path = prefix.with_suffix(".md")
-    md_path.write_text(md, encoding="utf-8")
-    write_csv(all_rows, prefix.with_suffix(".csv"))
 
+    all_rows: list[dict] = []
+    all_semref: list[dict] = []
+    total_stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
+                   "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0}
+    for i, exp in enumerate(targets, 1):
+        print(f"[scan] ({i}/{len(targets)}) {exp.get('code')} — {exp.get('name')}…", flush=True)
+        bps = fetch_blueprints(exp["id"], headers)
+        offers = fetch_offers(exp["id"], headers)
+        rows, stats, semref = build_rows(exp, bps, offers, tcg_index, rates, args.min_price_usd)
+        for k in total_stats:
+            total_stats[k] += stats[k]
+        all_rows.extend(rows)
+        all_semref.extend(semref)
+        # entrega PARCIAL cumulativa a cada expansão — run longo nunca fica mudo
+        meta["parcial"] = f"{i}/{len(targets)}" if i < len(targets) else None
+        md_path.write_text(build_markdown(all_rows, total_stats, meta), encoding="utf-8")
+        write_csv(all_rows, prefix.with_suffix(".csv"))
+        write_semref(all_semref, Path(str(prefix) + "_semref.csv"))
+        print(f"       {stats['avaliadas']} avaliadas / {stats['blueprints']} blueprints "
+              f"(acum.: {total_stats['avaliadas']} avaliadas) → parcial em {md_path}", flush=True)
+
+    md = md_path.read_text(encoding="utf-8")
     print("\n" + md)
-    print(f"\n[out] {md_path} + {prefix.with_suffix('.csv')}")
+    print(f"\n[out] {md_path} + {prefix.with_suffix('.csv')} + {Path(str(prefix) + '_semref.csv')}")
     return 0
 
 
