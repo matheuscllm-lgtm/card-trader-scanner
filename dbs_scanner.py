@@ -368,10 +368,13 @@ def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
         if bold:
             marg = f"**{marg}**"
         links = f"[oferta]({r['oferta_url']}) · [TCG]({r['tcg_url']})"
-        flag_col = f"{r.get('flag') or '—'} | " if with_flag else ""
+        # '|' literal dentro de célula (ex. versão "Pack 09 | Winner") quebra a tabela
+        carta = str(r['carta']).replace("|", "\\|")
+        flag_txt = str(r.get('flag') or '—').replace("|", "\\|")
+        flag_col = f"{flag_txt} | " if with_flag else ""
         out.append(
             f"| {i} | {marg} | {fmt_brl(r['ct_brl'])} | US${r['tcg_usd']:.2f} | "
-            f"{fmt_brl(r['dif_brl'])} | {r['carta']} | {r['set']} | {r['raridade']} | NM | "
+            f"{fmt_brl(r['dif_brl'])} | {carta} | {r['set']} | {r['raridade']} | NM | "
             f"{r['qtd']} | {flag_col}{links} |"
         )
     return out

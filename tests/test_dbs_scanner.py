@@ -242,6 +242,17 @@ def test_build_markdown_marcador_parcial():
     assert "PARCIAL — 3/10 expansões" in md
 
 
+def test_pipe_literal_na_celula_e_escapado():
+    tcg_index = {555: {"name": "x", "url": "https://www.tcgplayer.com/product/555/x",
+                       "prices": {"Holofoil": 74.0}}}
+    bp = _bp(version="Tournament Pack 09 | Winner", num="FP-066w", name="Broly")
+    rows, stats, _ = build_rows(EXP, [bp], {10: [make_offer(cents=26871)]}, tcg_index, RATES, 10.0)
+    md = build_markdown(rows, stats, {"data": "t", "expansoes": "x", "fx": 5.0,
+                                      "fx_fonte": "t", "threshold": 0.30, "min_price_usd": 10.0})
+    linha = next(l for l in md.splitlines() if l.startswith("| 1 |"))
+    assert "Pack 09 \\| Winner" in linha  # escapado — a tabela não quebra
+
+
 def test_threshold_em_fracao_guard():
     from dbs_scanner import main
     with pytest.raises(SystemExit) as exc:
