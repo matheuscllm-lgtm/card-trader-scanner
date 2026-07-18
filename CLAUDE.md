@@ -508,6 +508,10 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   fração no threshold, marcador PARCIAL, motivos do semref, 2 links por linha).
 - Primeira prova real (2026-07-17, `fuspromo`): 545 blueprints → 163 avaliadas →
   21 COMPRA ≥30%, incluindo os casos que motivaram a ferramenta.
+- **Próximo da família:** scanner de ONE PIECE (`op_scanner.py`, mesmo molde) —
+  handoff completo com IDs/schema já verificados em
+  `scanners-commons/HANDOFF-ONEPIECE-SCANNER.md` (handoffs são gitignored AQUI
+  de propósito; o lar deles é o scanners-commons).
 
 ## Testes
 
