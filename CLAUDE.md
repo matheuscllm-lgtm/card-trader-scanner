@@ -480,6 +480,13 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   relevância na referência (`--min-price-usd 10`); NM por match **EXATO**
   `== "Near Mint"`; graded/assinada nunca entram; oferta <50% da referência vai
   pro bucket 🚨 REVISAR (possível lixo/scam), nunca vira COMPRA limpa.
+- **Filtro de SINGLES (v1.1, 2026-07-18):** os blueprints de uma expansão vêm
+  com **selados misturados** (packs, booster box, premium box) — e selado com
+  `tcg_player_id` casava na referência e saía na entrega como carta (vazamento
+  real do catálogo 2026-07-17: a linha "Collector's Selection Vol.2"). Agora só
+  blueprint **com `collector_number`** entra; os demais são pulados com
+  contagem própria na cobertura ("selados/acessórios pulados"). Regra provada
+  na API em 2026-07-18 (games 9 e 15: todo blueprint sem número era selado).
 - **Câmbio:** `--fx` manual OU automático (open.er-api.com) — sem fonte real o
   run **falha alto** (nunca chuta). Ofertas em moeda sem taxa conhecida são
   puladas e contadas.
@@ -502,16 +509,70 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   python dbs_scanner.py --all --threshold 0.30         # catálogo DBS inteiro (lento)
   ```
 
-- **Contratos travados em teste:** `tests/test_dbs_scanner.py` (34 testes
+- **Contratos travados em teste:** `tests/test_dbs_scanner.py` (35 testes
   offline — filtros NM/EN/graded, conversão de moeda, joins por tcg_player_id e
   secundário nome+número, piso, guardas anti-lixo e de referência volátil,
-  fração no threshold, marcador PARCIAL, motivos do semref, 2 links por linha).
+  filtro de singles/selados, fração no threshold, marcador PARCIAL, motivos do
+  semref, 2 links por linha).
 - Primeira prova real (2026-07-17, `fuspromo`): 545 blueprints → 163 avaliadas →
   21 COMPRA ≥30%, incluindo os casos que motivaram a ferramenta.
-- **Próximo da família:** scanner de ONE PIECE (`op_scanner.py`, mesmo molde) —
-  handoff completo com IDs/schema já verificados em
-  `scanners-commons/HANDOFF-ONEPIECE-SCANNER.md` (handoffs são gitignored AQUI
-  de propósito; o lar deles é o scanners-commons).
+- **Irmão da família:** scanner de ONE PIECE (`op_scanner.py`, mesmo molde) —
+  ver a seção própria logo abaixo.
+
+## Scanner paralelo: One Piece (`op_scanner.py`)
+
+> **Origem (2026-07-18):** pedido do operador em 2026-07-17, executado a partir
+> do handoff `scanners-commons/HANDOFF-ONEPIECE-SCANNER.md` (handoffs são
+> gitignored AQUI de propósito; o lar deles é o scanners-commons). É o irmão do
+> `dbs_scanner.py` — mesmo molde, mesmos invariantes, mesma entrega — para o
+> **One Piece Card Game**.
+
+- **O que faz:** varre expansões de One Piece no CardTrader (**game_id 15**,
+  93 expansões: `op01`…, starters `st*`, promos) com ofertas **AO VIVO** do
+  marketplace (menor NM inglês não-graded) e compara com o **market price do
+  TCGplayer** via tcgcsv.com (**categoria 68** = catálogo INGLÊS; cache próprio
+  em `outputs/op_cache/`, TTL 20h — nunca compartilhado com o `dbs_cache/`).
+- **⚠️ Idioma é o risco nº 1 deste jogo — e está travado em teste:** o CT vende
+  MUITO One Piece JP (no OP-01, **18% das 15.986 ofertas** eram jp/zh-CN/kr).
+  A chave real na oferta é `onepiece_language` (provada com oferta JP real em
+  2026-07-18); qualquer valor ≠ EN é rejeitado. Na validação manual do primeiro
+  scan, as ofertas mais baratas das DUAS linhas entregues eram JP/asiáticas —
+  sem esse filtro a margem sairia de produto errado (lição do guard JP do
+  ebay-arbitrage-scanner).
+- **Filtro de SINGLES:** igual ao v1.1 do dbs — selados vêm misturados nos
+  blueprints (no OP-01: booster box com 13 ofertas vivas e `tcg_player_id`);
+  só blueprint com `collector_number` entra, o resto é contado como
+  "selados/acessórios pulados". Alt arts são blueprints próprios com sufixo no
+  número (`OP01-001a`/`OP01-064b`) e `tcg_player_id` próprio (97% de cobertura
+  no OP-01 → join primário domina); o sufixo é PRESERVADO no join secundário
+  (alt art nunca colapsa na carta base). DON!! são singles legítimos (o piso
+  US$10 os corta). Raridade em `fixed_properties["onepiece_rarity"]`.
+- **Todo o resto é idêntico ao dbs_scanner** (joins primário/secundário,
+  guardas anti-lixo e de referência volátil, câmbio com falha-alta, parciais
+  cumulativos `⏳ PARCIAL — N/M`, sidecar `_semref.csv`, entrega canônica
+  🟢/🚨/🔎 com 2 links por linha, threshold em FRAÇÃO com trava, CSV completo
+  em `outputs/` gitignored). Backlog registrado: extrair um núcleo comum
+  (`ct_tcg_core.py`) pros dois scanners — o handoff mandou não bloquear a v1
+  por isso.
+- **Como rodar:**
+
+  ```bash
+  python op_scanner.py --list-expansions              # códigos disponíveis
+  python op_scanner.py --expansions op01 --threshold 0.30
+  python op_scanner.py --all --threshold 0.30         # catálogo OP inteiro (lento)
+  ```
+
+- **Contratos travados em teste:** `tests/test_op_scanner.py` (37 testes
+  offline, espelho do test_dbs_scanner + os específicos: chave real
+  `onepiece_language` com os 4 valores observados, booster box nunca vira
+  linha, sufixo de alt art preservado no `_num_tail`, raridade onepiece).
+- **Primeira prova real (2026-07-18, `op01`):** 165 blueprints = 156 singles +
+  9 selados pulados → 29 avaliadas → 1 COMPRA ≥30% (Monkey.D.Luffy Leader
+  OP01-003, 49,2%) + 1 quase (Perona Box Topper). Contagens batem 1:1 com a
+  sonda da API; menor oferta EN NM e referência tcgcsv das 2 linhas
+  reconferidas ao vivo. Set de 2022 = back-catalog eficiente (coerente com a
+  auditoria Pokémon da frota) — deal mora nos lançamentos; catálogo completo =
+  `--all`.
 
 ## Testes
 
@@ -519,8 +580,8 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ```
 
-- **243 testes** coletados (verificado com `pytest --collect-only -q` em
-  2026-07-17, após `pip install -r requirements.txt`).
+- **281 testes** coletados (verificado com `python -m pytest -q` em
+  2026-07-18, após `pip install -r requirements.txt`: 281 passed).
 - O `pytest.ini` escopa a coleta a `testpaths=tests` **de propósito**: os
   `scripts/test_*.py` são run-scripts standalone (testes operacionais rodados à
   mão), deliberadamente fora da suíte do pytest.
@@ -536,12 +597,13 @@ python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 cardtrader_scanner.py       o scanner: varre o CardTrader, precifica (pokemontcg.io → fallback tcgcsv) e grava o XLSX cru
 cardtrader_postprocess.py   o relatório: classifica COMPRA/REVISAR/NÃO e gera a tabela de ENTREGA (build_delivery_markdown)
 dbs_scanner.py              scanner PARALELO de DRAGON BALL (Fusion World/Masters): CT ao vivo vs TCGplayer — ver seção própria
+op_scanner.py               scanner PARALELO de ONE PIECE (game 15 / tcgcsv cat 68): mesmo molde do dbs — ver seção própria
 doubleholo_join.py          coluna DH (2ª opinião Double Holo) — só lê a nota do JSON canônico, join por productId
 tcgcsv_productid.py         resolver offline de productId TCGplayer (pro join DH; identidade, nunca toca preço)
 config.yaml                 configuração
 CHANGELOG.md                histórico narrativo completo (desde 2026-04-29)
 pytest.ini                  escopo da suíte (testpaths=tests)
-tests/                      a suíte do pytest (243 testes)
+tests/                      a suíte do pytest (281 testes)
 scripts/                    utilitários operacionais: recover_from_checkpoint.py, checkpoint_to_partial.py,
                             peek_deals.py, launchers .ps1 do PC do operador, e run-scripts test_*.py (fora do pytest)
 diagnose_*.py (raiz)        scripts de diagnóstico pontual (jtg, no_deals, pricing)
