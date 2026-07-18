@@ -3,8 +3,15 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  DBS SCANNER — CardTrader → TCGplayer (DRAGON BALL SUPER)            ║
-║  Fusion World + DBS Masters · v1.0 (2026-07-17)                      ║
+║  Fusion World + DBS Masters · v1.1 (2026-07-18)                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
+
+v1.1 (2026-07-18): filtro de SINGLES por collector_number presente — selados
+vêm MISTURADOS nos blueprints da expansão (packs do fuspromo, booster box dos
+bt*, e o box "Collector's Selection Vol.2" que VAZOU como carta na entrega do
+catálogo completo de 2026-07-17 por ter tcg_player_id). Pulados com contagem
+própria na cobertura; regra provada na API em 2026-07-18 (games 9 e 15: todo
+blueprint sem collector_number era selado/acessório).
 
 Scanner PARALELO ao fluxo Pokémon deste repo (não passa pelo skill /scan):
 varre expansões de Dragon Ball Super no CardTrader (game_id 9) com ofertas
@@ -267,6 +274,14 @@ def _num_tail(s: str) -> str:
     return tail.lstrip("0") or tail
 
 
+def is_single(bp: dict) -> bool:
+    """Singles têm collector_number; selados/acessórios vêm misturados nos
+    blueprints da expansão com fixed_properties vazio (packs, booster box,
+    premium box — ex. real: "Collector's Selection Vol.2", que tem
+    tcg_player_id e por isso vazou na entrega antes deste guard)."""
+    return bool((bp.get("fixed_properties") or {}).get("collector_number"))
+
+
 def build_secondary_index(tcg_index: dict) -> dict:
     """(nome normalizado, cauda do número) → {productIds}. Base do join SECUNDÁRIO
     para blueprint sem tcg_player_id: nome EXATO + número, match ÚNICO obrigatório
@@ -323,14 +338,17 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
     Retorna (linhas, contadores honestos, sem_ref) — sem_ref lista todo blueprint
     COM oferta NM viva que ficou sem referência TCG, com o motivo: nada some em
     silêncio (vai pro sidecar _semref.csv para conferência manual)."""
-    stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
-             "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0,
-             "resgatadas_join2": 0}
+    stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
+             "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
+             "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
     brl_per_usd = rates["BRL"]
     rows = []
     semref: list[dict] = []
     for bp in blueprints:
         stats["blueprints"] += 1
+        if not is_single(bp):
+            stats["selados_pulados"] += 1
+            continue
         cheapest = cheapest_offer_brl(offers_by_bp.get(int(bp["id"]), []), rates)
         if cheapest is None:
             stats["sem_oferta_nm"] += 1
@@ -454,7 +472,9 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     )
     out.append("")
     out.append(
-        f"Cobertura honesta: {stats['blueprints']} blueprints · {stats['sem_oferta_nm']} sem oferta NM · "
+        f"Cobertura honesta: {stats['blueprints']} blueprints · "
+        f"{stats.get('selados_pulados', 0)} selados/acessórios pulados (sem collector_number — booster box nunca vira linha) · "
+        f"{stats['sem_oferta_nm']} sem oferta NM · "
         f"{stats['sem_ref_tcg']} sem referência TCG (join `tcg_player_id` vazio ou sem market price — ficam FORA, nunca inventamos) · "
         f"{stats.get('resgatadas_join2', 0)} com referência recuperada pelo join secundário "
         f"(nome+número, match único; contadas antes do piso) · "
@@ -583,9 +603,9 @@ def main(argv: list[str] | None = None) -> int:
 
     all_rows: list[dict] = []
     all_semref: list[dict] = []
-    total_stats = {"blueprints": 0, "sem_oferta_nm": 0, "sem_ref_tcg": 0,
-                   "abaixo_piso": 0, "avaliadas": 0, "ofertas_moeda_pulada": 0,
-                   "resgatadas_join2": 0}
+    total_stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
+                   "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
+                   "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
     for i, exp in enumerate(targets, 1):
         print(f"[scan] ({i}/{len(targets)}) {exp.get('code')} — {exp.get('name')}…", flush=True)
         bps = fetch_blueprints(exp["id"], headers)

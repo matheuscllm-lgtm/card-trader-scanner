@@ -255,6 +255,26 @@ def test_join_secundario_nunca_com_versao_nem_nome_diferente():
     assert rows == [] and stats["resgatadas_join2"] == 0
 
 
+def test_selado_sem_collector_number_nunca_vira_linha():
+    """Regressão do vazamento REAL do catálogo completo (2026-07-17): o box
+    "Collector's Selection Vol.2" tem tcg_player_id (265248) e oferta viva —
+    casava na referência e saía na entrega como se fosse carta. Selado
+    (fixed_properties sem collector_number) agora é pulado com contagem própria
+    (v1.1); regra provada na API em 2026-07-18 (games 9 e 15)."""
+    from dbs_scanner import is_single
+    box = {"id": 99, "name": "Collector's Selection Vol.2", "version": "",
+           "tcg_player_id": 265248, "fixed_properties": {}}
+    assert not is_single(box) and is_single(_bp())
+    idx = {265248: {"name": "Collector's Selection Vol.2", "url": "u",
+                    "prices": {"Normal": 200.0}}}
+    rows, stats, semref = build_rows(EXP, [box], {99: [make_offer(cents=50000)]}, idx, RATES, 10.0)
+    assert rows == [] and semref == []
+    assert stats["selados_pulados"] == 1 and stats["avaliadas"] == 0
+    md = build_markdown(rows, stats, {"data": "t", "expansoes": "x", "fx": 5.0,
+                                      "fx_fonte": "t", "threshold": 0.30, "min_price_usd": 10.0})
+    assert "1 selados/acessórios pulados" in md
+
+
 def test_build_rows_piso_de_referencia():
     tcg_index = {555: {"name": "x", "url": "u", "prices": {"Normal": 3.0}}}
     rows, stats, _ = build_rows(EXP, [_bp()], {10: [make_offer()]}, tcg_index, RATES, 10.0)
