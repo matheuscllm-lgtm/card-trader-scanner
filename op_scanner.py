@@ -2,46 +2,55 @@
 # -*- coding: utf-8 -*-
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║  DBS SCANNER — CardTrader → TCGplayer (DRAGON BALL SUPER)            ║
-║  Fusion World + DBS Masters · v1.1 (2026-07-18)                      ║
+║  OP SCANNER — CardTrader → TCGplayer (ONE PIECE CARD GAME)           ║
+║  v1.0 (2026-07-18)                                                   ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-v1.1 (2026-07-18): filtro de SINGLES por collector_number presente — selados
-vêm MISTURADOS nos blueprints da expansão (packs do fuspromo, booster box dos
-bt*, e o box "Collector's Selection Vol.2" que VAZOU como carta na entrega do
-catálogo completo de 2026-07-17 por ter tcg_player_id). Pulados com contagem
-própria na cobertura; regra provada na API em 2026-07-18 (games 9 e 15: todo
-blueprint sem collector_number era selado/acessório).
-
-Scanner PARALELO ao fluxo Pokémon deste repo (não passa pelo skill /scan):
-varre expansões de Dragon Ball Super no CardTrader (game_id 9) com ofertas
-AO VIVO do marketplace e compara com o preço market do TCGplayer via
-tcgcsv.com (categorias 80 = Fusion World, 27 = DBS Masters).
+Scanner PARALELO ao fluxo Pokémon deste repo (não passa pelo skill /scan),
+irmão do dbs_scanner.py (mesmo molde, PR #57): varre expansões de One Piece
+no CardTrader (game_id 15) com ofertas AO VIVO do marketplace e compara com
+o preço market do TCGplayer via tcgcsv.com (categoria 68 = One Piece EN).
 
 Direção do fluxo: COMPRAR no CardTrader → VENDER/referenciar no TCGplayer US.
 
-Por que este scanner existe (decisão do operador, 2026-07-17): a frota era
-Pokémon-only e deixava passar deals de Dragon Ball (ex.: energy markers Gold
-e promos Release Event Winner do set Fusion World Promos).
+Origem: handoff scanners-commons/HANDOFF-ONEPIECE-SCANNER.md (pedido do
+operador, 2026-07-17). IDs/schema verificados com API real lá e reconfirmados
+em 2026-07-18 nesta implementação.
+
+Diferenças vs Dragon Ball (as pegadinhas do handoff, provadas com dados reais):
+  • SELADOS MISTURADOS nos blueprints da expansão (booster box/booster/case,
+    fixed_properties vazio) — filtro de SINGLES por collector_number presente,
+    com contagem explícita dos pulados (no OP-01: 156 singles vs 9 selados).
+  • IDIOMA: o CT vende MUITO One Piece JP — no OP-01, 18% das 15.986 ofertas
+    eram jp/zh-CN/kr, TODAS com a chave `onepiece_language` na properties_hash
+    (provado 2026-07-18). O filtro genérico de idioma (qualquer chave contendo
+    "language" ≠ EN → rejeita) cobre; a categoria 68 do tcgcsv é o catálogo
+    INGLÊS, então JP vazando = margem errada — por isso o teste offline trava
+    a chave real.
+  • Raridade em fixed_properties["onepiece_rarity"]; alt arts são blueprints
+    próprios com sufixo no número (OP01-001a/OP01-064b) e tcg_player_id
+    próprio (97% de cobertura no OP-01 → join primário domina).
+  • DON!! são singles legítimos (têm collector_number); o piso US$10 os corta.
 
 Invariantes herdados da frota:
   • Margem BRUTA base compra: (TCG_BRL − CT_BRL) / CT_BRL — sem taxa embutida.
   • --threshold em FRAÇÃO (0.30 = 30%) — convenção CardTrader/COMC/Selados.
   • Só Near Mint — match EXATO == "Near Mint" na condição da oferta; nunca
     substring. Graded/assinada nunca entra.
-  • Nunca inventar preço: blueprint sem tcg_player_id ou produto sem market
-    price → fica FORA com contagem explícita (sem fuzzy por nome).
+  • Nunca inventar preço: sem referência → fica FORA com contagem explícita
+    e vai pro sidecar _semref.csv (sem fuzzy por nome).
   • Nunca recomendar compra: buckets são classificação técnica.
   • Entrega = tabela markdown gerada AQUI (build_markdown), 2 links por linha:
     [oferta](cardtrader) · [TCG](tcgplayer).
 
 Join oferta↔referência: DETERMINÍSTICO por blueprint.tcg_player_id ==
-productId do tcgcsv (mesma filosofia do join DH por productId da frota).
+productId do tcgcsv; join SECUNDÁRIO (nome EXATO + cauda do número, match
+único, só blueprint sem versão) pros raros sem tcg_player_id.
 
 Uso:
-    python dbs_scanner.py --expansions fuspromo fb04 --threshold 0.30
-    python dbs_scanner.py --list-expansions          # códigos disponíveis
-    python dbs_scanner.py --all --threshold 0.30     # catálogo DBS inteiro (lento)
+    python op_scanner.py --expansions op01 --threshold 0.30
+    python op_scanner.py --list-expansions          # códigos disponíveis
+    python op_scanner.py --all --threshold 0.30     # catálogo OP inteiro (lento)
 
 Requer CT_JWT (env var ou .env deste repo). Câmbio: --fx OU automático
 (open.er-api.com) — sem fonte de câmbio o run FALHA ALTO (nunca chuta).
@@ -62,8 +71,8 @@ import requests
 
 CT_API = "https://api.cardtrader.com/api/v2"
 TCGCSV = "https://tcgcsv.com/tcgplayer"
-GAME_ID_DBS = 9                    # "Dragon Ball Super" no CardTrader
-TCGCSV_CATEGORIES = (80, 27)       # 80 = Fusion World · 27 = DBS Masters
+GAME_ID_OP = 15                    # "One Piece Card Game" no CardTrader
+TCGCSV_CATEGORIES = (68,)          # 68 = One Piece Card Game (catálogo EN do TCGplayer)
 USER_AGENT = "MasterBox-TCG-Scanner/1.0 (contato via cardtrader.com)"
 FX_URL = "https://open.er-api.com/v6/latest/USD"
 JUNK_RATIO = 0.5                   # oferta < 50% da ref = possível lixo/scam (padrão da frota)
@@ -72,7 +81,7 @@ VOLATILE_REF_RATIO = 2.0           # market vs menor anúncio atual divergindo >
 CT_CALL_SLEEP = 0.5                # gentileza com a API do CT
 
 REPO_DIR = Path(__file__).resolve().parent
-CACHE_DIR = REPO_DIR / "outputs" / "dbs_cache"
+CACHE_DIR = REPO_DIR / "outputs" / "op_cache"   # NUNCA compartilhar com dbs_cache (categorias diferentes)
 
 
 # ───────────────────────── segredo / HTTP ─────────────────────────
@@ -141,9 +150,9 @@ def to_brl(cents: int, currency: str, rates: dict) -> float | None:
 
 # ───────────────────────── CardTrader ─────────────────────────
 
-def fetch_dbs_expansions(headers: dict) -> list[dict]:
+def fetch_op_expansions(headers: dict) -> list[dict]:
     exps = http_json(f"{CT_API}/expansions", headers)
-    return [e for e in exps if e.get("game_id") == GAME_ID_DBS]
+    return [e for e in exps if e.get("game_id") == GAME_ID_OP]
 
 
 def fetch_blueprints(exp_id: int, headers: dict) -> list[dict]:
@@ -164,7 +173,11 @@ _EN_OK = {"", "en", "english"}
 
 
 def offer_ok(offer: dict) -> bool:
-    """NM EXATO + não-graded + não-assinada + idioma EN (ou ausente) + qty > 0."""
+    """NM EXATO + não-graded + não-assinada + idioma EN (ou ausente) + qty > 0.
+
+    Idioma: no game 15 a chave REAL é `onepiece_language` (provado com as
+    15.986 ofertas do OP-01 em 2026-07-18 — valores en/jp/zh-CN/kr); o match
+    genérico por "language" na chave cobre e rejeita tudo que não é EN."""
     props = offer.get("properties_hash") or {}
     if props.get("condition") != "Near Mint":
         return False
@@ -213,7 +226,7 @@ def _cached_json(url: str, cache_file: Path, cache_hours: float):
 
 
 def load_tcg_index(cache_hours: float = 20.0, log=print) -> dict:
-    """productId → {"name", "url", "prices": {subTypeName: marketPrice}} (cats 80 + 27)."""
+    """productId → {"name", "url", "number", "prices": {subTypeName: marketPrice}} (cat 68)."""
     index: dict[int, dict] = {}
     for cat in TCGCSV_CATEGORIES:
         groups = _cached_json(f"{TCGCSV}/{cat}/groups", CACHE_DIR / f"groups_{cat}.json", cache_hours)
@@ -268,17 +281,21 @@ def _norm_name(s: str) -> str:
 
 
 def _num_tail(s: str) -> str:
-    """Cauda do número de coleção p/ casar convenções: 'BT12-041' e '041' → '41'."""
+    """Cauda do número de coleção p/ casar convenções: 'OP01-064' e '064' → '64'.
+    Sufixo de alt art é preservado ('OP01-064b' → '64B' ≠ '64' — nunca colapsa
+    a alt art na base)."""
     s = (s or "").strip().upper()
     tail = s.split("-")[-1] if s else ""
     return tail.lstrip("0") or tail
 
 
 def is_single(bp: dict) -> bool:
-    """Singles têm collector_number; selados/acessórios vêm misturados nos
-    blueprints da expansão com fixed_properties vazio (packs, booster box,
-    premium box — ex. real: "Collector's Selection Vol.2", que tem
-    tcg_player_id e por isso vazou na entrega antes deste guard)."""
+    """Singles têm collector_number; selados/acessórios vêm MISTURADOS nos
+    blueprints da expansão com fixed_properties vazio (booster box, booster,
+    case, premium box…). Provado no OP-01 (156 singles vs 9 selados) e no
+    game 9 (fuspromo: 31 packs; csvol2: o box 'Collector's Selection Vol.2'
+    que vazou na entrega do scan DBS). Filtrar aqui é o que impede selado com
+    tcg_player_id de virar 'carta' na tabela."""
     return bool((bp.get("fixed_properties") or {}).get("collector_number"))
 
 
@@ -298,9 +315,9 @@ def build_secondary_index(tcg_index: dict) -> dict:
 
 def ref_volatile(market_usd: float, low_usd: float | None) -> bool:
     """Referência volátil: menor anúncio ATUAL do TCGplayer diverge do market price
-    em >2× em QUALQUER direção (caso real: Bulma SB01-057 market US$506 vs menor
-    anúncio US$2.000 — market arrastado por vendas antigas de promo fino).
-    Sinal-only: rebaixa COMPRA→REVISAR, nunca muda margem/preço."""
+    em >2× em QUALQUER direção (caso real DBS: Bulma SB01-057 market US$506 vs
+    menor anúncio US$2.000). Sinal-only: rebaixa COMPRA→REVISAR, nunca muda
+    margem/preço."""
     if not low_usd or low_usd <= 0 or market_usd <= 0:
         return False
     ratio = max(market_usd, low_usd) / min(market_usd, low_usd)
@@ -336,8 +353,10 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
                sec_index: dict | None = None) -> tuple[list[dict], dict, list[dict]]:
     """Cruza blueprints × ofertas × referência.
     Retorna (linhas, contadores honestos, sem_ref) — sem_ref lista todo blueprint
-    COM oferta NM viva que ficou sem referência TCG, com o motivo: nada some em
-    silêncio (vai pro sidecar _semref.csv para conferência manual)."""
+    SINGLE com oferta NM viva que ficou sem referência TCG, com o motivo: nada
+    some em silêncio (vai pro sidecar _semref.csv para conferência manual).
+    Selados/acessórios (sem collector_number) são pulados ANTES de tudo, com
+    contagem própria — booster box nunca vira linha."""
     stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
              "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
              "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
@@ -362,7 +381,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         amb = 0
         if chosen is None and sec_index is not None and not bp.get("version"):
             # resgate: nome EXATO + cauda do número, match ÚNICO, só blueprint SEM
-            # versão (evita casar variante errada — Gold/Alt Art nunca entram aqui)
+            # versão (evita casar variante errada — Alt Art/Manga nunca entram aqui)
             num = (bp.get("fixed_properties") or {}).get("collector_number") or ""
             cands = sec_index.get((_norm_name(bp.get("name")), _num_tail(num))) or set()
             amb = len(cands)
@@ -397,7 +416,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         rows.append({
             "carta": carta_label(bp),
             "set": expansion.get("name", ""),
-            "raridade": (bp.get("fixed_properties") or {}).get("dragonball_rarity") or "—",
+            "raridade": (bp.get("fixed_properties") or {}).get("onepiece_rarity") or "—",
             "ct_brl": ct_brl, "tcg_usd": tcg_usd, "tcg_brl": tcg_brl,
             "tcg_low_usd": tcg_low, "ref_volatil": ref_volatile(tcg_usd, tcg_low),
             "dif_brl": tcg_brl - ct_brl, "margem": margin,
@@ -431,7 +450,8 @@ def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
         if bold:
             marg = f"**{marg}**"
         links = f"[oferta]({r['oferta_url']}) · [TCG]({r['tcg_url']})"
-        # '|' literal dentro de célula (ex. versão "Pack 09 | Winner") quebra a tabela
+        # '|' literal dentro de célula (ex. versão "Alternate Art | Fixed Reprint")
+        # quebra a tabela
         carta = str(r['carta']).replace("|", "\\|")
         flag_txt = str(r.get('flag') or '—').replace("|", "\\|")
         flag_col = f"{flag_txt} | " if with_flag else ""
@@ -458,14 +478,14 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     for b in buckets.values():
         b.sort(key=lambda x: -x["margem"])
 
-    out = [f"## Scan DBS CardTrader → TCGplayer — {meta['data']}", ""]
+    out = [f"## Scan ONE PIECE CardTrader → TCGplayer — {meta['data']}", ""]
     if meta.get("parcial"):
         out.append(f"⏳ **PARCIAL — {meta['parcial']} expansões varridas** (entrega incremental; "
                    f"a tabela cresce a cada expansão concluída).")
         out.append("")
     out.append(
         f"Expansões: **{meta['expansoes']}** · Referência: TCGplayer market via tcgcsv.com "
-        f"(dump {meta.get('tcg_dump', 'n/d')}) · "
+        f"(categoria 68 EN, dump {meta.get('tcg_dump', 'n/d')}) · "
         f"Câmbio: US$1 = R${meta['fx']:.4f} ({meta['fx_fonte']}) · "
         f"Threshold: {threshold:.2f} (fração = {threshold * 100:.0f}%) · Piso ref: US${meta['min_price_usd']:.2f} · "
         f"Margem bruta = (TCG R$ − CT R$) ÷ CT R$, sem taxas · Ofertas: menor NM/EN não-graded AO VIVO"
@@ -524,7 +544,7 @@ def write_csv(rows: list[dict], path: Path) -> None:
 
 
 def write_semref(semref: list[dict], path: Path) -> None:
-    """Sidecar de honestidade: blueprints com oferta NM viva mas SEM referência TCG."""
+    """Sidecar de honestidade: singles com oferta NM viva mas SEM referência TCG."""
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["set", "carta", "ct_brl", "motivo", "oferta_url"])
         w.writeheader()
@@ -535,10 +555,10 @@ def write_semref(semref: list[dict], path: Path) -> None:
 # ───────────────────────── main ─────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Scanner Dragon Ball Super: CardTrader → TCGplayer")
+    ap = argparse.ArgumentParser(description="Scanner One Piece: CardTrader → TCGplayer")
     ap.add_argument("--expansions", nargs="*", default=[],
-                    help="códigos de expansão do CT (ex.: fuspromo fb04 bt31)")
-    ap.add_argument("--all", action="store_true", help="todas as expansões DBS do CT (lento)")
+                    help="códigos de expansão do CT (ex.: op01 op05 opeb01)")
+    ap.add_argument("--all", action="store_true", help="todas as expansões One Piece do CT (lento)")
     ap.add_argument("--list-expansions", action="store_true", help="lista códigos e sai")
     ap.add_argument("--threshold", type=float, default=0.30,
                     help="margem mínima em FRAÇÃO (0.30 = 30%%; convenção CT/COMC/Selados)")
@@ -546,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="piso de relevância da referência TCG (frota: ~US$10 p/ singles)")
     ap.add_argument("--fx", type=float, default=None, help="câmbio USD→BRL manual (senão: open.er-api.com)")
     ap.add_argument("--cache-hours", type=float, default=20.0, help="TTL do cache tcgcsv (0 = sem cache)")
-    ap.add_argument("--out", default=None, help="prefixo de saída (default outputs/dbs_scan_<ts>)")
+    ap.add_argument("--out", default=None, help="prefixo de saída (default outputs/op_scan_<ts>)")
     args = ap.parse_args(argv)
 
     if args.threshold > 1.5:
@@ -554,8 +574,8 @@ def main(argv: list[str] | None = None) -> int:
                  f"isso seria {args.threshold * 100:.0f}%. (Pegadinha nº 1 da frota.)")
 
     headers = {"Authorization": f"Bearer {get_jwt()}", "User-Agent": USER_AGENT}
-    print("[ct] baixando expansões DBS…")
-    exps = fetch_dbs_expansions(headers)
+    print("[ct] baixando expansões One Piece…")
+    exps = fetch_op_expansions(headers)
     by_code = {e.get("code"): e for e in exps}
 
     if args.list_expansions:
@@ -576,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rates = resolve_rates(args.fx)
     print(f"[fx] US$1 = R${rates['BRL']:.4f} ({rates['_fonte']})")
-    print("[tcgcsv] carregando índice de referência (cats 80 + 27)…")
+    print("[tcgcsv] carregando índice de referência (cat 68)…")
     tcg_index = load_tcg_index(cache_hours=args.cache_hours)
     sec_index = build_secondary_index(tcg_index)
     print(f"[tcgcsv] {len(tcg_index)} produtos indexados ({len(sec_index)} chaves de join secundário)")
@@ -588,14 +608,14 @@ def main(argv: list[str] | None = None) -> int:
         tcg_dump = "n/d"
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = Path(args.out) if args.out else REPO_DIR / "outputs" / f"dbs_scan_{stamp}"
+    prefix = Path(args.out) if args.out else REPO_DIR / "outputs" / f"op_scan_{stamp}"
     prefix.parent.mkdir(parents=True, exist_ok=True)
     md_path = prefix.with_suffix(".md")
 
     meta = {
         "data": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "expansoes": (", ".join(e.get("code") or "?" for e in targets)
-                      if len(targets) <= 12 else f"{len(targets)} expansões DBS (--all)"),
+                      if len(targets) <= 12 else f"{len(targets)} expansões One Piece (--all)"),
         "fx": rates["BRL"], "fx_fonte": rates["_fonte"],
         "threshold": args.threshold, "min_price_usd": args.min_price_usd,
         "tcg_dump": tcg_dump,
