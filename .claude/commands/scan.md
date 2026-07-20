@@ -50,7 +50,7 @@ derivado de `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES` do scanner (excluídos:
 ```bash
 python cardtrader_scanner.py \
   --sets meg pfl asc por cri blk wht dri pre jtg ssp scr sfa twm tef paf par mew obf pal svi \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g1_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -58,7 +58,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets crz sit lorg astr brs fst evs cre bst shf viv cpa daa rcl ssh pkmgo det cec unm hif teu \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g2_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -66,7 +66,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets unb lot drm ces fli upr cinv bus slg gri sum evo sts fco bkp bkt aor gen ros prc dcr \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g3_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -74,7 +74,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets phf ffi flf kss xybsp ltr plb plf pls bcr drx dex nxd nvi epo blw drv tri und ul hgs \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g4_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -82,7 +82,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets clo sft ge sw mt pdp sv rr pl nbsp pk df cg hp lm ds uf em dx trr rg hl \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g5_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -90,14 +90,16 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets exma dr ss rs skg aq ex lc si n4 n3 n2 n1 g2 g1 tr b2 fo ju bs wiz bog \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 \
+  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
   --output outputs/scan_g6_<AAAAMMDD_HHMM>.xlsx
 ```
 
 ## 3. Rodar (um run por grupo, SEQUENCIAL)
 
 - Valores canônicos em TODO run: `--threshold 0.30` (**FRAÇÃO** — inteiro `30`
-  = 3000% = zero deals sem erro), `--validate-top 30`, `--min-net-margin 0.20`.
+  = 3000% = zero deals sem erro), `--validate-top 30`, `--min-net-margin 0.20`,
+  `--max-consecutive-misses 40` (liga o fallback tcgcsv em set que a
+  pokemontcg.io não precifica, ex. `asc` — sem isso o set sai com 0 preço).
 - Scan custom (`/scan pre ssp`): mesmo comando trocando só a lista de `--sets`.
 - **Nunca dois runs ao mesmo tempo** (mesma pasta de estado — o scanner
   recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
