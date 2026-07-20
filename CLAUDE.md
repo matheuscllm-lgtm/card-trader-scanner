@@ -159,7 +159,8 @@ estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
 Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um ≤~2h30 de scan —
 runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
 rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
-(threshold 0.30, validate-top 30, min-net-margin 0.20) e entrega **cada grupo**
+(threshold 0.30, validate-top 30, min-net-margin 0.20, max-consecutive-misses
+40) e entrega **cada grupo**
 pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
 `/scan total` = catálogo inteiro via workflow semanal. A partição é travada por
 teste (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner. **Nenhum
@@ -227,20 +228,19 @@ Opções úteis:
   `--revisar-modest-min`, `--min-lucro`, `--top-md`, `--doubleholo`,
   `--no-pid-resolve`) — `--help` de cada script lista tudo.
 
-> ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06):** o fallback
-> `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap de misses consecutivos
-> (`--max-consecutive-misses > 0`) e um **resgate de fim de set** (set que
-> completa o loop de pricing com 0 hit na pokemontcg.io e listings pendentes
-> tenta o tcgcsv para todos os misses — mesmo com o cap em 0). Na prática o
-> resgate só vale se o set completar o loop dentro do per-set-timeout — e num
-> set como `asc` (Ascended Heroes, que só o tcgcsv precifica) o per-listing
-> lento da pokemontcg.io historicamente estourava o timeout antes do resgate.
-> Um comentário no código (`SET_TIMEOUT_OVERRIDES`) diz que a skill passa `40`,
-> mas o `scan.md` atual **NÃO passa essa flag** — discrepância aberta entre
-> código e skill. Consequência prática: num scan que inclua `asc`, sem a flag o
-> set **pode sair com 0 preço** apesar de o tcgcsv ter os dados. Se for rodar
-> `asc` à mão, passe `--max-consecutive-misses 40`; a correção definitiva
-> (alinhar skill ↔ código) deve ir por PR.
+> ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06; skill alinhada em
+> 2026-07-20):** o fallback `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap
+> de misses consecutivos (`--max-consecutive-misses > 0`) e um **resgate de
+> fim de set** (set que completa o loop de pricing com 0 hit na pokemontcg.io
+> e listings pendentes tenta o tcgcsv para todos os misses — mesmo com o cap
+> em 0). Na prática o resgate só vale se o set completar o loop dentro do
+> per-set-timeout — e num set como `asc` (Ascended Heroes, que só o tcgcsv
+> precifica) o per-listing lento da pokemontcg.io historicamente estourava o
+> timeout antes do resgate. Por isso os 6 comandos canônicos do skill `/scan`
+> passam `--max-consecutive-misses 40` (alinhado em 2026-07-20 com o que o
+> comentário do código em `SET_TIMEOUT_OVERRIDES` sempre assumiu; travado em
+> `tests/test_scan_skill_profiles.py`). Se for rodar um set como `asc` à mão,
+> fora do skill, passe `--max-consecutive-misses 40` você também.
 
 ### Workflows do GitHub Actions (nuvem)
 
@@ -657,14 +657,19 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.24** — mas o
-`main` já contém código **pós-v2.24 mergeado**, incluindo um fix rotulado
-**v2.25** no postprocess. Pendência de bookkeeping: registrar o v2.25 no
-`CHANGELOG.md` e atualizar o cabeçalho. Uma linha por versão (o detalhe
-narrativo completo vive no `CHANGELOG.md`):
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.25**
+(bookkeeping fechado em 2026-07-20: v2.25 registrado no `CHANGELOG.md` e
+cabeçalho atualizado). Uma linha por versão (o detalhe narrativo completo vive
+no `CHANGELOG.md`):
 
-- **v2.25** (2026-07-03, #52 — rotulado no código do postprocess; ainda fora do
-  CHANGELOG): linhas near-miss chegam do scanner **sem `lucro_liq`** e caíam
+- **Pós-v2.25 mergeados** (scripts paralelos, fora do versionamento do scanner
+  Pokémon): `dbs_scanner.py` v1.0/v1.1 + `op_scanner.py` (#57/#58, mergeados
+  2026-07-20) — ver seções próprias; PR #56 (modo `--game dragonball` embutido
+  no scanner Pokémon) fechado como **superado** pelo #57 em 2026-07-20; skill
+  `/scan` alinhado com `--max-consecutive-misses 40` (antiga pendência (b),
+  2026-07-20).
+- **v2.25** (2026-07-03, #52): linhas near-miss chegam do scanner **sem
+  `lucro_liq`** e caíam
   todas em "Dados insuficientes" no `classify_decision`, mesmo com
   `--revisar-min-net` rebaixado; agora `net_margin`/`lucro_liq` são recomputados
   **só onde faltam** (linhas validadas, que já têm valor real, não mudam).
@@ -705,6 +710,8 @@ narrativo completo vive no `CHANGELOG.md`):
 - **v2.12** (2026-06-06): margem BRUTA — sem taxa embutida.
 - **2026-06-05**: este guia reescrito em linguagem acessível pro operador.
 
-**Pendências vivas:** (a) registrar o v2.25 no CHANGELOG e no cabeçalho de
-versão; (b) resolver a discrepância skill↔código do `--max-consecutive-misses`
-no fallback tcgcsv (ver o gotcha em "Como rodar").
+**Pendências vivas:** nenhuma de bookkeeping — as antigas (a) v2.25 no
+CHANGELOG/cabeçalho e (b) discrepância skill↔código do
+`--max-consecutive-misses` foram fechadas em 2026-07-20. Backlog registrado:
+extrair o núcleo comum `ct_tcg_core.py` pros scanners paralelos dbs/op (ver
+seção do `op_scanner.py`).

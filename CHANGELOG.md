@@ -4,6 +4,24 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-07-03 — v2.25: near-miss caía inteiro em "Dados insuficientes" no postprocess
+
+*(Registrado retroativamente em 2026-07-20 — o fix entrou pelo #52 já rotulado
+`v2.25` no código do postprocess; este registro + o bump do cabeçalho eram a
+pendência (a) do CLAUDE.md.)*
+
+**Por quê:** desde o contrato v2.22 o scanner persiste TODO listing precificado
+no XLSX, e as linhas near-miss (abaixo do threshold) chegam ao postprocess
+**sem `lucro_liq`/`net_margin`** — esses campos nasciam só na validação
+per-blueprint dos tops. No `classify_decision`, near-miss sem `lucro_liq` caía
+inteiro em "Dados insuficientes", mesmo quando o operador rebaixava
+`--revisar-min-net` de propósito pra explorar a faixa abaixo do corte.
+
+**Fix (#52, `cardtrader_postprocess.py`):** `net_margin`/`lucro_liq` passam a
+ser recomputados **só onde faltam**; linha validada (que já tem o valor real da
+validação per-blueprint) não muda. Near-miss volta a classificar normalmente
+pela régua rebaixada.
+
 ## 2026-06-26 — v2.24: guard reverse-outlier (vintage barato não-holo casando em reverseHolofoil)
 
 **Por quê (bug confirmado com dados ao vivo):** o scan vintage 2026-06-26
