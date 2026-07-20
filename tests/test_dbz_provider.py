@@ -260,6 +260,20 @@ def test_par_scr_gdr_sem_raridade_e_ambiguo_none(monkeypatch):
     assert price is None
 
 
+def test_sufixo_desconhecido_nunca_cai_pra_outra_classe(monkeypatch):
+    """Review 2026-07-20: sufixo de variante sem classe no tcgcsv ('sp'/'cs'/
+    'g' — stamps que a fonte não separa) → None SEMPRE, mesmo com raridade
+    igual à do produto base. Sem isto, 'BT31-059sp' casaria o produto base
+    Common e precificaria a variante errada (viola "nunca substitui")."""
+    prov = _dbz_provider(monkeypatch)
+    assert prov.market_price_usd("Krillin", "bt31", "BT31-059sp", foil=False,
+                                 rarity="Common") is None
+    # sufixo CONHECIDO cuja classe não existe pro número → idem None
+    prov2 = _dbz_provider(monkeypatch)
+    assert prov2.market_price_usd("Krillin", "bt31", "BT31-059a", foil=False,
+                                  rarity="Common") is None
+
+
 def test_alt_art_sufixo_a(monkeypatch):
     prov = _dbz_provider(monkeypatch)
     price = prov.market_price_usd("Son Gohan", "bt31", "BT31-013a",
@@ -336,8 +350,11 @@ def test_mapa_categorias_validas_e_groups_unicos():
     cats = {cat for cat, _ in DBZ_SET_TO_TCGCSV.values()}
     assert cats <= {27, 80}, f"categoria inesperada: {cats}"
     # o MESMO group pode atender >1 code CT (starter deck dentro do booster:
-    # sd19/sd20 → Dawn of the Z-Legends), mas o par (código→group) é único
-    assert len(DBZ_SET_TO_TCGCSV) == len(set(DBZ_SET_TO_TCGCSV))
+    # sd19/sd20 → Dawn of the Z-Legends), mas todo valor é (cat, groupId>0)
+    assert all(
+        isinstance(cat, int) and isinstance(gid, int) and gid > 0
+        for cat, gid in DBZ_SET_TO_TCGCSV.values()
+    ), "valor do mapa fora do formato (categoria, groupId)"
     assert all(c == c.lower() for c in DBZ_SET_TO_TCGCSV), "codes em minúsculas"
 
 
@@ -361,6 +378,7 @@ def test_game_profiles_pokemon_preserva_chaves_historicas():
     assert p["language_key"] == "pokemon_language"
     assert p["rarity_key"] == "pokemon_rarity"
     assert p["foil_keys"] == ("mtg_foil", "foil", "pokemon_reverse")
+    assert p["collector_version_fallback"] is True
     # default de classe do Scanner = perfil pokemon (instâncias via __new__,
     # padrão dos testes antigos, seguem byte-idênticas)
     assert sc.Scanner.game_profile is p
@@ -373,6 +391,7 @@ def test_game_profiles_dragonball():
     assert d["rarity_key"] == "dragonball_rarity"
     assert "dragonball_foil" in d["foil_keys"]
     assert "pokemon_reverse" not in d["foil_keys"]
+    assert d["collector_version_fallback"] is False
 
 
 # ───────────────────── (h) _parse_listing por perfil ────────────────────────
@@ -411,6 +430,29 @@ def test_parse_listing_dragonball_le_props_do_jogo():
     assert l.foil is True
     assert l.rarity == "Common"
     assert l.collector_number == "BT31-059"
+
+
+def test_parse_listing_dbz_sem_fallback_de_version():
+    """Review 2026-07-20: listing DBZ sem collector_number nas props usa o
+    fixed_properties do blueprint; bp.version ('BT31', 'Pre-Release Stamped')
+    NUNCA vira número por digit-strip (version 'BT31' → '31' casaria a carta
+    errada via cauda única)."""
+    s = _scanner_stub(GAME_PROFILES["dragonball"])
+    # 1) fixed_properties preenche quando props não têm o número
+    bp = {77: {"id": 77, "name": "Krillin, Challenge", "version": "BT31",
+               "fixed_properties": {"collector_number": "BT31-059",
+                                    "dragonball_rarity": "Common"}}}
+    l = s._parse_listing(_raw_listing({
+        "condition": "Near Mint", "dragonball_language": "en",
+    }), bp)
+    assert l.collector_number == "BT31-059"
+    # 2) sem número em lugar NENHUM → vazio (nunca '31' vindo do version)
+    bp2 = {77: {"id": 77, "name": "Release Pack", "version": "BT31",
+                "fixed_properties": {}}}
+    l2 = s._parse_listing(_raw_listing({
+        "condition": "Near Mint", "dragonball_language": "en",
+    }), bp2)
+    assert l2.collector_number == ""
 
 
 def test_parse_listing_pokemon_segue_lendo_pokemon_reverse():

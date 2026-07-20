@@ -419,12 +419,18 @@ GAME_PROFILES: dict[str, dict] = {
         # ordem preservada do código pré-v2.26 (or de booleanos — inócua, mas
         # mantida idêntica por fidelidade).
         "foil_keys": ("mtg_foil", "foil", "pokemon_reverse"),
+        # extrai dígitos de bp.version ("SIR | 161/131") quando o listing e o
+        # blueprint não trazem collector_number — comportamento histórico.
+        "collector_version_fallback": True,
     },
     "dragonball": {
         "ct_game_id": CT_DRAGONBALL_GAME_ID,
         "language_key": "dragonball_language",
         "rarity_key": "dragonball_rarity",
         "foil_keys": ("dragonball_foil", "foil"),
+        # version DBZ carrega variante ('Pre-Release Stamped', 'BT31'...), não
+        # número — digit-strip produziria número-lixo; usa fixed_properties.
+        "collector_version_fallback": False,
     },
 }
 
@@ -455,7 +461,7 @@ TIMEOUT = 30
 # Categoria 3 = Pokémon. User-Agent é OBRIGATÓRIO (sem ele = 401).
 TCGCSV_BASE = "https://tcgcsv.com/tcgplayer/3"
 TCGCSV_USER_AGENT = (
-    "card-trader-scanner/2.23 "
+    "card-trader-scanner/2.26 "
     "(+github.com/matheuscllm-lgtm/card-trader-scanner)"
 )
 
@@ -2526,9 +2532,18 @@ class TcgCsvDragonBallProvider(PricingProvider):
             return present[0]
         pool = present
         if not pool:
+            # Sufixo de variante SEM classe correspondente no tcgcsv → miss.
+            # NUNCA cai pra outra classe: um sufixo desconhecido (ex.: 'sp',
+            # 'cs', 'g' — stamps que o tcgcsv não separa) casando o produto
+            # base precificaria a variante errada; "nunca substitui variante"
+            # vale aqui igual ao lado Pokémon (review 2026-07-20). A busca
+            # cross-classe só é permitida pro número SEM sufixo, que precisa
+            # dela pros casos SCR-only e SCR/GDR.
+            if suffix != "":
+                return None
             valid = [p for p in cands.values() if p is not None]
             # número que só existe numa variante (SCR-only, Concept Rare...)
-            if suffix == "" and len(valid) == 1:
+            if len(valid) == 1:
                 return valid[0]
             pool = valid
         # desempate por raridade EXATA (case-insensitive) — resolve o par
@@ -3281,10 +3296,19 @@ class Scanner:
             # formatado como "Rarity | N/total" → aplicamos clean só nesse
             # fallback pra extrair o dígito via regex sem mexer nos paths
             # limpos (2026-05-11 fix).
+            # v2.26 (review 2026-07-20): cadeia por jogo. Pokémon INALTERADA:
+            # props → bp raiz → dígito extraído de bp.version ("SIR | 161/131").
+            # Dragon Ball: props → bp raiz → bp.fixed_properties.collector_number
+            # (onde o CT guarda o número DBZ) — SEM o fallback de version, que é
+            # Pokémon-shaped e produziria número-lixo aqui (version 'BT31' →
+            # dígitos '31', que a resolução por cauda única poderia casar com a
+            # carta errada do set).
             collector_number=(
                 props.get("collector_number")
                 or bp.get("collector_number")
-                or clean_collector_number(bp.get("version", ""))
+                or (clean_collector_number(bp.get("version", ""))
+                    if self.game_profile["collector_version_fallback"]
+                    else (bp.get("fixed_properties") or {}).get("collector_number"))
                 or ""
             ),
             condition=props.get("condition", "Unknown"),
