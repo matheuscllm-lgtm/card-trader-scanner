@@ -326,6 +326,26 @@ def test_pipe_literal_na_celula_e_escapado():
     assert "Pack 09 \\| Winner" in linha  # escapado — a tabela não quebra
 
 
+def test_describe_scope_nunca_mente_all_em_run_de_expansions():
+    from dbs_scanner import describe_scope
+
+    alvos = [{"code": f"fb{i:02d}"} for i in range(1, 21)]  # 20 > SCOPE_INLINE_MAX
+
+    # --expansions com muitos alvos: NUNCA pode dizer "--all" nem sugerir catálogo inteiro
+    rotulo = describe_scope(alvos, catalogo=164, is_all=False)
+    assert "--all" not in rotulo
+    assert "20 de 164 expansões" in rotulo
+    assert "--expansions" in rotulo
+    assert "fb01" in rotulo and "(+8)" in rotulo  # 12 inline + 8 restantes
+
+    # --all de verdade: aí sim pode se declarar catálogo completo
+    rotulo_all = describe_scope(alvos, catalogo=20, is_all=True)
+    assert "--all" in rotulo_all and "catálogo completo" in rotulo_all
+
+    # poucos alvos: lista os códigos crus, sem contagem
+    assert describe_scope([{"code": "fuspromo"}, {"code": "fb01"}], 164, False) == "fuspromo, fb01"
+
+
 def test_threshold_em_fracao_guard():
     from dbs_scanner import main
     with pytest.raises(SystemExit) as exc:

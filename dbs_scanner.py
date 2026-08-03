@@ -443,6 +443,25 @@ def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
     return out
 
 
+SCOPE_INLINE_MAX = 12
+
+
+def describe_scope(targets: list[dict], catalogo: int, is_all: bool) -> str:
+    """Rótulo honesto do escopo varrido, pro cabeçalho da entrega.
+
+    Nunca diz '--all' num run que veio de --expansions: o operador leria
+    'catálogo inteiro' e confiaria numa cobertura que não houve.
+    """
+    codes = [e.get("code") or "?" for e in targets]
+    if is_all:
+        return f"{len(codes)} expansões DBS — catálogo completo (--all)"
+    if len(codes) <= SCOPE_INLINE_MAX:
+        return ", ".join(codes)
+    extra = len(codes) - SCOPE_INLINE_MAX
+    return (f"{len(codes)} de {catalogo} expansões DBS (--expansions): "
+            f"{', '.join(codes[:SCOPE_INLINE_MAX])} … (+{extra})")
+
+
 def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
     """Entrega canônica (padrão MYP): buckets COMPRA / REVISAR / QUASE + contagens honestas."""
     threshold = meta["threshold"]
@@ -594,8 +613,7 @@ def main(argv: list[str] | None = None) -> int:
 
     meta = {
         "data": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "expansoes": (", ".join(e.get("code") or "?" for e in targets)
-                      if len(targets) <= 12 else f"{len(targets)} expansões DBS (--all)"),
+        "expansoes": describe_scope(targets, len(exps), args.all),
         "fx": rates["BRL"], "fx_fonte": rates["_fonte"],
         "threshold": args.threshold, "min_price_usd": args.min_price_usd,
         "tcg_dump": tcg_dump,
