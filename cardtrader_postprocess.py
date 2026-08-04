@@ -901,14 +901,21 @@ def _fmt_pct(v) -> str:
 
 
 def _md_links_cell(link_ct, link_tcg) -> str:
-    """'[oferta](url_ct) · [TCG](url_tcg)' — só inclui o que existir."""
+    """'[oferta](url_ct) · [TCG](url_tcg)' — só inclui o que existir.
+
+    URLs percent-encodadas (espaço, aspas, parênteses) sem re-encodar %XX
+    existentes: em `[label](url)` o `)` cru fecha o link no primeiro
+    parêntese e o wrap `<url>` não é respeitado por todo renderizador
+    (oferta truncada no remote-control, operador 2026-08-04 — fix
+    cross-scanner, espelho do sealed snapshot.md_link)."""
+    from urllib.parse import quote
     parts = []
     ct = "" if link_ct is None else str(link_ct).strip()
     tcg = "" if link_tcg is None else str(link_tcg).strip()
     if ct.startswith("http"):
-        parts.append(f"[oferta]({ct})")
+        parts.append(f"[oferta]({quote(ct, safe='%/?&=:+,*')})")
     if tcg.startswith("http"):
-        parts.append(f"[TCG]({tcg})")
+        parts.append(f"[TCG]({quote(tcg, safe='%/?&=:+,*')})")
     return " · ".join(parts)
 
 
