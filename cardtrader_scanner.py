@@ -47,9 +47,19 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
-Versão: v2.24
+      | 2026-07-03 (v2.25)
+Versão: v2.25
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
+
+Changelog v2.25 (2026-07-03 — fix no POSTPROCESS; bookkeeping registrado 2026-07-20):
+  - [BUG #52] Linhas near-miss (abaixo do threshold, persistidas desde o
+    contrato v2.22) chegam ao postprocess SEM lucro_liq/net_margin e caíam
+    TODAS em "Dados insuficientes" no classify_decision, mesmo com
+    --revisar-min-net rebaixado de propósito. Fix no cardtrader_postprocess.py:
+    net_margin/lucro_liq recomputados SÓ onde faltam; linha validada (valor
+    real da validação per-blueprint) não muda. Nenhuma mudança NESTE arquivo —
+    o bump aqui é o bookkeeping do stack (era a pendência (a) do CLAUDE.md).
 
 Changelog v2.24 (2026-06-26 — guard reverse-outlier pra vintage barato não-holo):
   - [BUG] No scan vintage 2026-06-26, 16/40 "deals" referenciaram o
@@ -499,8 +509,9 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     # tcgcsv é um BULK único (não per-listing), então asc NÃO precisa de timeout
     # maior — a lentidão que eu via era pokemontcg.io consultando listing-a-listing
     # SEM o fallback disparar. ⚠️ O fallback tcgcsv só dispara com
-    # --max-consecutive-misses > 0 (a skill card-trader-scan passa 40); sem a flag,
-    # asc fica com 0 preço apesar do tcgcsv ter os dados.
+    # --max-consecutive-misses > 0 (o skill /scan passa 40 nos comandos canônicos
+    # desde 2026-07-20, travado em tests/test_scan_skill_profiles.py); sem a
+    # flag, asc fica com 0 preço apesar do tcgcsv ter os dados.
 }
 
 
