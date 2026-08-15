@@ -430,6 +430,16 @@ PTCG_SETCODE_TO_TCGCSV_ABBR = {
     "sv3": "OBF",       # Obsidian Flames
     "sv3pt5": "MEW",    # 151
     "sv2": "PAL",       # Paldea Evolved
+    # v2.26: sv1/me3/me4 faltavam no mapa de abreviação. Sem entrada exata a
+    # resolução caía no fallback por NOME, que exige match ÚNICO — e "Scarlet &
+    # Violet" é substring de dezenas de groups tcgcsv ("SV01: …", "SV: Shrouded
+    # Fable", …) → AMBÍGUO → set inteiro sem preço. Custo real medido no scan G1
+    # de 2026-08-15: `svi` saiu com 641 listings sem referência. me3/me4
+    # resolviam por nome (match único, por sorte); fixados aqui pra não
+    # dependerem de sorte. Abreviações conferidas contra o dump real de /groups.
+    "sv1": "SVI",       # Scarlet & Violet Base Set (tcgcsv: "SV01: Scarlet & Violet Base Set")
+    "me3": "POR",       # Perfect Order (tcgcsv: "ME03: Perfect Order")
+    "me4": "CRI",       # Chaos Rising (tcgcsv: "ME04: Chaos Rising")
     "me2pt5": "ASC",    # Ascended Heroes (pokemontcg.io SEM preço → tcgcsv resgata)
     "me2": "PFL",       # Phantasmal Flames
     "me1": "MEG",       # Mega Evolution (base)
