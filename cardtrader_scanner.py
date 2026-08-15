@@ -2047,9 +2047,15 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
         if index:
+            # v2.26: o rótulo do papel (FALLBACK vs fonte primária) é decidido
+            # pelo CALLER — este provider é o mesmo objeto nos dois modos. Antes
+            # a linha afirmava "FALLBACK — pokemontcg.io sem preço pro set" mesmo
+            # quando o tcgcsv era a fonte primária e a pokemontcg.io nunca tinha
+            # sido consultada: log mentiroso sobre proveniência, justo o que este
+            # repo não tolera. Agora só reporta o fato neutro (o que indexou).
             log.info(
                 f"  💾 tcgcsv {ct_set_code} (group {group_id}): {len(index)} "
-                f"cards indexados (FALLBACK — pokemontcg.io sem preço pro set)"
+                f"cards indexados"
             )
         return bool(index)
 
@@ -2152,6 +2158,18 @@ PROVIDERS = {
     "pokemontcg": PokemonTcgIoProvider,
     "justtcg": JustTcgProvider,
     "tcgplayer": TcgPlayerOfficialProvider,
+    # v2.26: tcgcsv promovido a fonte PRIMÁRIA selecionável (antes só fallback).
+    # Motivo (2026-08-15): a api.pokemontcg.io entrou em outage parcial — 500/502
+    # em 40-55% das chamadas (medido em 2 janelas), com ZERO 429 → não é throttle
+    # nem falta de chave, é o servidor deles. Como o pricing da pokemontcg.io é
+    # POR CARTA, cada 5xx vira retry com backoff de até 30s e a vazão desaba: num
+    # scan real de `sfa` só 32 de 390 listings foram precificados em 8,5min,
+    # estourando o per-set timeout e jogando o set na skip-list.
+    # O tcgcsv serve o MESMO preço TCGplayer, em BULK (2 requests por SET), e
+    # reusa a MESMA escada de variante (`select_tcgplayer_variant_price`) — a
+    # fidelidade de variante é idêntica, não é uma fonte "pior". Mesmo movimento
+    # que o MYP scanner fez na v5.15, pelo mesmo motivo.
+    "tcgcsv": TcgCsvFallbackProvider,
 }
 
 
@@ -2698,6 +2716,8 @@ class Scanner:
             "priced_below_threshold": 0,      # v2.22: precificados mas < threshold (near-miss, persistidos)
             "tcgcsv_fallback_sets": 0,        # v2.23: sets resgatados pelo fallback tcgcsv
             "tcgcsv_fallback_priced": 0,      # v2.23: cards precificados via tcgcsv
+            "tcgcsv_primary_sets": 0,         # v2.26: sets precificados com tcgcsv como fonte primária
+            "tcgcsv_primary_priced": 0,       # v2.26: listings precificados em modo primário
         }
         # v2.9 (Codex H5): threshold pra abortar set quando pricing está
         # massivamente quebrado (schema drift / SSL / endpoint down). 50% das
@@ -2979,6 +2999,21 @@ class Scanner:
         self.stats["listings_after_filters"] += len(best_by_uid)
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, EN, não-graded, ≥${self.min_price_usd})")
 
+        # v2.26: tcgcsv como fonte PRIMÁRIA → precifica o SET INTEIRO em bulk e
+        # encerra o set aqui, sem entrar no laço por-listing. O laço abaixo existe
+        # porque a pokemontcg.io cobra 1 request POR CARTA; o tcgcsv carrega o set
+        # em 2 requests, então iterar carta a carta só desperdiçaria tempo e
+        # exporia o set ao per-set timeout sem necessidade. Mesma seleção de
+        # variante e mesmo `_build_opportunity` dos outros caminhos — nada de
+        # preço inventado: set que não resolve groupId único devolve [] e o set
+        # sai honestamente sem preço.
+        if self._tcgcsv_is_primary():
+            yield from self._price_set_via_tcgcsv(
+                exp_code, exp_name, list(best_by_uid.values()), primary=True
+            )
+            self.stats["expansions_scanned"] += 1
+            return
+
         # Para cada listing filtrado, busca preço TCG e calcula margem
         total_listings = len(best_by_uid)
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
@@ -3229,6 +3264,15 @@ class Scanner:
         default path 100% intacto quando desligado."""
         return self.tcgcsv_fallback and self.tcgcsv is not None
 
+    def _tcgcsv_is_primary(self) -> bool:
+        """v2.26: True quando o tcgcsv é a fonte PRIMÁRIA (--provider tcgcsv).
+
+        Distinto de `_tcgcsv_can_fallback`: lá o tcgcsv é rede de segurança pros
+        sets que a pokemontcg.io não precifica; aqui ele É a fonte, e o laço
+        por-listing da pokemontcg.io nunca roda. Detectado pelo provider
+        primário (não por flag separada) pra não haver estado contraditório."""
+        return getattr(self.pricing, "name", None) == "tcgcsv" and self.tcgcsv is not None
+
     def _ptcg_setcodes_for(self, ct_set_code: str) -> list[str]:
         """v2.23: CT set code → lista de setcodes pokemontcg.io candidatos.
 
@@ -3242,26 +3286,46 @@ class Scanner:
         return out
 
     def _price_set_via_tcgcsv(
-        self, exp_code: str, exp_name: str, listings: list["Listing"]
+        self, exp_code: str, exp_name: str, listings: list["Listing"],
+        primary: bool = False,
     ) -> list["Opportunity"]:
-        """v2.23: reprecifica os listings de um set via FALLBACK tcgcsv.
+        """v2.23: precifica os listings de um set via tcgcsv.
 
-        Chamado APENAS quando a pokemontcg.io não precificou nada no set
-        (set_tcg_hits == 0). Pré-carrega o set no provider tcgcsv (resolução de
-        groupId unique-match-only) e constrói Opportunities pros que casarem —
-        com a MESMA seleção de variante e o MESMO `_build_opportunity`. Retorna
-        [] se o set não resolve no tcgcsv (sem groupId único / sem dados) → o
-        caller segue com o abort/skip-list honesto (sem preço inventado)."""
+        Dois chamadores, mesma mecânica:
+          - `primary=False` (v2.23, FALLBACK): só quando a pokemontcg.io não
+            precificou nada no set (set_tcg_hits == 0).
+          - `primary=True` (v2.26): o tcgcsv É a fonte (--provider tcgcsv), então
+            roda pra TODO set, sem a pokemontcg.io ser consultada.
+
+        Pré-carrega o set no provider tcgcsv (resolução de groupId
+        unique-match-only) e constrói Opportunities pros que casarem — com a
+        MESMA seleção de variante e o MESMO `_build_opportunity`. Retorna [] se o
+        set não resolve no tcgcsv (sem groupId único / sem dados) → o caller
+        segue com o abort/skip-list honesto (sem preço inventado)."""
         set_name = listings[0].set_name if listings else ""
         ptcg_codes = self._ptcg_setcodes_for(exp_code)
         ok = self.tcgcsv.prefill_set(exp_code, ptcg_codes, set_name)
         if not ok:
+            if primary:
+                # Honestidade: em modo primário não há outra fonte atrás. O set
+                # sai SEM preço e isso é dito alto — nunca preço inventado.
+                log.warning(
+                    f"  🕳️  {exp_code} ({exp_name}): sem groupId ÚNICO no tcgcsv "
+                    f"→ set SEM preço de referência ({len(listings)} listings "
+                    f"ignorados). Nenhum preço foi estimado."
+                )
             return []
-        log.info(
-            f"  🛟 FALLBACK tcgcsv ativo para {exp_code} ({exp_name}): "
-            f"pokemontcg.io sem preço pro set → reprecificando {len(listings)} "
-            f"listings via tcgcsv"
-        )
+        if primary:
+            log.info(
+                f"  📦 tcgcsv (fonte primária) para {exp_code} ({exp_name}): "
+                f"set carregado em bulk → precificando {len(listings)} listings"
+            )
+        else:
+            log.info(
+                f"  🛟 FALLBACK tcgcsv ativo para {exp_code} ({exp_name}): "
+                f"pokemontcg.io sem preço pro set → reprecificando {len(listings)} "
+                f"listings via tcgcsv"
+            )
         out: list["Opportunity"] = []
         for l in listings:
             try:
@@ -3278,12 +3342,24 @@ class Scanner:
             if opp is not None:
                 out.append(opp)
         if out:
-            self.stats["tcgcsv_fallback_sets"] += 1
-            self.stats["tcgcsv_fallback_priced"] += len(out)
-            log.info(
-                f"  ✅ tcgcsv resgatou {len(out)} cards em {exp_code} "
-                f"(set ficaria INVISÍVEL sem o fallback)"
-            )
+            if primary:
+                # v2.26: em modo primário o tcgcsv não está "resgatando" nada —
+                # é o caminho normal. Contabiliza em stats próprias pra não
+                # inflar as métricas de fallback (que medem buraco de cobertura
+                # da pokemontcg.io e viraram mentira se somassem o modo primário).
+                self.stats["tcgcsv_primary_sets"] += 1
+                self.stats["tcgcsv_primary_priced"] += len(out)
+                log.info(
+                    f"  ✅ tcgcsv precificou {len(out)}/{len(listings)} listings "
+                    f"em {exp_code}"
+                )
+            else:
+                self.stats["tcgcsv_fallback_sets"] += 1
+                self.stats["tcgcsv_fallback_priced"] += len(out)
+                log.info(
+                    f"  ✅ tcgcsv resgatou {len(out)} cards em {exp_code} "
+                    f"(set ficaria INVISÍVEL sem o fallback)"
+                )
         return out
 
     def scan(self, expansions: list[dict],
@@ -4030,6 +4106,10 @@ def main():
         pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
     elif args.provider == "justtcg":
         pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
+    elif args.provider == "tcgcsv":
+        # v2.26: tcgcsv como fonte PRIMÁRIA. Assina (cache, session=None) — não
+        # usa chave de API (o dump do tcgcsv é público).
+        pricing = provider_cls(cache)
     else:
         pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
@@ -4046,6 +4126,14 @@ def main():
                  "pokemontcg.io serão preenchidos via tcgcsv — ex.: asc)")
     elif args.no_tcgcsv_fallback:
         log.info("Fallback tcgcsv.com: DESLIGADO (--no-tcgcsv-fallback)")
+    elif args.provider == "tcgcsv":
+        # v2.26: em modo PRIMÁRIO o próprio `pricing` é o provider tcgcsv — o
+        # Scanner recebe a MESMA instância em `tcgcsv=` (índice de set
+        # compartilhado, um único /groups por run). Não existe "fallback" aqui:
+        # o tcgcsv já é a fonte, então `tcgcsv_fallback` fica False.
+        tcgcsv_provider = pricing
+        log.info("Fonte PRIMÁRIA tcgcsv.com: preço TCGplayer em BULK por set "
+                 "(2 requests/set) — a pokemontcg.io NÃO é consultada")
 
     # Seleção de expansões
     log.info("Listando expansões Pokemon no CardTrader...")
