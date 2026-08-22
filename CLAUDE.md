@@ -657,11 +657,20 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.25**
-(bookkeeping fechado em 2026-07-20: v2.25 registrado no `CHANGELOG.md` e
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.26**
+(bookkeeping fechado em 2026-08-22: v2.26 registrado no `CHANGELOG.md` e
 cabeçalho atualizado). Uma linha por versão (o detalhe narrativo completo vive
 no `CHANGELOG.md`):
 
+- **v2.26** (2026-08-22, #62): `--provider tcgcsv` — tcgcsv.com promovido a
+  fonte primária SELECIONÁVEL (opt-in por run; default segue pokemontcg)
+  após o incidente 500/502 da pokemontcg.io de 2026-08-22; prefill bulk por
+  set no `scan_expansion`; set sem groupId único aborta SEM gravar skip-list;
+  mapa de abbr vintage G6 (base1/base5/ecard1/ex1/ex3; `wiz`/`bog` fora —
+  abbr "PR" ambígua); **fix crítico** `tcgcsv_collector_key` variant-aware
+  (série H / sufixos a/b do e-Card colidiam no join digits-only e
+  precificavam carta errada — latente desde v2.23, exposto pelo papel
+  primário em aq/skg).
 - **Pós-v2.25 mergeados** (scripts paralelos, fora do versionamento do scanner
   Pokémon): `dbs_scanner.py` v1.0/v1.1 + `op_scanner.py` (#57/#58, mergeados
   2026-07-20) — ver seções próprias; PR #56 (modo `--game dragonball` embutido

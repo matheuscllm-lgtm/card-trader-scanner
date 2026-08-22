@@ -4,6 +4,58 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-08-22 — v2.26: `--provider tcgcsv` — tcgcsv.com como fonte primária selecionável
+
+**Por quê:** incidente 2026-08-22 — a pokemontcg.io (fonte primária) entrou em
+instabilidade (500/502 em ~80% das requisições); o retry/backoff de até 30s
+consome o orçamento de 8 min por set, os sets estouram o timeout com preço
+parcial e caem na skip-list. O fallback tcgcsv v2.23 não cobre esse cenário:
+só dispara com ZERO preço no set inteiro (caso asc) ou cap de misses — 500
+intermitente com retry não aciona nenhum dos dois. Handoff:
+`scanners-commons/HANDOFF-CARDTRADER-FONTE-PRECO.md`.
+
+**Fix:** a classe `TcgCsvFallbackProvider` (que já existia e funcionava) foi
+promovida a opção de provider primário no CLI (`PROVIDERS["tcgcsv"]`):
+
+- `scan_expansion` faz o prefill bulk (`/{groupId}/products` + `/prices`) no
+  início de cada set quando o provider primário é tcgcsv; o pricing por
+  listing vira lookup de índice (2 chamadas HTTP por set, imune ao 500/502 da
+  pokemontcg.io).
+- Mesma escada de variante (`select_tcgplayer_variant_price` — nunca colapsa
+  pro subtype mais barato), `price_source="tcgcsv"`, link TCGplayer real via
+  productId (v2.25) e validação per-blueprint (guard final, só API CT)
+  continuam valendo.
+- Set sem groupId único/dados no tcgcsv → aborta o set SEM gravar skip-list
+  (`no_coverage_*` é permanente e o gap é da fonte, não do set — gravar
+  condenaria o set também pros runs pokemontcg) e sai sem referência de
+  preço; nunca inventado.
+- **Default inalterado:** `--provider pokemontcg` segue o default e os
+  comandos canônicos do skill `/scan` não mudam (travados em
+  `tests/test_scan_skill_profiles.py`). tcgcsv primário é opt-in por run.
+- Precedente da frota: MYP v5.15 usa tcgcsv no CI (divergência 0–0,3% vs
+  pokemontcg.io — é o MESMO preço TCGplayer). Fonte gratuita, sem key.
+- **Fix de colisão de numeração (chave variant-aware):** o índice tcgcsv
+  chaveava por DÍGITOS do numerador ("H12"→"12" colidia com "012/147";
+  "95a"/"95b" idem) — latente desde v2.23, mas o fallback só rodava no asc
+  (sem série H). Como fonte primária, os sets e-Card (aq/skg, 36 chaves
+  colididas só em Aquapolis) expuseram o bug: o 1º scan G6 saiu com
+  Exeggutor 012/147 precificado como Hypno H12 ($229.99 de referência
+  falsa) — entrega DESCARTADA. Nova `tcgcsv_collector_key` preserva letras
+  e normaliza zero-padding igual nos DOIS lados do join ("0H2"→"H2",
+  "H08"→"H8", "074a"→"74A"); `clean_collector_number` (contrato
+  pokemontcg.io) não muda.
+- **Mapa de abbr estendido pro vintage (G6):** `base1→BS`, `base5→TR`,
+  `ecard1→EX`, `ex1→RS`, `ex3→DR` (abbrs verificadas ÚNICAS no `/groups` em
+  2026-08-22) — o fallback por nome falhava nesses 5 (substring ambígua
+  "Base Set"⊂"Base Set 2", "EX Dragon"⊂"EX Dragon Frontiers", "&" vs "and",
+  "Expedition Base Set"≠"Expedition"). Cobertura G6 medida por sonda:
+  **20/22**; `wiz`/`bog` ficam fora DE PROPÓSITO (abbr "PR" compartilhada
+  por ~8 groups de promo — mapear violaria o unique-match-only).
+
+Testes: `tests/test_provider_tcgcsv_primary.py` (registro no PROVIDERS,
+wiring do CLI, prefill no scan_expansion, abort-sem-skip-list, default
+intacto).
+
 ## 2026-07-03 — v2.25: near-miss caía inteiro em "Dados insuficientes" no postprocess
 
 *(Registrado retroativamente em 2026-07-20 — o fix entrou pelo #52 já rotulado
