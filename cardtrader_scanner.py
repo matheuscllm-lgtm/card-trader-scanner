@@ -47,8 +47,8 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-02 (v2.11) | 2026-06-06 (v2.12) | 2026-06-15 (v2.14/v2.15)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
-      | 2026-07-03 (v2.25)
-Versão: v2.25
+      | 2026-07-03 (v2.25) | 2026-08-22 (v2.26)
+Versão: v2.26
     (= changelog inline mais recente. Manter em sync ao adicionar novos blocos
      de changelog abaixo.)
 
@@ -443,6 +443,19 @@ PTCG_SETCODE_TO_TCGCSV_ABBR = {
     "pgo": "PGO",         # Pokémon GO
     "zsv10pt5": "BLK",    # Black Bolt
     "rsv10pt5": "WHT",    # White Flare
+    # v2.26: vintage WotC/EX (G6) — o fallback por NOME falha nesses sets
+    # (substring ambígua: "Base Set" ⊂ "Base Set 2"; "Team Rocket" ⊂ "Ash vs
+    # Team Rocket..."; "EX Dragon" ⊂ "EX Dragon Frontiers"; "&" vs "and" em
+    # Ruby & Sapphire; nome CT "Expedition Base Set" ≠ "Expedition" no tcgcsv).
+    # Abbrs verificadas ÚNICAS no /groups em 2026-08-22 (sonda 1/1 cada).
+    # wiz (WoTC Promo) e bog (Best of Promos) ficam DE FORA de propósito:
+    # no tcgcsv ambos têm abbr "PR" compartilhada por ~8 groups de promo —
+    # mapear seria chute (unique-match-only). Saem sem referência, rotulados.
+    "base1": "BS",      # Base Set (CT bs)
+    "base5": "TR",      # Team Rocket (CT tr)
+    "ecard1": "EX",     # Expedition (CT ex)
+    "ex1": "RS",        # EX Ruby & Sapphire (CT rs)
+    "ex3": "DR",        # EX Dragon (CT dr)
 }
 
 # Frete base por tier de seller (EUR — CT é europeu por origem).
@@ -1922,10 +1935,18 @@ def resolve_tcgcsv_group_id(
 
 class TcgCsvFallbackProvider(PricingProvider):
     """v2.23: fonte de FALLBACK de preço via tcgcsv.com.
+    v2.26: TAMBÉM selecionável como fonte PRIMÁRIA (`--provider tcgcsv`).
 
-    Só é consultada pra um SET quando a pokemontcg.io devolveu ZERO match de
-    preço pro set inteiro (caso asc/Ascended Heroes). NUNCA roda pros sets que a
+    Como fallback (default, provider primário = pokemontcg): só é consultada
+    pra um SET quando a pokemontcg.io devolveu ZERO match de preço pro set
+    inteiro (caso asc/Ascended Heroes). NUNCA roda pros sets que a
     pokemontcg.io já precifica (default path byte-for-byte inalterado).
+
+    Como primária (`--provider tcgcsv`, opt-in por run): scan_expansion faz o
+    prefill bulk no início de cada set e TODO o pricing sai daqui — útil
+    quando a pokemontcg.io degrada com 500/502 intermitentes (incidente
+    2026-08-22). Set sem groupId único/dados no tcgcsv aborta SEM entrar na
+    skip-list (gap da fonte, não do set) e sai sem referência de preço.
 
     Carrega o set inteiro de uma vez (`/{groupId}/products` + `/{groupId}/prices`)
     e indexa por numerador do collector number → {variante TCGplayer: {market}}.
@@ -2047,9 +2068,11 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
         if index:
+            # v2.26: a mesma classe atende fallback (v2.23) e primário
+            # (--provider tcgcsv) — mensagem neutra quanto ao papel.
             log.info(
                 f"  💾 tcgcsv {ct_set_code} (group {group_id}): {len(index)} "
-                f"cards indexados (FALLBACK — pokemontcg.io sem preço pro set)"
+                f"cards indexados"
             )
         return bool(index)
 
@@ -2152,6 +2175,13 @@ PROVIDERS = {
     "pokemontcg": PokemonTcgIoProvider,
     "justtcg": JustTcgProvider,
     "tcgplayer": TcgPlayerOfficialProvider,
+    # v2.26: tcgcsv promovido a provider PRIMÁRIO selecionável (--provider
+    # tcgcsv) — mesma classe do fallback v2.23, bulk por set, MESMA escada de
+    # variante. Precedente da frota: MYP v5.15 usa tcgcsv como fonte do CI
+    # (divergência 0–0,3% vs pokemontcg.io — é o MESMO preço TCGplayer).
+    # O default segue "pokemontcg"; tcgcsv é opt-in por run (útil quando a
+    # pokemontcg.io degrada com 500/502 intermitentes — incidente 2026-08-22).
+    "tcgcsv": TcgCsvFallbackProvider,
 }
 
 
@@ -2979,6 +3009,29 @@ class Scanner:
         self.stats["listings_after_filters"] += len(best_by_uid)
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, EN, não-graded, ≥${self.min_price_usd})")
 
+        # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
+        # market_price_usd devolve None e o set inteiro viraria miss (40 misses
+        # → abort no_coverage injusto). Prefill 1× por set (idempotente).
+        # Se o set NÃO resolve no tcgcsv (sem groupId único / sem dados),
+        # aborta o set SEM gravar skip-list: no_coverage_* é PERMANENTE e o
+        # gap aqui é do tcgcsv, não do set — gravar condenaria o set também
+        # pros runs pokemontcg, que podem cobri-lo normalmente. O set sai
+        # rotulado sem referência de preço; nunca inventado.
+        if isinstance(self.pricing, TcgCsvFallbackProvider) and best_by_uid:
+            first_listing = next(iter(best_by_uid.values()))
+            if not self.pricing.prefill_set(
+                exp_code, self._ptcg_setcodes_for(exp_code),
+                first_listing.set_name or exp_name,
+            ):
+                log.warning(
+                    f"  🕳️  tcgcsv (primário) sem groupId único/dados p/ "
+                    f"{exp_code} ({exp_name}) — set sem referência de preço "
+                    f"neste run (skip-list NÃO gravada: gap é do tcgcsv, "
+                    f"não do set)."
+                )
+                self.stats["expansions_no_coverage_abort"] += 1
+                return
+
         # Para cada listing filtrado, busca preço TCG e calcula margem
         total_listings = len(best_by_uid)
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
@@ -3759,7 +3812,12 @@ def parse_args():
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
     p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
-                   help="Fonte de preços TCG (default: pokemontcg)")
+                   help=("Fonte de preços TCG (default: pokemontcg). v2.26: "
+                         "'tcgcsv' usa o tcgcsv.com como fonte PRIMÁRIA (bulk "
+                         "por set, mesma escada de variante, sem key) — útil "
+                         "quando a pokemontcg.io degrada com 500/502. Set que "
+                         "não resolver no tcgcsv sai sem referência de preço "
+                         "(sem skip-list), nunca com preço inventado."))
     p.add_argument("--no-tcgcsv-fallback", action="store_true",
                    help=("v2.23: DESLIGA o fallback tcgcsv.com. Por padrão "
                          "(omitido), quando a pokemontcg.io não precifica um SET "
@@ -4030,6 +4088,11 @@ def main():
         pricing = provider_cls(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
     elif args.provider == "justtcg":
         pricing = provider_cls(_clean_secret(os.getenv("JUSTTCG_API_KEY")), cache)
+    elif args.provider == "tcgcsv":
+        # v2.26: tcgcsv como PRIMÁRIO. Sem key (fonte gratuita); o prefill
+        # bulk por set acontece no scan_expansion (o provider sozinho não
+        # sabe o mapa CT→ptcg codes do set).
+        pricing = provider_cls(cache)
     else:
         pricing = provider_cls()
     log.info(f"Pricing provider: {pricing.name}")
