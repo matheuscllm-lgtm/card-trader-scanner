@@ -221,6 +221,66 @@ def test_wiz_bog_stay_unmapped_shared_pr_abbr():
     )
 
 
+# ─────── (7) chave variant-aware — colisão série H / sufixo a/b (v2.26) ───────
+def test_tcgcsv_collector_key_normalization():
+    """Chave preserva letras e normaliza zero-padding IGUAL nos dois lados."""
+    from cardtrader_scanner import tcgcsv_collector_key as k
+    # (raw CT ou tcgcsv) → chave
+    cases = [
+        ("012/147", "12"),        # regular zero-padded
+        ("12", "12"),             # regular sem pad
+        ("H12/H32", "H12"),       # série H ≠ regular (a colisão original)
+        ("0H2/H32", "H2"),        # formato CT zero-padded da série H
+        ("H08/H32", "H8"),        # zero-pad interno do tcgcsv
+        ("074a/147", "74A"),      # sufixo a/b preservado
+        ("95b/147", "95B"),
+        ("SIR | 161/131", "161"),  # string suja com rarity
+        ("0", "0"),
+        ("", ""),
+    ]
+    for raw, expected in cases:
+        assert k(raw) == expected, (raw, k(raw), expected)
+
+
+def test_ecard_h_series_no_collision_end_to_end():
+    """Cenário REAL do scan 2026-08-22 (Aquapolis): Exeggutor 012/147 e Hypno
+    H12/H32 têm o mesmo numerador em dígitos ("12"). Com a chave digits-only o
+    last-wins precificava o Exeggutor com a referência do Hypno ($229.99 falso).
+    Com a chave variant-aware cada listing casa a SUA carta."""
+    products = _fake_products({85354: "012/147", 86248: "H12/H32"})
+    prices = _fake_prices([
+        (85354, "Normal", 3.50),      # Exeggutor regular
+        (86248, "Holofoil", 229.99),  # Hypno H12 (holo)
+    ])
+    prov = _provider_with(_fake_groups(), products, prices)
+    ok = prov.prefill_set("asc", ["me2pt5"], "Ascended Heroes")
+    assert ok
+    # listing regular → preço do regular, link do regular
+    p = prov.market_price_usd("Exeggutor", "asc", "012/147",
+                              foil=False, rarity="Rare")
+    assert p == 3.50, p
+    assert prov.last_tcg_url == "https://www.tcgplayer.com/product/85354"
+    # listing série H (formato CT zero-padded "0H12") → preço do H
+    p = prov.market_price_usd("Hypno", "asc", "H12/H32",
+                              foil=False, rarity="Holo Rare")
+    assert p == 229.99, p
+    assert prov.last_tcg_url == "https://www.tcgplayer.com/product/86248"
+
+
+def test_ecard_ab_suffix_no_collision():
+    """Sufixos a/b (e-Card): 74a e 74b são cartas distintas com preços
+    distintos — nunca compartilham referência."""
+    products = _fake_products({1: "074a/147", 2: "074b/147"})
+    prices = _fake_prices([(1, "Normal", 5.0), (2, "Normal", 50.0)])
+    prov = _provider_with(_fake_groups(), products, prices)
+    assert prov.prefill_set("asc", ["me2pt5"], "Ascended Heroes")
+    pa = prov.market_price_usd("Drowzee", "asc", "74a/147",
+                               foil=False, rarity="Common")
+    pb = prov.market_price_usd("Drowzee", "asc", "74b/147",
+                               foil=False, rarity="Common")
+    assert pa == 5.0 and pb == 50.0, (pa, pb)
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

@@ -1877,6 +1877,40 @@ TCGCSV_SUBTYPE_TO_VARIANT = {
 }
 
 
+_TCGCSV_KEY_TOKENS = re.compile(r"[A-Z]+|\d+")
+
+
+def tcgcsv_collector_key(raw: str) -> str:
+    """v2.26: chave de join CT↔tcgcsv por numerador PRESERVANDO letras.
+
+    O join antigo (digits-only, via clean_collector_number) colapsava a série
+    H dos sets e-Card e os sufixos a/b: "H12"→"12" colidia com "012/147" e o
+    last-wins do índice precificava uma carta com a referência de OUTRA
+    (Aquapolis: 36 chaves colididas; ex. real do scan 2026-08-22: Exeggutor
+    012/147 saiu com o preço do Hypno H12 — $229.99 de referência falsa).
+
+    Normalização (aplicada IGUAL nos dois lados):
+      - numerador = antes do "/"; strings sujas "SIR | 161" → após o "|";
+      - uppercase; zeros à esquerda do numerador inteiro ("0H2"→"H2",
+        "012"→"12") e de cada run numérico ("H08"→"H8", "TG01"→"TG1");
+      - letras preservadas: "H12"≠"12", "95A"≠"95B".
+
+    clean_collector_number (digits-only) é o contrato do pokemontcg.io e NÃO
+    muda — esta chave é exclusiva do caminho tcgcsv."""
+    if not raw:
+        return ""
+    head = str(raw).split("/")[0].strip()
+    if "|" in head:
+        head = head.split("|")[-1].strip()
+    head = head.upper().lstrip("0") or "0"
+    toks = _TCGCSV_KEY_TOKENS.findall(head)
+    if not toks:
+        return ""
+    return "".join(
+        (t.lstrip("0") or "0") if t.isdigit() else t for t in toks
+    )
+
+
 def tcgcsv_fetch_groups(session) -> Optional[list]:
     """v2.23: baixa a lista de groups (sets) do tcgcsv (categoria 3 = Pokémon).
 
@@ -2054,11 +2088,14 @@ class TcgCsvFallbackProvider(PricingProvider):
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         for pid, num_raw in num_by_pid.items():
-            numerator = str(num_raw).split("/")[0].strip()
-            digits = "".join(c for c in numerator if c.isdigit())
-            if not digits:
-                continue  # TG##/GG##/promo não-numérico → pula (já tratado upstream)
-            key = digits.lstrip("0") or "0"
+            # v2.26: chave por VARIANTE de numeração (letras preservadas) —
+            # o digits-only antigo colidia série H / sufixos a/b do e-Card e
+            # precificava uma carta com a referência de outra (ver
+            # tcgcsv_collector_key). Guard de dígito mantém o skip de promo
+            # não-numérico do comportamento anterior.
+            key = tcgcsv_collector_key(str(num_raw))
+            if not key or not any(c.isdigit() for c in key):
+                continue
             variants = variants_by_pid.get(pid)
             if variants:
                 index[key] = variants
@@ -2093,7 +2130,9 @@ class TcgCsvFallbackProvider(PricingProvider):
         index = self._set_index.get(set_code)
         if not index:
             return None
-        key = clean_collector_number(collector_number)
+        # v2.26: mesma chave variant-aware do prefill (letras preservadas) —
+        # clean_collector_number aqui colapsava "0H2"→"2" e casava carta errada.
+        key = tcgcsv_collector_key(collector_number)
         if not key:
             return None
         variants = index.get(key)

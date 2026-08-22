@@ -34,6 +34,16 @@ promovida a opção de provider primário no CLI (`PROVIDERS["tcgcsv"]`):
   `tests/test_scan_skill_profiles.py`). tcgcsv primário é opt-in por run.
 - Precedente da frota: MYP v5.15 usa tcgcsv no CI (divergência 0–0,3% vs
   pokemontcg.io — é o MESMO preço TCGplayer). Fonte gratuita, sem key.
+- **Fix de colisão de numeração (chave variant-aware):** o índice tcgcsv
+  chaveava por DÍGITOS do numerador ("H12"→"12" colidia com "012/147";
+  "95a"/"95b" idem) — latente desde v2.23, mas o fallback só rodava no asc
+  (sem série H). Como fonte primária, os sets e-Card (aq/skg, 36 chaves
+  colididas só em Aquapolis) expuseram o bug: o 1º scan G6 saiu com
+  Exeggutor 012/147 precificado como Hypno H12 ($229.99 de referência
+  falsa) — entrega DESCARTADA. Nova `tcgcsv_collector_key` preserva letras
+  e normaliza zero-padding igual nos DOIS lados do join ("0H2"→"H2",
+  "H08"→"H8", "074a"→"74A"); `clean_collector_number` (contrato
+  pokemontcg.io) não muda.
 - **Mapa de abbr estendido pro vintage (G6):** `base1→BS`, `base5→TR`,
   `ecard1→EX`, `ex1→RS`, `ex3→DR` (abbrs verificadas ÚNICAS no `/groups` em
   2026-08-22) — o fallback por nome falhava nesses 5 (substring ambígua
