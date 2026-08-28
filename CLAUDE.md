@@ -661,10 +661,16 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.26**
-(bookkeeping fechado em 2026-08-22: v2.26 registrado no `CHANGELOG.md` e
-cabeçalho atualizado). Uma linha por versão (o detalhe narrativo completo vive
-no `CHANGELOG.md`):
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.27**
+(bookkeeping fechado em 2026-08-28). Uma linha por versão (o detalhe narrativo
+completo vive no `CHANGELOG.md`):
+
+- **v2.27** (2026-08-28, #63): `--pc-refs N` no postprocess — colunas
+  `Ref PC US$`/`Margem PC %` (mediana das vendas REAIS do PriceCharting) +
+  link `[PC]` + flag `PC diverge` nas N linhas de maior margem da entrega;
+  módulo novo `pricecharting_ref.py` (guardas de slug carta+set, nunca inventa
+  preço); sinal-only — margem canônica e decisão intactas. O scanner em si não
+  mudou.
 
 - **v2.26** (2026-08-22, #62): `--provider tcgcsv` — tcgcsv.com promovido a
   fonte primária SELECIONÁVEL (opt-in por run; default segue pokemontcg)

@@ -57,14 +57,22 @@ def fetch_page(url: str, cache_dir: str | None = None) -> str:
     if wait > 0:
         time.sleep(wait)
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = r.read()
-        if r.headers.get("Content-Encoding") == "gzip":
-            data = gzip.decompress(data)
-    _last_request_at[0] = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                data = gzip.decompress(data)
+    finally:
+        # Também em FALHA: senão, durante throttling, cada retry sai sem gap
+        # (a espera era calculada do último SUCESSO) e martela o site.
+        _last_request_at[0] = time.time()
     body = data.decode("utf-8", errors="replace")
-    with open(cache_path, "w", encoding="utf-8") as f:
+    # Escrita atômica: processo morto no meio do write deixava um cache torto
+    # que seria re-servido por 24h ("—" falso, indistinguível de no-match).
+    tmp_path = cache_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(body)
+    os.replace(tmp_path, cache_path)
     return body
 
 
@@ -118,21 +126,51 @@ def norm_number(number) -> str:
     return digits.lstrip("0") or ("0" if digits else "")
 
 
+def _norm_token(t: str) -> str:
+    """'erika's' → 'erika' (possessivo cai — o PC mantém o apóstrofo no slug,
+    ex. /game/pokemon-gym-challenge/erika's-venusaur-4)."""
+    t = t.lower().strip()
+    if t.endswith("'s"):
+        t = t[:-2]
+    return t.replace("'", "")
+
+
 def _name_tokens(card_name) -> list[str]:
-    return [t for t in re.findall(r"[a-z0-9]+", str(card_name or "").lower())
-            if len(t) >= 2]
+    """Tokens do nome, normalizados. Sem filtro de tamanho: 'N' (BW) é nome
+    legítimo de 1 letra; o ruído de possessivo já cai no _norm_token."""
+    return [t for t in
+            (_norm_token(x) for x in
+             re.findall(r"[a-z0-9']+", str(card_name or "").lower()))
+            if t]
 
 
 def slug_matches(path: str, card_name, number) -> bool:
-    """Guarda anti-match-errado: o slug do resultado tem que terminar no MESMO
-    número da carta E conter o primeiro token do nome. Falhou → não usa (None).
+    """Guarda anti-match-errado (por carta):
+
+    1. o slug termina no MESMO número da carta;
+    2. o PRIMEIRO token do slug é o primeiro token do nome — mata prefixo de
+       outra carta ('dark-charizard-4' não casa 'Charizard');
+    3. TODOS os tokens do nome aparecem no slug OU no console — 'charizard-6'
+       não casa 'Charizard ex' (falta o 'ex'), mas 'Starmie δ Delta Species' →
+       /game/pokemon-delta-species/starmie-30 casa (delta/species no console).
+
+    Falhou → não usa (None). Review 2026-08-28: sem (2)/(3) a mediana entregue
+    podia ser de OUTRA carta (ex/V/dark/light no mesmo console).
     """
-    slug = path.rstrip("/").rsplit("/", 1)[-1].lower()
+    parts = path.strip("/").split("/")
+    if len(parts) < 3:
+        return False
+    console_tokens = {_norm_token(t) for t in parts[1].split("-")}
+    slug = parts[-1].lower()
     num = norm_number(number)
     if not num or not re.search(rf"(?:^|-){re.escape(num)}$", slug):
         return False
+    slug_tokens = [_norm_token(t) for t in slug.split("-")]
     tokens = _name_tokens(card_name)
-    return bool(tokens) and tokens[0] in slug.split("-")
+    if not tokens or not slug_tokens or slug_tokens[0] != tokens[0]:
+        return False
+    pool = set(slug_tokens) | console_tokens
+    return all(t in pool for t in tokens)
 
 
 def _set_name_from_label(set_label) -> str:
@@ -153,11 +191,17 @@ def console_matches(path: str, set_label) -> bool:
     parts = path.strip("/").split("/")
     if len(parts) < 3:
         return False
-    console_tokens = set(parts[1].lower().split("-"))
-    set_tokens = [t for t in re.findall(r"[a-z0-9]+",
+    console_tokens = {t for t in
+                      (re.sub(r"[^a-z0-9]", "", x)
+                       for x in parts[1].lower().split("-"))
+                      if t} - {"pokemon"}
+    set_tokens = {t for t in re.findall(r"[a-z0-9]+",
                                         _set_name_from_label(set_label).lower())
-                  if t != "ex"]
-    return bool(set_tokens) and all(t in console_tokens for t in set_tokens)
+                  if t != "ex"}
+    # Bidirecional (review 2026-08-28): além de conter todos os tokens do set,
+    # o console não pode ter tokens EXTRAS ('pokemon-japanese-aquapolis' NÃO
+    # casa 'Aquapolis' — a mediana da tiragem japonesa corromperia o sinal).
+    return bool(set_tokens) and console_tokens == set_tokens
 
 
 def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:

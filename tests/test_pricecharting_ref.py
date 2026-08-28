@@ -108,6 +108,35 @@ def test_slug_guard_rejects_wrong_number_or_name():
     assert not pcr.slug_matches("/game/pokemon-emerald/gardevoir-9", "Gardevoir", "004")
 
 
+def test_slug_guard_rejects_different_card_same_number():
+    """Review 2026-08-28: 'charizard-6' NÃO é 'Charizard ex' (falta o ex) e
+    'dark-charizard-4' NÃO é 'Charizard' (prefixo de OUTRA carta)."""
+    assert not pcr.slug_matches("/game/pokemon-base-set/charizard-6",
+                                "Charizard ex", "6")
+    assert not pcr.slug_matches("/game/pokemon-team-rocket/dark-charizard-4",
+                                "Charizard", "4")
+    # tokens do nome podem morar no CONSOLE (Starmie δ Delta Species)
+    assert pcr.slug_matches("/game/pokemon-delta-species/starmie-30",
+                            "Starmie δ Delta Species", "030")
+
+
+def test_slug_guard_possessive_and_single_letter_names():
+    """Review 2026-08-28: Gym era ("Erika's ...") e o Trainer 'N' (1 letra)
+    ficavam permanentemente sem cobertura PC."""
+    assert pcr.slug_matches("/game/pokemon-gym-challenge/erika's-venusaur-4",
+                            "Erika's Venusaur", "4")
+    assert pcr.slug_matches("/game/pokemon-noble-victories/n-92", "N", "92/101")
+
+
+def test_console_guard_rejects_japanese_and_extra_tokens():
+    """Review 2026-08-28: 'pokemon-japanese-aquapolis' NÃO casa 'Aquapolis' —
+    a mediana da tiragem japonesa (mais barata) corromperia o sinal."""
+    assert not pcr.console_matches("/game/pokemon-japanese-aquapolis/mr-mime-95",
+                                   "Aquapolis (aq)")
+    assert pcr.console_matches("/game/pokemon-aquapolis/mr-mime-95",
+                               "Aquapolis (aq)")
+
+
 def test_resolve_returns_none_on_slug_mismatch(monkeypatch):
     search_html = '<a href="/game/pokemon-emerald/kirlia-35">Kirlia #35</a>'
     monkeypatch.setattr(pcr, "fetch_page", lambda url, cache_dir=None: search_html)
@@ -243,8 +272,10 @@ def test_attach_pc_refs_uses_injected_resolver_and_caps():
         return {"median": 30.0, "n_sales": 7,
                 "url": "https://www.pricecharting.com/game/x/y-1"}
 
-    n = pp.attach_pc_refs(df, cfg, top_md=50, limit=1, resolver=fake_resolver)
+    n, attempted = pp.attach_pc_refs(df, cfg, top_md=50, limit=1,
+                                     resolver=fake_resolver)
     assert n == 1
+    assert attempted == 1  # denominador honesto: tentadas, não o valor da flag
     assert len(calls) == 1
     assert calls[0] == "Plusle"  # maior margem primeiro
     assert df["pc_median_usd"].notna().sum() == 1

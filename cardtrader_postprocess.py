@@ -672,6 +672,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     # Renomeia pro display
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
+                     "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -681,6 +682,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
+        "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -696,6 +698,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     df["porque"] = [r[1] for r in results]
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
+                     "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -705,6 +708,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
+        "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -1049,18 +1053,22 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
     if "net_margin" in candidates.columns:
         candidates = candidates.sort_values("net_margin", ascending=False)
     resolved = 0
+    attempted = 0
     for idx, row in candidates.head(limit).iterrows():
+        attempted += 1
         try:
             ref = resolver(row.get("card_name"), row.get("card_number"),
                            row.get("set_code"), cache_dir=cache_dir)
         except Exception:  # noqa: BLE001 — best-effort; falha → "—"
             ref = None
-        if ref and ref.get("median") is not None:
+        # median > 0 obrigatório: mediana 0.0 renderizaria "0.00" com Margem PC
+        # "—" e sem flag (guard de truthiness) — inconsistente; melhor "—" total.
+        if ref and ref.get("median") is not None and float(ref["median"]) > 0:
             df.at[idx, "pc_median_usd"] = float(ref["median"])
             df.at[idx, "pc_n_sales"] = ref.get("n_sales")
             df.at[idx, "pc_url"] = ref.get("url")
             resolved += 1
-    return resolved
+    return resolved, attempted
 
 
 def build_delivery_markdown(
@@ -1197,8 +1205,13 @@ def build_delivery_markdown(
                            row.get("pc_url") if show_pc else None),
         ]
         if show_pc:
-            cells.insert(4, _fmt_pct(pc_margin) or "—")
-            cells.insert(4, _fmt_usd(pc_med) or "—")
+            # Mesmo índice-fonte do insert dos headers (índice em
+            # _DELIVERY_HEADERS, ANTES do insert DH) — nunca hardcodar os dois
+            # lados separados, senão um reorder desalinha célula↔header em
+            # silêncio.
+            pc_cell_at = _DELIVERY_HEADERS.index("TCG US$") + 1
+            cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
+            cells.insert(pc_cell_at, _fmt_usd(pc_med) or "—")
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
@@ -1245,9 +1258,9 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     # N linhas de maior margem da entrega. I/O de rede (2 requests/linha, com
     # cache 24h) — por isso opt-in e capado. 0 = desligado (saída idêntica).
     if pc_refs > 0:
-        resolved = attach_pc_refs(df, cfg, top_md=top_md, limit=pc_refs)
-        print(f"[PC] mediana PriceCharting resolvida em {resolved}/{pc_refs} "
-              "linhas da entrega (sem match/venda → '—').")
+        resolved, attempted = attach_pc_refs(df, cfg, top_md=top_md, limit=pc_refs)
+        print(f"[PC] mediana PriceCharting resolvida em {resolved}/{attempted} "
+              "linhas tentadas da entrega (sem match/venda → '—').")
     # Caminho 1 DoubleHolo: anexa a coluna `dh_score` (2ª opinião). Só quando
     # --doubleholo foi passado; sem a flag a coluna não existe e a saída é
     # idêntica. NÃO toca margem/decisão.
