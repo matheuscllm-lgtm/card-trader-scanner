@@ -141,6 +141,25 @@ def _set_name_from_label(set_label) -> str:
     return s.rsplit(" (", 1)[0].strip() if " (" in s else s
 
 
+def console_matches(path: str, set_label) -> bool:
+    """Guarda de SET: o console do path (/game/{console}/{carta}) tem que conter
+    todos os tokens do nome do set CT (o prefixo 'EX' cai — o PC não o usa:
+    'EX Hidden Legends' → 'pokemon-hidden-legends').
+
+    Sem isso o smoke de 2026-08-28 casou cross-set: Relicanth Hidden Legends →
+    plasma-blast, Porygon Aquapolis → burning-shadows, Fire Energy Emerald →
+    japanese-gx-battle-boost. Nome+número baterem em OUTRO set é FP clássico.
+    """
+    parts = path.strip("/").split("/")
+    if len(parts) < 3:
+        return False
+    console_tokens = set(parts[1].lower().split("-"))
+    set_tokens = [t for t in re.findall(r"[a-z0-9]+",
+                                        _set_name_from_label(set_label).lower())
+                  if t != "ex"]
+    return bool(set_tokens) and all(t in console_tokens for t in set_tokens)
+
+
 def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:
     """Busca no PriceCharting e devolve os paths /game/ dos resultados, na ordem.
 
@@ -176,7 +195,9 @@ def resolve_pc_ref(card_name, number, set_label,
     query = " ".join(p for p in ("pokemon", set_name, base_name, num) if p)
     try:
         paths = search_card_urls(query, cache_dir=cache_dir)
-        matches = [p for p in paths if slug_matches(p, card_name, number)]
+        matches = [p for p in paths
+                   if slug_matches(p, card_name, number)
+                   and console_matches(p, set_label)]
         # Entre os que casam nome+número, prefere o slug mais CURTO = versão
         # base ("mr-mime-95" vence "mr-mime-reverse-holo-95") — a oferta CT
         # validada é a variante anunciada; a página base é a referência menos

@@ -133,6 +133,29 @@ def test_resolve_picks_matching_result_not_first(monkeypatch):
     assert ref["url"].endswith("/game/pokemon-emerald/gardevoir-4")
 
 
+def test_console_guard_accepts_set_variants():
+    assert pcr.console_matches("/game/pokemon-emerald/gardevoir-4", "EX Emerald (em)")
+    assert pcr.console_matches("/game/pokemon-hidden-legends/relicanth-24",
+                               "EX Hidden Legends (hl)")
+    assert pcr.console_matches("/game/pokemon-aquapolis/jynx-18", "Aquapolis (aq)")
+
+
+def test_console_guard_rejects_cross_set():
+    """Casos reais do smoke 2026-08-28: nome+número batiam em OUTRO set."""
+    assert not pcr.console_matches("/game/pokemon-plasma-blast/relicanth-24",
+                                   "EX Hidden Legends (hl)")
+    assert not pcr.console_matches("/game/pokemon-burning-shadows/porygon-103",
+                                   "Aquapolis (aq)")
+    assert not pcr.console_matches(
+        "/game/pokemon-japanese-gx-battle-boost/fire-memory-102", "EX Emerald (em)")
+
+
+def test_resolve_rejects_cross_set_result(monkeypatch):
+    search_html = '<a href="/game/pokemon-plasma-blast/relicanth-24">Relicanth</a>'
+    monkeypatch.setattr(pcr, "fetch_page", lambda url, cache_dir=None: search_html)
+    assert pcr.resolve_pc_ref("Relicanth", "024/101", "EX Hidden Legends (hl)") is None
+
+
 def test_resolve_prefers_base_variant_slug(monkeypatch):
     """'mr-mime-95' (base) vence 'mr-mime-reverse-holo-95' — a página base é a
     referência menos arriscada (caso real Aquapolis 95b, 2026-08-28)."""
