@@ -4,6 +4,36 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-08-28 — v2.27: `--pc-refs N` — coluna Ref PC (mediana de vendas reais do PriceCharting) na entrega
+
+**Por quê:** no scan vintage de 2026-08-27 as maiores "margens" eram miragem da
+referência TCG (variante errada / market price sem liquidez): Gardevoir Emerald
+saiu com ref US$ 125,88 mas as vendas reais no PriceCharting medianam ~US$ 42-52.
+Decisão do operador (2026-08-28): validar o valor da carta pela MEDIANA das
+vendas concluídas (sold listings) que o PriceCharting agrega (eBay + TCGPlayer).
+
+**O que mudou:**
+
+- Módulo novo `pricecharting_ref.py`: busca pública no PriceCharting (urllib +
+  cache 24h em `outputs/pc_cache/`, gap 2s — padrão validado no
+  ebay-arbitrage-scanner; código adaptado, não compartilhado), parse das vendas
+  UNGRADED (`div.completed-auctions-used`), mediana das 10 mais recentes
+  (mediana, não média — anti-outlier). Guarda de slug: só usa resultado cujo
+  slug casa nome+número; entre os que casam, prefere a versão base (slug mais
+  curto). Sem match/venda/rede → None — nunca inventa preço.
+- Postprocess `--pc-refs N` (default 0 = off, saída idêntica): anexa às N
+  linhas de maior margem da entrega as colunas `Ref PC US$` e `Margem PC %`
+  (`(PC − CT)/PC`, mesma base revenda) + link `[PC]` na célula Links (extra —
+  os 2 links do contrato intactos) + flag `PC diverge` quando a ref TCG está a
+  >30% da mediana PC. Sinal-only: margem canônica e decisão COMPRA/REVISAR NÃO
+  mudam (espelho da coluna DH).
+- 19 testes novos em `tests/test_pricecharting_ref.py` (fixture offline
+  `tests/fixtures/pc_sold_listings.html`; rede nunca).
+
+Primeira prova real (top 10 do scan vintage 2026-08-27): 10/10 resolvidos, e
+TODAS as 10 linhas tinham Margem PC negativa — o "63%" do Gardevoir era -110%
+contra vendas reais. Exatamente o FP que a metodologia veio pegar.
+
 ## 2026-08-22 — v2.26: `--provider tcgcsv` — tcgcsv.com como fonte primária selecionável
 
 **Por quê:** incidente 2026-08-22 — a pokemontcg.io (fonte primária) entrou em

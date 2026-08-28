@@ -226,7 +226,11 @@ Opções úteis:
   `--per-set-timeout`, `--state-dir`, `--allow-concurrent`,
   `--no-tcgcsv-fallback`; no postprocess: `--revisar-min-net`,
   `--revisar-modest-min`, `--min-lucro`, `--top-md`, `--doubleholo`,
-  `--no-pid-resolve`) — `--help` de cada script lista tudo.
+  `--no-pid-resolve`, `--pc-refs N` (v2.27: coluna `Ref PC US$`/`Margem PC %` =
+  mediana das vendas REAIS do PriceCharting nas N linhas de maior margem da
+  entrega + link `[PC]` + flag `PC diverge`; sinal-only, recomendado em scans
+  vintage/back-catalog onde a ref TCG infla)) — `--help` de cada script lista
+  tudo.
 
 > ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06; skill alinhada em
 > 2026-07-20):** o fallback `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap
