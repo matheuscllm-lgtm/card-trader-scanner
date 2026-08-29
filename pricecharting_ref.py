@@ -240,26 +240,38 @@ def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:
 
 
 def resolve_pc_ref(card_name, number, set_label,
-                   cache_dir: str | None = None) -> dict | None:
+                   cache_dir: str | None = None, variant=None) -> dict | None:
     """Nome+número+set → {'median', 'n_sales', 'url'} ou None (nunca inventa).
 
     Busca "pokemon <set> <nome> <número>", escolhe o PRIMEIRO resultado cujo
     slug casa nome+número (guarda anti-match-errado) e tira a mediana das
     vendas ungraded recentes. Nenhum resultado casa → None.
+
+    `variant`: a variante PRICEADA da oferta CT (coluna Variant do raw, ex.
+    'reverseHolofoil'). Oferta reverse tem que casar a página REVERSE do PC —
+    caso real 2026-08-29: Breloom EX Deoxys reverse (ref TCG $180) saía com a
+    mediana da página holo BASE ($15), comparando variantes diferentes.
     """
     set_name = _set_name_from_label(set_label)
     base_name = clean_card_name(card_name)
     num = norm_number(number)
     query = " ".join(p for p in ("pokemon", set_name, base_name, num) if p)
+    want_reverse = "reverse" in str(variant or "").lower()
     try:
         paths = search_card_urls(query, cache_dir=cache_dir)
         matches = [p for p in paths
                    if slug_matches(p, card_name, number)
                    and console_matches(p, set_label)]
-        # Entre os que casam nome+número, prefere o slug mais CURTO = versão
-        # base ("mr-mime-95" vence "mr-mime-reverse-holo-95") — a oferta CT
-        # validada é a variante anunciada; a página base é a referência menos
-        # arriscada. Empate → ordem da busca.
+        # Oferta reverse → SÓ página reverse (sem ela, None — nunca compara
+        # variantes diferentes). Oferta não-reverse → só páginas sem 'reverse';
+        # entre elas o slug mais CURTO = versão base ("mr-mime-95" vence
+        # "mr-mime-holo-95"). Empate → ordem da busca.
+        if want_reverse:
+            matches = [p for p in matches
+                       if "reverse" in p.rsplit("/", 1)[-1].lower()]
+        else:
+            matches = [p for p in matches
+                       if "reverse" not in p.rsplit("/", 1)[-1].lower()]
         path = min(matches, key=lambda p: len(p.rsplit("/", 1)[-1])) if matches else None
         if not path:
             return None

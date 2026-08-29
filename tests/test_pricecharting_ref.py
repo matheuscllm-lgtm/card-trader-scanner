@@ -215,6 +215,36 @@ def test_resolve_prefers_base_variant_slug(monkeypatch):
     assert ref["url"].endswith("/game/pokemon-aquapolis/mr-mime-95")
 
 
+def test_resolve_variant_hint_reverse(monkeypatch):
+    """Oferta CT reverse → SÓ a página reverse do PC serve; sem ela → None.
+    Caso real 2026-08-29: Breloom EX Deoxys reverse saía com a mediana da
+    página holo base ($15 vs ref reverse $180) — variantes misturadas."""
+    both = (
+        '<a href="/game/pokemon-deoxys/breloom-3">base</a>'
+        '<a href="/game/pokemon-deoxys/breloom-reverse-holo-3">RH</a>'
+    )
+
+    def fake_fetch(url, cache_dir=None):
+        return both if "search-products" in url else _fixture_html()
+
+    monkeypatch.setattr(pcr, "fetch_page", fake_fetch)
+    ref = pcr.resolve_pc_ref("Breloom", "003", "EX Deoxys (dx)",
+                             variant="reverseHolofoil")
+    assert ref["url"].endswith("/breloom-reverse-holo-3")
+    # não-reverse continua na base
+    ref = pcr.resolve_pc_ref("Breloom", "003", "EX Deoxys (dx)",
+                             variant="holofoil")
+    assert ref["url"].endswith("/breloom-3")
+    # reverse sem página reverse nos resultados → None (nunca mistura)
+    only_base = '<a href="/game/pokemon-deoxys/breloom-3">base</a>'
+    monkeypatch.setattr(
+        pcr, "fetch_page",
+        lambda url, cache_dir=None: only_base if "search-products" in url
+        else _fixture_html())
+    assert pcr.resolve_pc_ref("Breloom", "003", "EX Deoxys (dx)",
+                              variant="reverseHolofoil") is None
+
+
 def test_resolve_happy_path(monkeypatch):
     search_html = '<a href="/game/pokemon-emerald/gardevoir-4">Gardevoir #4</a>'
     product_html = _fixture_html()
@@ -281,7 +311,7 @@ def test_attach_pc_refs_uses_injected_resolver_and_caps():
     df, cfg = _enriched()
     calls = []
 
-    def fake_resolver(name, number, set_label, cache_dir=None):
+    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
         calls.append(name)
         return {"median": 30.0, "n_sales": 7,
                 "url": "https://www.pricecharting.com/game/x/y-1"}
@@ -298,7 +328,7 @@ def test_attach_pc_refs_uses_injected_resolver_and_caps():
 def test_delivery_with_pc_columns_and_link():
     df, cfg = _enriched()
 
-    def fake_resolver(name, number, set_label, cache_dir=None):
+    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
         if name == "Plusle":
             return {"median": 30.0, "n_sales": 7,
                     "url": "https://www.pricecharting.com/game/pokemon-paradox-rift/plusle-193"}
@@ -325,7 +355,7 @@ def test_delivery_pc_divergence_flag():
     """TCG US$ ≫ mediana PC (>30% acima) → flag 'PC diverge' na linha."""
     df, cfg = _enriched()
 
-    def fake_resolver(name, number, set_label, cache_dir=None):
+    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
         # Plusle: TCG 44.00 vs PC 20.00 → 120% acima → diverge
         return ({"median": 20.0, "n_sales": 5,
                  "url": "https://www.pricecharting.com/game/x/plusle-193"}
