@@ -1057,8 +1057,11 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
     for idx, row in candidates.head(limit).iterrows():
         attempted += 1
         try:
+            # variant: a página PC tem que ser a MESMA variante da oferta CT
+            # (reverse ↔ reverse) — caso Breloom EX Deoxys, 2026-08-29.
             ref = resolver(row.get("card_name"), row.get("card_number"),
-                           row.get("set_code"), cache_dir=cache_dir)
+                           row.get("set_code"), cache_dir=cache_dir,
+                           variant=row.get("variant"))
         except Exception:  # noqa: BLE001 — best-effort; falha → "—"
             ref = None
         # median > 0 obrigatório: mediana 0.0 renderizaria "0.00" com Margem PC
