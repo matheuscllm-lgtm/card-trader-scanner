@@ -672,6 +672,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     # Renomeia pro display
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
+                     "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -681,6 +682,7 @@ def build_deals_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFrame:
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
+        "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -696,6 +698,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     df["porque"] = [r[1] for r in results]
     display_cols = ["decisao", "porque", "chase_tier", "fundamental_score",
                      "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
+                     "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                      "set_code", "card_name", "card_number", "language",
                      "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                      "validation_status", "seller", "link_ct", "link_tcg"]
@@ -705,6 +708,7 @@ def build_all_listings_sheet(df: pd.DataFrame, cfg: DecisionConfig) -> pd.DataFr
     rename_map = {
         "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier",
         "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
+        "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
         "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
         "reference_price_brl": "TCG (R$)", "net_margin": "Net %",
         "lucro_liq": "Lucro Líq (R$)", "validation_status": "Validação",
@@ -900,8 +904,12 @@ def _fmt_pct(v) -> str:
         return ""
 
 
-def _md_links_cell(link_ct, link_tcg) -> str:
-    """'[oferta](url_ct) · [TCG](url_tcg)' — só inclui o que existir.
+def _md_links_cell(link_ct, link_tcg, link_pc=None) -> str:
+    """'[oferta](url_ct) · [TCG](url_tcg)[ · [PC](url_pc)]' — só inclui o que existir.
+
+    `link_pc` (opcional, metodologia 2026-08-28): link da página PriceCharting
+    usada como referência de vendas reais — EXTRA, nunca substitui os 2 links
+    obrigatórios do contrato.
 
     URLs percent-encodadas (espaço, aspas, parênteses) sem re-encodar %XX
     existentes: em `[label](url)` o `)` cru fecha o link no primeiro
@@ -916,6 +924,9 @@ def _md_links_cell(link_ct, link_tcg) -> str:
         parts.append(f"[oferta]({quote(ct, safe='%/?&=:+,*')})")
     if tcg.startswith("http"):
         parts.append(f"[TCG]({quote(tcg, safe='%/?&=:+,*')})")
+    pc = "" if link_pc is None else str(link_pc).strip()
+    if pc.startswith("http"):
+        parts.append(f"[PC]({quote(pc, safe='%/?&=:+,*')})")
     return " · ".join(parts)
 
 
@@ -1015,6 +1026,51 @@ def _fmt_dh(v) -> str:
         return "—"
 
 
+# Referência PriceCharting (mediana de sold listings) — metodologia 2026-08-28.
+# TCG US$ mais de PC_DIVERGENCE_RATIO acima (ou abaixo) da mediana PC → flag
+# "PC diverge" na linha (sinal-only, espelho da coluna DH: margem/decisão intactas).
+PC_DIVERGENCE_RATIO = 0.30
+
+
+def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
+                   limit: int, resolver=None, cache_dir: str | None = None) -> int:
+    """Anexa `pc_median_usd` / `pc_n_sales` / `pc_url` às linhas da ENTREGA.
+
+    Só as linhas que aparecem na tabela markdown (mesma seleção da coluna DH,
+    via `_delivery_resolve_mask`), limitadas às `limit` de maior margem — cada
+    resolução faz 2 requests HTTP (busca + página), então o cap importa.
+    Resolver falhou/não casou → colunas ficam NaN/None ("—" na entrega, honesto).
+    Retorna quantas linhas resolveram. `resolver` injetável p/ teste offline.
+    """
+    if resolver is None:
+        import pricecharting_ref
+        resolver = pricecharting_ref.resolve_pc_ref
+    df["pc_median_usd"] = pd.NA
+    df["pc_n_sales"] = pd.NA
+    df["pc_url"] = None
+    mask = _delivery_resolve_mask(df, cfg, top_md)
+    candidates = df[mask]
+    if "net_margin" in candidates.columns:
+        candidates = candidates.sort_values("net_margin", ascending=False)
+    resolved = 0
+    attempted = 0
+    for idx, row in candidates.head(limit).iterrows():
+        attempted += 1
+        try:
+            ref = resolver(row.get("card_name"), row.get("card_number"),
+                           row.get("set_code"), cache_dir=cache_dir)
+        except Exception:  # noqa: BLE001 — best-effort; falha → "—"
+            ref = None
+        # median > 0 obrigatório: mediana 0.0 renderizaria "0.00" com Margem PC
+        # "—" e sem flag (guard de truthiness) — inconsistente; melhor "—" total.
+        if ref and ref.get("median") is not None and float(ref["median"]) > 0:
+            df.at[idx, "pc_median_usd"] = float(ref["median"])
+            df.at[idx, "pc_n_sales"] = ref.get("n_sales")
+            df.at[idx, "pc_url"] = ref.get("url")
+            resolved += 1
+    return resolved, attempted
+
+
 def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
@@ -1074,7 +1130,15 @@ def build_delivery_markdown(
     # colunas existentes nem colapsar a coluna Links — contrato de 2 links/linha
     # intacto. Só aparece se a coluna `dh_score` foi anexada (flag passada).
     show_dh = show_dh and "dh_score" in deals.columns
+    # Colunas PC (metodologia 2026-08-28): presentes quando attach_pc_refs rodou
+    # (--pc-refs). Inseridas após "TCG US$" ANTES do insert DH (que desloca os
+    # índices), sem remover/reordenar as existentes — contrato intacto.
+    show_pc = "pc_median_usd" in deals.columns
     headers = list(_DELIVERY_HEADERS)
+    if show_pc:
+        pc_at = headers.index("TCG US$") + 1
+        headers.insert(pc_at, "Margem PC %")
+        headers.insert(pc_at, "Ref PC US$")
     if show_dh:
         headers.insert(2, "DH")  # após "#" (0) e "Margem %" (1)
     header = "| " + " | ".join(headers) + " |"
@@ -1112,6 +1176,19 @@ def build_delivery_markdown(
             flag = "abaixo do limiar"
         else:
             flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
+        # PC: mediana das vendas reais + margem sobre ela (mesma base revenda do
+        # scanner: (PC − CT)/PC). Sem dado → "—". Divergência TCG↔PC > ratio →
+        # flag "PC diverge" (sinal-only, não muda margem/decisão).
+        pc_med = row.get("pc_median_usd") if show_pc else None
+        try:
+            pc_med = float(pc_med) if pd.notna(pc_med) else None
+        except (TypeError, ValueError):
+            pc_med = None
+        pc_margin = ((pc_med - ct_usd) / pc_med
+                     if (pc_med and ct_usd is not None) else None)
+        if (show_pc and pc_med and tcg_usd is not None
+                and abs(tcg_usd - pc_med) / pc_med > PC_DIVERGENCE_RATIO):
+            flag = (flag + " · PC diverge").strip(" ·")
         cells = [
             str(rank),
             _fmt_pct(row.get("net_margin")),
@@ -1124,8 +1201,17 @@ def build_delivery_markdown(
             _md_escape(row.get("condition")),
             _md_escape(row.get("quantity")),
             flag,
-            _md_links_cell(row.get("link_ct"), row.get("link_tcg")),
+            _md_links_cell(row.get("link_ct"), row.get("link_tcg"),
+                           row.get("pc_url") if show_pc else None),
         ]
+        if show_pc:
+            # Mesmo índice-fonte do insert dos headers (índice em
+            # _DELIVERY_HEADERS, ANTES do insert DH) — nunca hardcodar os dois
+            # lados separados, senão um reorder desalinha célula↔header em
+            # silêncio.
+            pc_cell_at = _DELIVERY_HEADERS.index("TCG US$") + 1
+            cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
+            cells.insert(pc_cell_at, _fmt_usd(pc_med) or "—")
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
@@ -1133,6 +1219,14 @@ def build_delivery_markdown(
         lines.append(
             "\n_DH = 2ª opinião Double Holo 0-100 (50=neutro), não entra na "
             "margem/decisão; '—' = sem dado._"
+        )
+    if show_pc:
+        lines.append(
+            "\n_Ref PC = mediana das últimas vendas REAIS (PriceCharting, "
+            "eBay+TCGPlayer, ungraded); Margem PC = (PC − CT)/PC. '—' = sem "
+            "match/venda (nunca inventa). Flag 'PC diverge' = ref TCG a mais "
+            f"de {PC_DIVERGENCE_RATIO:.0%} da mediana PC — margem canônica e "
+            "decisão NÃO mudam (sinal-only)._"
         )
     return "\n".join(lines)
 
@@ -1157,8 +1251,16 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
 
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                  fx_usd_brl: float | None = None, top_md: int = 50,
-                 dh_signals: dict | None = None, pid_resolver=None) -> str:
+                 dh_signals: dict | None = None, pid_resolver=None,
+                 pc_refs: int = 0) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
+    # Referência PriceCharting (--pc-refs N): anexa a mediana de vendas reais às
+    # N linhas de maior margem da entrega. I/O de rede (2 requests/linha, com
+    # cache 24h) — por isso opt-in e capado. 0 = desligado (saída idêntica).
+    if pc_refs > 0:
+        resolved, attempted = attach_pc_refs(df, cfg, top_md=top_md, limit=pc_refs)
+        print(f"[PC] mediana PriceCharting resolvida em {resolved}/{attempted} "
+              "linhas tentadas da entrega (sem match/venda → '—').")
     # Caminho 1 DoubleHolo: anexa a coluna `dh_score` (2ª opinião). Só quando
     # --doubleholo foi passado; sem a flag a coluna não existe e a saída é
     # idêntica. NÃO toca margem/decisão.
@@ -1278,6 +1380,12 @@ def main():
                          "doubleholo_signals.py ingest --json). Adiciona a coluna "
                          "DH (2ª opinião 0-100, 50=neutro) por productId TCGplayer. "
                          "NÃO entra na margem/decisão. Sem a flag, saída idêntica."))
+    p.add_argument("--pc-refs", type=int, default=0, metavar="N",
+                   help="Metodologia 2026-08-28: anexa a coluna 'Ref PC US$' "
+                        "(mediana das vendas REAIS do PriceCharting) às N linhas "
+                        "de maior margem da entrega + 'Margem PC %%' + link [PC]. "
+                        "Sinal-only (margem/decisão canônicas intactas). Faz rede "
+                        "(2 req/linha, cache 24h em outputs/pc_cache). 0 = off.")
     p.add_argument("--no-pid-resolve", action="store_true",
                    help=("Desliga a resolução OFFLINE de productId via tcgcsv "
                          "(Fix(2)) usada p/ casar DH nas linhas via pokemontcg.io. "
@@ -1330,7 +1438,8 @@ def main():
                 print(f"[DH] aviso: resolver de productId indisponível ({e}); "
                       f"só linhas com link tcgplayer.com/product casam.")
     write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md,
-                 dh_signals=dh_signals, pid_resolver=pid_resolver)
+                 dh_signals=dh_signals, pid_resolver=pid_resolver,
+                 pc_refs=args.pc_refs)
 
 if __name__ == "__main__":
     main()

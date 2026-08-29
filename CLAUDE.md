@@ -226,7 +226,11 @@ Opções úteis:
   `--per-set-timeout`, `--state-dir`, `--allow-concurrent`,
   `--no-tcgcsv-fallback`; no postprocess: `--revisar-min-net`,
   `--revisar-modest-min`, `--min-lucro`, `--top-md`, `--doubleholo`,
-  `--no-pid-resolve`) — `--help` de cada script lista tudo.
+  `--no-pid-resolve`, `--pc-refs N` (v2.27: coluna `Ref PC US$`/`Margem PC %` =
+  mediana das vendas REAIS do PriceCharting nas N linhas de maior margem da
+  entrega + link `[PC]` + flag `PC diverge`; sinal-only, recomendado em scans
+  vintage/back-catalog onde a ref TCG infla)) — `--help` de cada script lista
+  tudo.
 
 > ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06; skill alinhada em
 > 2026-07-20):** o fallback `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap
@@ -657,10 +661,16 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.26**
-(bookkeeping fechado em 2026-08-22: v2.26 registrado no `CHANGELOG.md` e
-cabeçalho atualizado). Uma linha por versão (o detalhe narrativo completo vive
-no `CHANGELOG.md`):
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.27**
+(bookkeeping fechado em 2026-08-28). Uma linha por versão (o detalhe narrativo
+completo vive no `CHANGELOG.md`):
+
+- **v2.27** (2026-08-28, #63): `--pc-refs N` no postprocess — colunas
+  `Ref PC US$`/`Margem PC %` (mediana das vendas REAIS do PriceCharting) +
+  link `[PC]` + flag `PC diverge` nas N linhas de maior margem da entrega;
+  módulo novo `pricecharting_ref.py` (guardas de slug carta+set, nunca inventa
+  preço); sinal-only — margem canônica e decisão intactas. O scanner em si não
+  mudou.
 
 - **v2.26** (2026-08-22, #62): `--provider tcgcsv` — tcgcsv.com promovido a
   fonte primária SELECIONÁVEL (opt-in por run; default segue pokemontcg)
