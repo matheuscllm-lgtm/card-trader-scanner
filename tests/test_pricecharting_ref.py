@@ -128,6 +128,20 @@ def test_slug_guard_possessive_and_single_letter_names():
     assert pcr.slug_matches("/game/pokemon-noble-victories/n-92", "N", "92/101")
 
 
+def test_slug_guard_strips_dp_level_suffix():
+    """Era DP: 'Celebi Lv.39' → slug PC é só 'celebi-7' (0/4 no scan DPP+HGSS
+    de 2026-08-29 sem este strip). 'Lv.X' é variante real e PERMANECE."""
+    assert pcr.slug_matches("/game/pokemon-mysterious-treasures/celebi-7",
+                            "Celebi Lv.39", "007")
+    assert pcr.slug_matches("/game/pokemon-great-encounters/togekiss-11",
+                            "Togekiss Lv.51", "011")
+    # Lv.X distingue carta: "dialga-105" (base) NÃO casa "Dialga Lv.X"
+    assert not pcr.slug_matches("/game/pokemon-diamond-&-pearl/dialga-105",
+                                "Dialga Lv.X", "105")
+    assert pcr.slug_matches("/game/pokemon-diamond-&-pearl/dialga-lv.x-105",
+                            "Dialga Lv.X", "105")
+
+
 def test_console_guard_rejects_japanese_and_extra_tokens():
     """Review 2026-08-28: 'pokemon-japanese-aquapolis' NÃO casa 'Aquapolis' —
     a mediana da tiragem japonesa (mais barata) corromperia o sinal."""

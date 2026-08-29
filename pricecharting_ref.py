@@ -128,19 +128,33 @@ def norm_number(number) -> str:
 
 def _norm_token(t: str) -> str:
     """'erika's' → 'erika' (possessivo cai — o PC mantém o apóstrofo no slug,
-    ex. /game/pokemon-gym-challenge/erika's-venusaur-4)."""
+    ex. /game/pokemon-gym-challenge/erika's-venusaur-4); pontos caem
+    ('lv.x' → 'lvx', casa o token do nome)."""
     t = t.lower().strip()
     if t.endswith("'s"):
         t = t[:-2]
-    return t.replace("'", "")
+    return t.replace("'", "").replace(".", "")
+
+
+# Sufixo de nível da era DP ("Celebi Lv.39") — display do CT, não identidade da
+# carta; o slug PC é só "celebi-7". "Lv.X" NÃO casa (X não é dígito): Lv.X é
+# variante REAL que distingue carta e fica no nome.
+_LEVEL_SUFFIX_RE = re.compile(r"(?i)\blv\.?\s*\d+\b")
+
+
+def clean_card_name(card_name) -> str:
+    """Nome CT → nome comparável/pesquisável: remove 'Lv.NN' e parênteses."""
+    s = re.sub(r"\(.*?\)", "", str(card_name or ""))
+    return _LEVEL_SUFFIX_RE.sub(" ", s).strip()
 
 
 def _name_tokens(card_name) -> list[str]:
     """Tokens do nome, normalizados. Sem filtro de tamanho: 'N' (BW) é nome
     legítimo de 1 letra; o ruído de possessivo já cai no _norm_token."""
+    name = clean_card_name(card_name).replace(".", "")
     return [t for t in
             (_norm_token(x) for x in
-             re.findall(r"[a-z0-9']+", str(card_name or "").lower()))
+             re.findall(r"[a-z0-9']+", name.lower()))
             if t]
 
 
@@ -234,7 +248,7 @@ def resolve_pc_ref(card_name, number, set_label,
     vendas ungraded recentes. Nenhum resultado casa → None.
     """
     set_name = _set_name_from_label(set_label)
-    base_name = re.sub(r"\(.*?\)", "", str(card_name or "")).strip()
+    base_name = clean_card_name(card_name)
     num = norm_number(number)
     query = " ".join(p for p in ("pokemon", set_name, base_name, num) if p)
     try:
