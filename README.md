@@ -45,3 +45,5 @@ python -m pytest
 
 - Operational/run notes are kept local and are not part of this repository.
 - Contributions are not being accepted; this is a personal project.
+
+Windows: `requirements.txt` installs `portalocker[win32]` so shared locks work with current portalocker releases. CI tests Windows and Linux.
