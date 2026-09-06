@@ -1,101 +1,11 @@
-name: Daily CT Scan
-
+name: Scan delivery moved to chat
 on:
-  # Sem agendamento: workflow só roda via dispatch manual (decisão operador
-  # 2026-05-16). Runs autônomos rodam LOCAL via venv + .env.
   workflow_dispatch:
-    inputs:
-      sets:
-        description: 'Sets a escanear (códigos CT separados por espaço)'
-        required: false
-        default: 'sfa scr par paf tef twm ssp dri blk jtg asc'
-      threshold:
-        description: 'Margem bruta mínima (fração, ex 0.30)'
-        required: false
-        default: '0.30'
-      min_net_margin:
-        description: 'Margem líquida REAL mínima após Hub fee (ex 0.20)'
-        required: false
-        default: '0.20'
-      validate_top:
-        description: 'Quantos candidatos validar per-blueprint'
-        required: false
-        default: '30'
-
-concurrency:
-  group: ct-scan
-  cancel-in-progress: false
-
 permissions:
   contents: read
-
 jobs:
-  scan:
+  instructions:
     runs-on: ubuntu-latest
-    # Bumped 30→60 em 2026-05-15: run 25898522951 atingiu 30min com 5/10 sets
-    # processados (~1480 listings) e foi cancelado pelo timeout antes de
-    # iniciar blk/jtg/twm/ssp/dri. Estimativa total p/ 10 sets: ~50min.
-    # Bumped 60→180 em 2026-07-02: o input `sets` agora recebe um GRUPO do
-    # /scan (~21-22 sets ≈ 1h35-2h15) — 60min cortaria o grupo no meio.
-    timeout-minutes: 180
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v5
-
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run scanner
-        env:
-          CT_JWT: ${{ secrets.CT_JWT }}
-          POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
-          PYTHONIOENCODING: utf-8
-        run: |
-          SETS="${{ github.event.inputs.sets || 'sfa scr par paf tef twm ssp dri blk jtg asc' }}"
-          THRESHOLD="${{ github.event.inputs.threshold || '0.30' }}"
-          MIN_NET="${{ github.event.inputs.min_net_margin || '0.20' }}"
-          VAL_TOP="${{ github.event.inputs.validate_top || '30' }}"
-          python cardtrader_scanner.py \
-            --sets $SETS \
-            --threshold $THRESHOLD \
-            --validate-top $VAL_TOP \
-            --min-net-margin $MIN_NET \
-            --output "cardtrader_scan_$(date +%Y%m%d_%H%M).xlsx"
-
-      - name: Run postprocess (v2 — Decisão mecânica + Chase Tier)
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          XLSX=$(ls -t cardtrader_scan_*.xlsx 2>/dev/null | head -1)
-          if [ -z "$XLSX" ]; then
-            echo "Nenhum XLSX gerado pelo scanner — pulando postprocess"
-            exit 0
-          fi
-          python cardtrader_postprocess.py \
-            --input "$XLSX" \
-            --output "cardtrader_relatorio_$(date +%Y-%m-%d).xlsx"
-
-      - name: Upload scan outputs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: scan-${{ github.run_id }}
-          path: |
-            cardtrader_scan_*.xlsx
-            cardtrader_relatorio_*.xlsx
-            cardtrader_relatorio_*.md
-            cardtrader_scanner.log
-          retention-days: 30
-          if-no-files-found: error
-
-      # Failure surfaces in the Actions run status. No public issue is created
-      # (Issues are disabled on the public repo, and issue bodies are world-readable).
+      - name: Local collection and chat delivery
+        run: echo "Request a fresh local scan in the conversation. Follow DELIVERY_CHAT.md. This workflow does not collect or publish market results."

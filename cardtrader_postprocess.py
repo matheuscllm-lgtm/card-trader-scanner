@@ -52,6 +52,8 @@ Memorias relevantes respeitadas:
   - cardtrader_trainer_gallery_bug: TG## auto-filter mantido
 """
 from __future__ import annotations
+
+from chat_format import reference_price
 import argparse, os, re, sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1009,7 +1011,7 @@ def _delivery_resolve_mask(df: pd.DataFrame, cfg: DecisionConfig, top_md: int):
         return is_deal
     mask = pd.Series(False, index=df.index)
     if "net_margin" in df.columns and len(df):
-        top_idx = df["net_margin"].sort_values(ascending=False).head(top_md).index
+        top_idx = df["net_margin"].sort_values(ascending=False).head(top_md if top_md else len(df)).index
         mask.loc[top_idx] = True
     else:
         mask.loc[:] = True  # sem margem p/ ordenar → não arrisca, resolve todas
@@ -1078,7 +1080,7 @@ def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
     fx_usd_brl: float | None = None,
-    top_n: int = 50,
+    top_n: int | None = None,
     show_dh: bool = False,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
@@ -1108,7 +1110,7 @@ def build_delivery_markdown(
         deals = work.copy()
     if "net_margin" in deals.columns:
         deals = deals.sort_values("net_margin", ascending=False)
-    deals = deals.head(top_n)
+    deals = deals.head(top_n) if top_n else deals
     deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
 
     title = (
@@ -1196,7 +1198,7 @@ def build_delivery_markdown(
             str(rank),
             _fmt_pct(row.get("net_margin")),
             _fmt_usd(ct_usd),
-            _fmt_usd(tcg_usd),
+            reference_price(_fmt_usd(tcg_usd), row.get("link_tcg")),
             _fmt_usd(dif),
             _md_escape(row.get("card_name")),
             _md_escape(row.get("set_code")),
@@ -1214,7 +1216,7 @@ def build_delivery_markdown(
             # silêncio.
             pc_cell_at = _DELIVERY_HEADERS.index("TCG US$") + 1
             cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
-            cells.insert(pc_cell_at, _fmt_usd(pc_med) or "—")
+            cells.insert(pc_cell_at, reference_price(_fmt_usd(pc_med) or "—", row.get("pc_url")))
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
@@ -1253,7 +1255,7 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
 
 
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
-                 fx_usd_brl: float | None = None, top_md: int = 50,
+                 fx_usd_brl: float | None = None, top_md: int | None = None,
                  dh_signals: dict | None = None, pid_resolver=None,
                  pc_refs: int = 0) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
@@ -1375,7 +1377,7 @@ def main():
                    help=("v2.12: DEFAULT 0.0 — margem BRUTA (custo = preço do "
                          "site, SEM taxa). Operador soma Hub fee/frete/cartão/IOF "
                          "por fora. Passe 0.06 pra reembutir os 6%% históricos."))
-    p.add_argument("--top-md", type=int, default=50,
+    p.add_argument("--top-md", type=int, default=None,
                    help=("Quantas linhas na tabela de entrega markdown do chat "
                          "(default 50). XLSX sempre traz todos os deals."))
     p.add_argument("--doubleholo", default=None, metavar="JSON",

@@ -1,3 +1,5 @@
+> **Regra vigente de entrega:** [DELIVERY_CHAT.md](DELIVERY_CHAT.md). Resultados somente no chat, referência clicável e coleta nova por solicitação; substitui orientações antigas de entrega via GitHub ou preços reutilizados.
+
 # CLAUDE.md — card-trader-scanner
 
 > **Este arquivo tem dois leitores:**

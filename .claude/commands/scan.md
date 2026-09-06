@@ -3,6 +3,10 @@ description: Roda o scan canônico do CardTrader por GRUPOS de sets (6 grupos po
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 ---
 
+REGRA VIGENTE DO OPERADOR: ler DELIVERY_CHAT.md na raiz do repositório. Entrega somente no chat, preço de referência clicável, coleta nova sob demanda; não executar scans no GitHub Actions nem publicar resultados. Esta regra substitui instruções antigas conflitantes abaixo.
+
+
+
 Você foi acionado pelo comando **`/scan`** do operador. Sua missão é **uma só**:
 rodar o scanner do CardTrader **por grupos canônicos** — nunca improvisando
 flags — e entregar cada grupo no formato obrigatório do postprocess. **Nenhum

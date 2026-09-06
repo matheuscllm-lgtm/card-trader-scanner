@@ -1,110 +1,11 @@
-name: Weekly Scan (full scope)
-
-# Full scan of all expansions. Manual dispatch only.
-#
-# NOTE (public-repo hygiene, 2026-06-18): results are delivered as workflow
-# ARTIFACTS only. The previous "live partials" mechanism that force-pushed
-# results to a public `scan-live` branch was retired — on a public repo that
-# branch would publish the deal list. Artifacts sit behind the Actions tab and
-# auto-expire. For fully private results, run the scan locally via .venv + .env.
-
+name: Scan delivery moved to chat
 on:
   workflow_dispatch:
-    inputs:
-      threshold:
-        description: 'Margem bruta mínima (fração, ex 0.30)'
-        required: false
-        default: '0.30'
-      min_net_margin:
-        description: 'Margem líquida mínima (ex 0.20)'
-        required: false
-        default: '0.20'
-      validate_top:
-        description: 'Quantos candidatos validar per-blueprint'
-        required: false
-        default: '100'
-      per_set_timeout:
-        description: 'Timeout per-set (min)'
-        required: false
-        default: '8'
-
-concurrency:
-  group: ct-scan
-  cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
-  scan:
+  instructions:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v5
-
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run scanner (full scope)
-        id: scan
-        env:
-          CT_JWT: ${{ secrets.CT_JWT }}
-          POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
-          PYTHONIOENCODING: utf-8
-        run: |
-          set -uo pipefail
-          THRESHOLD="${{ github.event.inputs.threshold || '0.30' }}"
-          MIN_NET="${{ github.event.inputs.min_net_margin || '0.20' }}"
-          VAL_TOP="${{ github.event.inputs.validate_top || '100' }}"
-          PER_SET_TIMEOUT="${{ github.event.inputs.per_set_timeout || '8' }}"
-          STAMP=$(date +%Y%m%d_%H%M)
-          OUT="cardtrader_scan_weekly_${STAMP}.xlsx"
-          mkdir -p scan-state
-          # --state-dir keeps a checkpoint so a timed-out run is still recoverable
-          # from the uploaded artifact (no public branch involved).
-          python cardtrader_scanner.py \
-            --all-sets \
-            --threshold "$THRESHOLD" \
-            --validate-top "$VAL_TOP" \
-            --min-net-margin "$MIN_NET" \
-            --per-set-timeout "$PER_SET_TIMEOUT" \
-            --checkpoint-every 1 \
-            --state-dir scan-state \
-            --output "$OUT"
-
-      - name: Run postprocess
-        if: always()
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          XLSX=$(ls -t cardtrader_scan_weekly_*.xlsx 2>/dev/null | head -1)
-          if [ -z "$XLSX" ]; then
-            echo "Nenhum XLSX final gerado (scan incompleto/cancelado) — pulando postprocess."
-            exit 0
-          fi
-          python cardtrader_postprocess.py \
-            --input "$XLSX" \
-            --output "cardtrader_relatorio_weekly_$(date +%Y-%m-%d).xlsx" || true
-
-      - name: Upload scan outputs (artifacts)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: weekly-scan-${{ github.run_id }}
-          path: |
-            cardtrader_scan_weekly_*.xlsx
-            cardtrader_relatorio_weekly_*.xlsx
-            cardtrader_relatorio_weekly_*.md
-            scan-state/*.checkpoint.jsonl
-            scan-state/*.log
-          retention-days: 30
-          if-no-files-found: warn
+      - name: Local collection and chat delivery
+        run: echo "Request a fresh local scan in the conversation. Follow DELIVERY_CHAT.md. This workflow does not collect or publish market results."
