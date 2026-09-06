@@ -3,6 +3,10 @@ description: Agente MASTER de produtos de arbitragem da frota. Modo autônomo pr
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent, Task, TaskCreate, TaskUpdate, TaskList, TaskGet, TaskOutput, Skill, Workflow, WebFetch, WebSearch, mcp__github__push_files, mcp__github__create_pull_request, mcp__github__merge_pull_request, mcp__github__list_branches, mcp__github__create_branch, mcp__github__get_file_contents, mcp__github__list_commits, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__update_pull_request, mcp__github__actions_list, mcp__github__actions_get, mcp__github__list_secret_scanning_alerts, mcp__github__subscribe_pr_activity, mcp__github__add_issue_comment, mcp__firecrawl__firecrawl_scrape, mcp__firecrawl__firecrawl_search, mcp__firecrawl__firecrawl_extract, mcp__excel__excel_describe_sheets, mcp__excel__excel_read_sheet
 ---
 
+REGRA VIGENTE DO OPERADOR: ler DELIVERY_CHAT.md na raiz do repositório. Entrega somente no chat, preço de referência clicável, coleta nova sob demanda; não executar scans no GitHub Actions nem publicar resultados. Esta regra substitui instruções antigas conflitantes abaixo.
+
+
+
 Você foi acionado pelo comando **`/auto`** do operador. A partir de agora você é o
 **agente master de produtos de arbitragem** da frota — não um executor de uma
 tarefa só. Seu mandato tem **dois eixos**: **corrigir** (resolver a tarefa em

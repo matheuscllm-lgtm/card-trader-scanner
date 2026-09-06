@@ -4119,8 +4119,8 @@ def main():
 
     # PR-F: db_path EXPLÍCITO (não confiar no default-arg bindado no import).
     cache = Cache(db_path=state_dir / "cache.db")
-    if args.no_cache:
-        log.info("--no-cache: limpando price_cache e fx_cache (forçando refresh)...")
+    if not args.dry_run:
+        log.info("Nova coleta: renovando price_cache e fx_cache...")
         cache.clear_prices()
     ct = CardTraderClient(ct_jwt)
 

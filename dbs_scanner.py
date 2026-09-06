@@ -49,6 +49,8 @@ Requer CT_JWT (env var ou .env deste repo). Câmbio: --fx OU automático
 
 from __future__ import annotations
 
+from chat_format import reference_price
+
 import argparse
 import csv
 import json
@@ -436,7 +438,7 @@ def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
         flag_txt = str(r.get('flag') or '—').replace("|", "\\|")
         flag_col = f"{flag_txt} | " if with_flag else ""
         out.append(
-            f"| {i} | {marg} | {fmt_brl(r['ct_brl'])} | US${r['tcg_usd']:.2f} | "
+            f"| {i} | {marg} | {fmt_brl(r['ct_brl'])} | {reference_price(format(r['tcg_usd'], '.2f'), r.get('tcg_url'))} | "
             f"{fmt_brl(r['dif_brl'])} | {carta} | {r['set']} | {r['raridade']} | NM | "
             f"{r['qtd']} | {flag_col}{links} |"
         )
@@ -545,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-price-usd", type=float, default=10.0,
                     help="piso de relevância da referência TCG (frota: ~US$10 p/ singles)")
     ap.add_argument("--fx", type=float, default=None, help="câmbio USD→BRL manual (senão: open.er-api.com)")
-    ap.add_argument("--cache-hours", type=float, default=20.0, help="TTL do cache tcgcsv (0 = sem cache)")
+    ap.add_argument("--cache-hours", type=float, default=0.0, help="TTL do cache tcgcsv (0 = sem cache)")
     ap.add_argument("--out", default=None, help="prefixo de saída (default outputs/dbs_scan_<ts>)")
     args = ap.parse_args(argv)
 
