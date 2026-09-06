@@ -5,3 +5,4 @@ PyYAML>=6.0.1
 pandas>=2.0.0
 numpy>=1.24.0
 portalocker>=2.0.0
+portalocker[win32]>=2.0.0; sys_platform == "win32"
