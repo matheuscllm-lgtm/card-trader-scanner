@@ -1379,7 +1379,7 @@ def main():
                          "por fora. Passe 0.06 pra reembutir os 6%% históricos."))
     p.add_argument("--top-md", type=int, default=None,
                    help=("Quantas linhas na tabela de entrega markdown do chat "
-                         "(default 50). XLSX sempre traz todos os deals."))
+                         "(default: todas). XLSX sempre traz todos os deals."))
     p.add_argument("--doubleholo", default=None, metavar="JSON",
                    help=("Caminho do JSON canônico do DoubleHolo (saída de "
                          "doubleholo_signals.py ingest --json). Adiciona a coluna "
