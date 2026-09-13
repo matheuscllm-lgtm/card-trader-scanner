@@ -40,7 +40,7 @@ from cardtrader_scanner import (
     TCGCSV_SUBTYPE_TO_VARIANT,
     TCGCSV_USER_AGENT,
     clean_collector_number,
-    resolve_tcgcsv_group_id,
+    resolve_tcgcsv_group_ids,
     tcgcsv_fetch_groups,
     PokemonTcgIoProvider,
 )
@@ -105,10 +105,15 @@ class ProductIdResolver:
             self._groups_fetched = True
         if not self._groups:
             return None
-        group_id = resolve_tcgcsv_group_id(
-            ptcg_setcodes_for(ct_set_code), set_name, self._groups)
-        if not group_id:
+        # v2.28: mesma resolução do scanner (groupId explícito → abbr/nome
+        # único). Só set de UM group: a chave aqui é só-dígitos, então um set
+        # multi-group (gen/ltr RC##, hif/shf SV##) misturaria o subset com o
+        # set base → sem productId (honesto).
+        group_ids = resolve_tcgcsv_group_ids(
+            ct_set_code, ptcg_setcodes_for(ct_set_code), set_name, self._groups)
+        if len(group_ids) != 1:
             return None
+        group_id = group_ids[0]
         products = self._fetch_json(f"{group_id}/products")
         prices = self._fetch_json(f"{group_id}/prices")
         if not products or not prices:
