@@ -254,6 +254,17 @@ Opções úteis:
 > `tests/test_scan_skill_profiles.py`). Se for rodar um set como `asc` à mão,
 > fora do skill, passe `--max-consecutive-misses 40` você também.
 
+> ✅ **Mapa explícito de sets no tcgcsv (v2.28, 2026-09-12):** cada código CT
+> do universo dos grupos aponta pro(s) *groupId* (número do set no tcgcsv)
+> certo(s) em `CT_SET_TO_TCGCSV_GROUP_IDS`. Antes, só ~21 sets tinham esse
+> atalho e o resto era casado pelo **nome**, que falhava em nomes parecidos —
+> por isso `svi`, `kss`, `gen` e `evo` saíam "sem referência de preço" no
+> `--provider tcgcsv`. Único set sem referência de propósito: `c25`
+> (Celebrations — a numeração da Classic Collection colide com a do set
+> principal). **Set novo no universo?** O teste `tests/test_tcgcsv_group_map.py`
+> quebra até você mapear o groupId (conferido no `/groups` do tcgcsv) ou
+> documentar a exclusão.
+
 ### Workflows do GitHub Actions (nuvem)
 
 Três workflows em `.github/workflows/`:

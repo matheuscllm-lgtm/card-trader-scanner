@@ -1,0 +1,1105 @@
+{
+"_source": "https://tcgcsv.com/tcgplayer/3/groups (snapshot 2026-09-12, campos groupId/name/abbreviation)",
+"results": [
+{
+"groupId": 24831,
+"name": "ME06: Delta Reign",
+"abbreviation": "DLR"
+},
+{
+"groupId": 24722,
+"name": "ME: 30th Celebration",
+"abbreviation": "30C"
+},
+{
+"groupId": 24837,
+"name": "ME: 30th Celebration Classic Collection",
+"abbreviation": "30C"
+},
+{
+"groupId": 24688,
+"name": "ME05: Pitch Black",
+"abbreviation": "PBL"
+},
+{
+"groupId": 24655,
+"name": "ME04: Chaos Rising",
+"abbreviation": "CRI"
+},
+{
+"groupId": 24584,
+"name": "First Partner Collection 2026",
+"abbreviation": ""
+},
+{
+"groupId": 24587,
+"name": "ME03: Perfect Order",
+"abbreviation": "POR"
+},
+{
+"groupId": 24541,
+"name": "ME: Ascended Heroes",
+"abbreviation": "ASC"
+},
+{
+"groupId": 24529,
+"name": "Player Placement Trainer Promos",
+"abbreviation": ""
+},
+{
+"groupId": 24448,
+"name": "ME02: Phantasmal Flames",
+"abbreviation": "PFL"
+},
+{
+"groupId": 24451,
+"name": "ME: Mega Evolution Promo",
+"abbreviation": "MEP"
+},
+{
+"groupId": 24380,
+"name": "ME01: Mega Evolution",
+"abbreviation": "MEG"
+},
+{
+"groupId": 24461,
+"name": "MEE: Mega Evolution Energies",
+"abbreviation": "MEE"
+},
+{
+"groupId": 24325,
+"name": "SV: Black Bolt",
+"abbreviation": "BLK"
+},
+{
+"groupId": 24326,
+"name": "SV: White Flare",
+"abbreviation": "WHT"
+},
+{
+"groupId": 24269,
+"name": "SV10: Destined Rivals",
+"abbreviation": "DRI"
+},
+{
+"groupId": 24073,
+"name": "SV09: Journey Together",
+"abbreviation": "JTG"
+},
+{
+"groupId": 24163,
+"name": "McDonald's Promos 2024",
+"abbreviation": "M24"
+},
+{
+"groupId": 23821,
+"name": "SV: Prismatic Evolutions",
+"abbreviation": "PRE"
+},
+{
+"groupId": 23651,
+"name": "SV08: Surging Sparks",
+"abbreviation": "SSP"
+},
+{
+"groupId": 23537,
+"name": "SV07: Stellar Crown",
+"abbreviation": "SCR"
+},
+{
+"groupId": 23561,
+"name": "Trick or Trade BOOster Bundle 2024",
+"abbreviation": "TTBB24"
+},
+{
+"groupId": 23529,
+"name": "SV: Shrouded Fable",
+"abbreviation": "SFA"
+},
+{
+"groupId": 23520,
+"name": "Battle Academy 2024",
+"abbreviation": "BA24"
+},
+{
+"groupId": 23473,
+"name": "SV06: Twilight Masquerade",
+"abbreviation": "TWM"
+},
+{
+"groupId": 23381,
+"name": "SV05: Temporal Forces",
+"abbreviation": "TEF"
+},
+{
+"groupId": 23353,
+"name": "SV: Paldean Fates",
+"abbreviation": "PAF"
+},
+{
+"groupId": 23323,
+"name": "Trading Card Game Classic",
+"abbreviation": "CL"
+},
+{
+"groupId": 23286,
+"name": "SV04: Paradox Rift",
+"abbreviation": "PAR"
+},
+{
+"groupId": 23330,
+"name": "My First Battle",
+"abbreviation": ""
+},
+{
+"groupId": 23237,
+"name": "SV: Scarlet & Violet 151",
+"abbreviation": "MEW"
+},
+{
+"groupId": 23306,
+"name": "McDonald's Promos 2023",
+"abbreviation": "M23"
+},
+{
+"groupId": 23266,
+"name": "Trick or Trade BOOster Bundle 2023",
+"abbreviation": "TTBB23"
+},
+{
+"groupId": 23228,
+"name": "SV03: Obsidian Flames",
+"abbreviation": "OBF"
+},
+{
+"groupId": 24864,
+"name": "Southeast Asia Exclusives",
+"abbreviation": "SEA"
+},
+{
+"groupId": 23120,
+"name": "SV02: Paldea Evolved",
+"abbreviation": "PAL"
+},
+{
+"groupId": 22872,
+"name": "SV: Scarlet & Violet Promo Cards",
+"abbreviation": "SVP"
+},
+{
+"groupId": 22873,
+"name": "SV01: Scarlet & Violet Base Set",
+"abbreviation": "SVI"
+},
+{
+"groupId": 24382,
+"name": "SVE: Scarlet & Violet Energies",
+"abbreviation": "SVE"
+},
+{
+"groupId": 17688,
+"name": "SWSH: Crown Zenith",
+"abbreviation": "CRZ"
+},
+{
+"groupId": 17689,
+"name": "SWSH: Crown Zenith: Galarian Gallery",
+"abbreviation": "CRZ:GG"
+},
+{
+"groupId": 22880,
+"name": "Prize Pack Series Cards",
+"abbreviation": ""
+},
+{
+"groupId": 3170,
+"name": "SWSH12: Silver Tempest",
+"abbreviation": "SWSH12"
+},
+{
+"groupId": 17674,
+"name": "SWSH12: Silver Tempest Trainer Gallery",
+"abbreviation": "SWSH12: TG"
+},
+{
+"groupId": 3118,
+"name": "SWSH11: Lost Origin",
+"abbreviation": "SWSH11"
+},
+{
+"groupId": 3172,
+"name": "SWSH11: Lost Origin Trainer Gallery",
+"abbreviation": "SWSH11: TG"
+},
+{
+"groupId": 3179,
+"name": "Trick or Trade BOOster Bundle",
+"abbreviation": "TTBB"
+},
+{
+"groupId": 3150,
+"name": "McDonald's Promos 2022",
+"abbreviation": "M22"
+},
+{
+"groupId": 3064,
+"name": "Pokemon GO",
+"abbreviation": "PGO"
+},
+{
+"groupId": 3040,
+"name": "SWSH10: Astral Radiance",
+"abbreviation": "SWSH10"
+},
+{
+"groupId": 3068,
+"name": "SWSH10: Astral Radiance Trainer Gallery",
+"abbreviation": "SWSH10:TG"
+},
+{
+"groupId": 3051,
+"name": "Battle Academy 2022",
+"abbreviation": "BA22"
+},
+{
+"groupId": 2948,
+"name": "SWSH09: Brilliant Stars",
+"abbreviation": "SWSH09"
+},
+{
+"groupId": 3020,
+"name": "SWSH09: Brilliant Stars Trainer Gallery",
+"abbreviation": "SWSH09:TG"
+},
+{
+"groupId": 2906,
+"name": "SWSH08: Fusion Strike",
+"abbreviation": "SWSH08"
+},
+{
+"groupId": 2867,
+"name": "Celebrations",
+"abbreviation": "CLB"
+},
+{
+"groupId": 2931,
+"name": "Celebrations: Classic Collection",
+"abbreviation": "CCC"
+},
+{
+"groupId": 2848,
+"name": "SWSH07: Evolving Skies",
+"abbreviation": "SWSH07"
+},
+{
+"groupId": 2807,
+"name": "SWSH06: Chilling Reign",
+"abbreviation": "SWSH06"
+},
+{
+"groupId": 2765,
+"name": "SWSH05: Battle Styles",
+"abbreviation": "SWSH05"
+},
+{
+"groupId": 2754,
+"name": "Shining Fates",
+"abbreviation": "SHF"
+},
+{
+"groupId": 2781,
+"name": "Shining Fates: Shiny Vault",
+"abbreviation": "SHFSV"
+},
+{
+"groupId": 2782,
+"name": "McDonald's 25th Anniversary Promos",
+"abbreviation": "M21"
+},
+{
+"groupId": 2701,
+"name": "SWSH04: Vivid Voltage",
+"abbreviation": "SWSH04"
+},
+{
+"groupId": 2685,
+"name": "Champion's Path",
+"abbreviation": "CHP"
+},
+{
+"groupId": 2675,
+"name": "SWSH03: Darkness Ablaze",
+"abbreviation": "SWSH03"
+},
+{
+"groupId": 2686,
+"name": "Battle Academy",
+"abbreviation": "BTA"
+},
+{
+"groupId": 2626,
+"name": "SWSH02: Rebel Clash",
+"abbreviation": "SWSH02"
+},
+{
+"groupId": 2585,
+"name": "SWSH01: Sword & Shield Base Set",
+"abbreviation": "SWSH01"
+},
+{
+"groupId": 2545,
+"name": "SWSH: Sword & Shield Promo Cards",
+"abbreviation": "SWSD"
+},
+{
+"groupId": 2534,
+"name": "SM - Cosmic Eclipse",
+"abbreviation": "SM12"
+},
+{
+"groupId": 2555,
+"name": "McDonald's Promos 2019",
+"abbreviation": "M19"
+},
+{
+"groupId": 2480,
+"name": "Hidden Fates",
+"abbreviation": "HIF"
+},
+{
+"groupId": 2594,
+"name": "Hidden Fates: Shiny Vault",
+"abbreviation": "HIF:SV"
+},
+{
+"groupId": 2464,
+"name": "SM - Unified Minds",
+"abbreviation": "SM11"
+},
+{
+"groupId": 2420,
+"name": "SM - Unbroken Bonds",
+"abbreviation": "SM10"
+},
+{
+"groupId": 2409,
+"name": "Detective Pikachu",
+"abbreviation": "DEP"
+},
+{
+"groupId": 2377,
+"name": "SM - Team Up",
+"abbreviation": "SM9"
+},
+{
+"groupId": 2328,
+"name": "SM - Lost Thunder",
+"abbreviation": "SM8"
+},
+{
+"groupId": 2364,
+"name": "McDonald's Promos 2018",
+"abbreviation": "M18"
+},
+{
+"groupId": 2295,
+"name": "Dragon Majesty",
+"abbreviation": "DRM"
+},
+{
+"groupId": 2278,
+"name": "SM - Celestial Storm",
+"abbreviation": "CES"
+},
+{
+"groupId": 2282,
+"name": "World Championship Decks",
+"abbreviation": "WCD"
+},
+{
+"groupId": 2209,
+"name": "SM - Forbidden Light",
+"abbreviation": "SM06"
+},
+{
+"groupId": 2208,
+"name": "SM Trainer Kit: Alolan Sandslash & Alolan Ninetales",
+"abbreviation": "SMK2"
+},
+{
+"groupId": 2178,
+"name": "SM - Ultra Prism",
+"abbreviation": "SM05"
+},
+{
+"groupId": 2148,
+"name": "McDonald's Promos 2017",
+"abbreviation": "M17"
+},
+{
+"groupId": 2071,
+"name": "SM - Crimson Invasion",
+"abbreviation": "SM04"
+},
+{
+"groupId": 2054,
+"name": "Shining Legends",
+"abbreviation": "SHL"
+},
+{
+"groupId": 1957,
+"name": "SM - Burning Shadows",
+"abbreviation": "SM03"
+},
+{
+"groupId": 1919,
+"name": "SM - Guardians Rising",
+"abbreviation": "SM02"
+},
+{
+"groupId": 23095,
+"name": "Ash vs Team Rocket Deck Kit (JP Exclusive)",
+"abbreviation": "AVTR"
+},
+{
+"groupId": 2069,
+"name": "SM Trainer Kit: Lycanroc & Alolan Raichu",
+"abbreviation": "SMK1"
+},
+{
+"groupId": 1863,
+"name": "SM Base Set",
+"abbreviation": "SM01"
+},
+{
+"groupId": 1861,
+"name": "SM Promos",
+"abbreviation": "SMP"
+},
+{
+"groupId": 1842,
+"name": "XY - Evolutions",
+"abbreviation": "EVO"
+},
+{
+"groupId": 1840,
+"name": "Deck Exclusives",
+"abbreviation": "PR"
+},
+{
+"groupId": 3087,
+"name": "McDonald's Promos 2016",
+"abbreviation": "M16"
+},
+{
+"groupId": 1815,
+"name": "XY - Steam Siege",
+"abbreviation": "STS"
+},
+{
+"groupId": 1539,
+"name": "League & Championship Cards",
+"abbreviation": "PR"
+},
+{
+"groupId": 1780,
+"name": "XY - Fates Collide",
+"abbreviation": "FCO"
+},
+{
+"groupId": 1796,
+"name": "XY Trainer Kit: Pikachu Libre & Suicune",
+"abbreviation": "PR"
+},
+{
+"groupId": 1728,
+"name": "Generations",
+"abbreviation": "GEN"
+},
+{
+"groupId": 1729,
+"name": "Generations: Radiant Collection",
+"abbreviation": "GEN"
+},
+{
+"groupId": 1701,
+"name": "XY - BREAKpoint",
+"abbreviation": "BKP"
+},
+{
+"groupId": 1694,
+"name": "McDonald's Promos 2015",
+"abbreviation": "M15"
+},
+{
+"groupId": 1661,
+"name": "XY - BREAKthrough",
+"abbreviation": "BKT"
+},
+{
+"groupId": 1576,
+"name": "XY - Ancient Origins",
+"abbreviation": "AOR"
+},
+{
+"groupId": 1534,
+"name": "XY - Roaring Skies",
+"abbreviation": "ROS"
+},
+{
+"groupId": 1536,
+"name": "XY Trainer Kit: Latias & Latios",
+"abbreviation": "PR"
+},
+{
+"groupId": 1528,
+"name": "Jumbo Cards",
+"abbreviation": "PR"
+},
+{
+"groupId": 1525,
+"name": "Double Crisis",
+"abbreviation": "DCR"
+},
+{
+"groupId": 1509,
+"name": "XY - Primal Clash",
+"abbreviation": "PRC"
+},
+{
+"groupId": 1533,
+"name": "XY Trainer Kit: Bisharp & Wigglytuff",
+"abbreviation": "PR"
+},
+{
+"groupId": 1494,
+"name": "XY - Phantom Forces",
+"abbreviation": "PHF"
+},
+{
+"groupId": 1481,
+"name": "XY - Furious Fists",
+"abbreviation": "FFI"
+},
+{
+"groupId": 1692,
+"name": "McDonald's Promos 2014",
+"abbreviation": "M14"
+},
+{
+"groupId": 1464,
+"name": "XY - Flashfire",
+"abbreviation": "FLF"
+},
+{
+"groupId": 1532,
+"name": "XY Trainer Kit: Sylveon & Noivern",
+"abbreviation": "PR"
+},
+{
+"groupId": 1387,
+"name": "XY Base Set",
+"abbreviation": "XY"
+},
+{
+"groupId": 1451,
+"name": "XY Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1522,
+"name": "Kalos Starter Set",
+"abbreviation": "KSS"
+},
+{
+"groupId": 1409,
+"name": "Legendary Treasures",
+"abbreviation": "LTR"
+},
+{
+"groupId": 1465,
+"name": "Legendary Treasures: Radiant Collection",
+"abbreviation": "LTR"
+},
+{
+"groupId": 1370,
+"name": "Plasma Blast",
+"abbreviation": "PLB"
+},
+{
+"groupId": 1382,
+"name": "Plasma Freeze",
+"abbreviation": "PLF"
+},
+{
+"groupId": 1413,
+"name": "Plasma Storm",
+"abbreviation": "PLS"
+},
+{
+"groupId": 1408,
+"name": "Boundaries Crossed",
+"abbreviation": "BCR"
+},
+{
+"groupId": 1426,
+"name": "Dragon Vault",
+"abbreviation": "DRV"
+},
+{
+"groupId": 1394,
+"name": "Dragons Exalted",
+"abbreviation": "DRX"
+},
+{
+"groupId": 1427,
+"name": "McDonald's Promos 2012",
+"abbreviation": "M12"
+},
+{
+"groupId": 1386,
+"name": "Dark Explorers",
+"abbreviation": "DEX"
+},
+{
+"groupId": 1412,
+"name": "Next Destinies",
+"abbreviation": "NXD"
+},
+{
+"groupId": 1385,
+"name": "Noble Victories",
+"abbreviation": "NVI"
+},
+{
+"groupId": 1538,
+"name": "BW Trainer Kit: Excadrill & Zoroark",
+"abbreviation": "BLW"
+},
+{
+"groupId": 1424,
+"name": "Emerging Powers",
+"abbreviation": "EPO"
+},
+{
+"groupId": 1401,
+"name": "McDonald's Promos 2011",
+"abbreviation": "M11"
+},
+{
+"groupId": 1400,
+"name": "Black and White",
+"abbreviation": "BLW"
+},
+{
+"groupId": 1407,
+"name": "Black and White Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1415,
+"name": "Call of Legends",
+"abbreviation": "CL"
+},
+{
+"groupId": 1381,
+"name": "Triumphant",
+"abbreviation": "TM"
+},
+{
+"groupId": 1403,
+"name": "Undaunted",
+"abbreviation": "UD"
+},
+{
+"groupId": 1540,
+"name": "HGSS Trainer Kit: Gyarados & Raichu",
+"abbreviation": "PR"
+},
+{
+"groupId": 1399,
+"name": "Unleashed",
+"abbreviation": "UL"
+},
+{
+"groupId": 1402,
+"name": "HeartGold SoulSilver",
+"abbreviation": "HS"
+},
+{
+"groupId": 1453,
+"name": "HGSS Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1433,
+"name": "Rumble",
+"abbreviation": "RUM"
+},
+{
+"groupId": 1391,
+"name": "Arceus",
+"abbreviation": "AR"
+},
+{
+"groupId": 1384,
+"name": "Supreme Victors",
+"abbreviation": "SV"
+},
+{
+"groupId": 1367,
+"name": "Rising Rivals",
+"abbreviation": "RR"
+},
+{
+"groupId": 1406,
+"name": "Platinum",
+"abbreviation": "PL"
+},
+{
+"groupId": 1369,
+"name": "Stormfront",
+"abbreviation": "SF"
+},
+{
+"groupId": 2155,
+"name": "Countdown Calendar Promos",
+"abbreviation": "CCP"
+},
+{
+"groupId": 1417,
+"name": "Legends Awakened",
+"abbreviation": "LA"
+},
+{
+"groupId": 1390,
+"name": "Majestic Dawn",
+"abbreviation": "MD"
+},
+{
+"groupId": 1405,
+"name": "Great Encounters",
+"abbreviation": "GE"
+},
+{
+"groupId": 1380,
+"name": "Secret Wonders",
+"abbreviation": "SW"
+},
+{
+"groupId": 609,
+"name": "DP Training Kit 1 Blue",
+"abbreviation": "PR"
+},
+{
+"groupId": 610,
+"name": "DP Training Kit 1 Gold",
+"abbreviation": "PR"
+},
+{
+"groupId": 1541,
+"name": "DP Trainer Kit: Manaphy & Lucario",
+"abbreviation": "PR"
+},
+{
+"groupId": 1368,
+"name": "Mysterious Treasures",
+"abbreviation": "MT"
+},
+{
+"groupId": 1430,
+"name": "Diamond and Pearl",
+"abbreviation": "DP"
+},
+{
+"groupId": 1421,
+"name": "Diamond and Pearl Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1383,
+"name": "EX Power Keepers",
+"abbreviation": "PK"
+},
+{
+"groupId": 1411,
+"name": "EX Dragon Frontiers",
+"abbreviation": "DF"
+},
+{
+"groupId": 1395,
+"name": "EX Crystal Guardians",
+"abbreviation": "CG"
+},
+{
+"groupId": 1379,
+"name": "EX Holon Phantoms",
+"abbreviation": "HP"
+},
+{
+"groupId": 1378,
+"name": "EX Legend Maker",
+"abbreviation": "LM"
+},
+{
+"groupId": 1429,
+"name": "EX Delta Species",
+"abbreviation": "DS"
+},
+{
+"groupId": 1398,
+"name": "EX Unseen Forces",
+"abbreviation": "UF"
+},
+{
+"groupId": 1410,
+"name": "EX Emerald",
+"abbreviation": "EM"
+},
+{
+"groupId": 1404,
+"name": "EX Deoxys",
+"abbreviation": "DX"
+},
+{
+"groupId": 1428,
+"name": "EX Team Rocket Returns",
+"abbreviation": "RR"
+},
+{
+"groupId": 1853,
+"name": "EX Battle Stadium",
+"abbreviation": "BST"
+},
+{
+"groupId": 1419,
+"name": "EX FireRed & LeafGreen",
+"abbreviation": "RG"
+},
+{
+"groupId": 2214,
+"name": "Kids WB Promos",
+"abbreviation": "KWBP"
+},
+{
+"groupId": 1416,
+"name": "EX Hidden Legends",
+"abbreviation": "HL"
+},
+{
+"groupId": 1377,
+"name": "EX Team Magma vs Team Aqua",
+"abbreviation": "MA"
+},
+{
+"groupId": 1376,
+"name": "EX Dragon",
+"abbreviation": "DR"
+},
+{
+"groupId": 1392,
+"name": "EX Sandstorm",
+"abbreviation": "SS"
+},
+{
+"groupId": 1393,
+"name": "EX Ruby and Sapphire",
+"abbreviation": "RS"
+},
+{
+"groupId": 1372,
+"name": "Skyridge",
+"abbreviation": "SK"
+},
+{
+"groupId": 1397,
+"name": "Aquapolis",
+"abbreviation": "AQ"
+},
+{
+"groupId": 1455,
+"name": "Best of Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1375,
+"name": "Expedition",
+"abbreviation": "EX"
+},
+{
+"groupId": 24493,
+"name": "e-Reader Sample Cards",
+"abbreviation": "SAMPLE"
+},
+{
+"groupId": 1374,
+"name": "Legendary Collection",
+"abbreviation": "LC"
+},
+{
+"groupId": 1444,
+"name": "Neo Destiny",
+"abbreviation": "N4"
+},
+{
+"groupId": 1389,
+"name": "Neo Revelation",
+"abbreviation": "N3"
+},
+{
+"groupId": 648,
+"name": "Southern Islands",
+"abbreviation": "SI"
+},
+{
+"groupId": 1434,
+"name": "Neo Discovery",
+"abbreviation": "N2"
+},
+{
+"groupId": 1396,
+"name": "Neo Genesis",
+"abbreviation": "N1"
+},
+{
+"groupId": 1440,
+"name": "Gym Challenge",
+"abbreviation": "G2"
+},
+{
+"groupId": 1441,
+"name": "Gym Heroes",
+"abbreviation": "G1"
+},
+{
+"groupId": 1373,
+"name": "Team Rocket",
+"abbreviation": "TR"
+},
+{
+"groupId": 605,
+"name": "Base Set 2",
+"abbreviation": "BS2"
+},
+{
+"groupId": 630,
+"name": "Fossil",
+"abbreviation": "FO"
+},
+{
+"groupId": 1418,
+"name": "WoTC Promo",
+"abbreviation": "PR"
+},
+{
+"groupId": 635,
+"name": "Jungle",
+"abbreviation": "JU"
+},
+{
+"groupId": 604,
+"name": "Base Set",
+"abbreviation": "BS"
+},
+{
+"groupId": 1663,
+"name": "Base Set (Shadowless)",
+"abbreviation": "BSS"
+},
+{
+"groupId": 1543,
+"name": "EX Trainer Kit 1: Latias & Latios",
+"abbreviation": "PR"
+},
+{
+"groupId": 1542,
+"name": "EX Trainer Kit 2: Plusle & Minun",
+"abbreviation": "PR"
+},
+{
+"groupId": 1423,
+"name": "Nintendo Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 1422,
+"name": "POP Series 1",
+"abbreviation": "POP"
+},
+{
+"groupId": 1447,
+"name": "POP Series 2",
+"abbreviation": "POP"
+},
+{
+"groupId": 1442,
+"name": "POP Series 3",
+"abbreviation": "POP"
+},
+{
+"groupId": 1452,
+"name": "POP Series 4",
+"abbreviation": "POP"
+},
+{
+"groupId": 1439,
+"name": "POP Series 5",
+"abbreviation": "POP"
+},
+{
+"groupId": 1432,
+"name": "POP Series 6",
+"abbreviation": "POP"
+},
+{
+"groupId": 1414,
+"name": "POP Series 7",
+"abbreviation": "POP"
+},
+{
+"groupId": 1450,
+"name": "POP Series 8",
+"abbreviation": "POP"
+},
+{
+"groupId": 1446,
+"name": "POP Series 9",
+"abbreviation": "POP"
+},
+{
+"groupId": 1938,
+"name": "Alternate Art Promos",
+"abbreviation": "PR"
+},
+{
+"groupId": 2289,
+"name": "Blister Exclusives",
+"abbreviation": "BLE"
+},
+{
+"groupId": 2175,
+"name": "Burger King Promos",
+"abbreviation": "BKP"
+},
+{
+"groupId": 2776,
+"name": "First Partner Pack",
+"abbreviation": "FPP"
+},
+{
+"groupId": 2374,
+"name": "Miscellaneous Cards & Products",
+"abbreviation": "MCAP"
+},
+{
+"groupId": 2205,
+"name": "Pikachu World Collection Promos",
+"abbreviation": "PWCP"
+},
+{
+"groupId": 2332,
+"name": "Professor Program Promos",
+"abbreviation": "PPP"
+}
+]
+}

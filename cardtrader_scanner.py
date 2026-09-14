@@ -48,7 +48,7 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
       | 2026-07-03 (v2.25) | 2026-08-22 (v2.26) | 2026-08-28 (v2.27)
-Versão: v2.27
+Versão: v2.28
     (v2.27 vive no cardtrader_postprocess.py + pricecharting_ref.py — flag
      --pc-refs, mediana de vendas reais do PriceCharting na entrega; este
      scanner não mudou nessa versão.)
@@ -459,6 +459,174 @@ PTCG_SETCODE_TO_TCGCSV_ABBR = {
     "ecard1": "EX",     # Expedition (CT ex)
     "ex1": "RS",        # EX Ruby & Sapphire (CT rs)
     "ex3": "DR",        # EX Dragon (CT dr)
+}
+
+# v2.28 (2026-09-12): código CT → groupId(s) tcgcsv EXPLÍCITOS. Caminho primário
+# da resolução (antes da abbr/nome). Incidente 2026-09-12: com `--provider
+# tcgcsv`, svi/kss/gen/evo saíram SEM referência — só ~21 dos ~130 sets tinham
+# abbr aqui e o resto dependia do fallback por NOME, ambíguo justamente nesses
+# ("Evolutions" ⊂ "Prismatic Evolutions"; "Scarlet & Violet" ⊂ vários groups SV;
+# CT "XY Kalos Starter Set" ≠ tcgcsv "Kalos Starter Set"; GEN = 2 groups). O MYP
+# não sofria porque tem o mapa de abbr ampliado (v5.16) + complemento
+# pokemontcg.io no modo `auto`. groupId é estável e não depende de abbr única
+# (RR, BKP, CL, LTR, GEN e PR são COMPARTILHADAS por >1 group no /groups).
+# Verificado contra o snapshot real de /groups (tests/fixtures/
+# tcgcsv_groups_pokemon.json) — cada comentário é o `name` do group. Cobertura
+# travada por tests/test_tcgcsv_group_map.py (universo do /scan + menu do skill).
+# Tupla com >1 id = set que o TCGplayer divide em groups (subset Radiant
+# Collection com numeração RC própria): o prefill mescla e DESCARTA número
+# presente em >1 group (nunca escolhe um dos preços).
+CT_SET_TO_TCGCSV_GROUP_IDS: dict[str, tuple[int, ...]] = {
+    # Scarlet & Violet + Mega Evolution
+    "svi": (22873,),  # SV01: Scarlet & Violet Base Set
+    "pal": (23120,),  # SV02: Paldea Evolved
+    "obf": (23228,),  # SV03: Obsidian Flames
+    "mew": (23237,),  # SV: Scarlet & Violet 151
+    "par": (23286,),  # SV04: Paradox Rift
+    "paf": (23353,),  # SV: Paldean Fates
+    "tef": (23381,),  # SV05: Temporal Forces
+    "twm": (23473,),  # SV06: Twilight Masquerade
+    "sfa": (23529,),  # SV: Shrouded Fable
+    "scr": (23537,),  # SV07: Stellar Crown
+    "ssp": (23651,),  # SV08: Surging Sparks
+    "pre": (23821,),  # SV: Prismatic Evolutions
+    "jtg": (24073,),  # SV09: Journey Together
+    "dri": (24269,),  # SV10: Destined Rivals
+    "blk": (24325,),  # SV: Black Bolt
+    "wht": (24326,),  # SV: White Flare
+    "meg": (24380,),  # ME01: Mega Evolution
+    "pfl": (24448,),  # ME02: Phantasmal Flames
+    "asc": (24541,),  # ME: Ascended Heroes
+    "por": (24587,),  # ME03: Perfect Order
+    "cri": (24655,),  # ME04: Chaos Rising
+    # Sword & Shield
+    "ssh": (2585,),  # SWSH01: Sword & Shield Base Set
+    "rcl": (2626,),  # SWSH02: Rebel Clash
+    "daa": (2675,),  # SWSH03: Darkness Ablaze
+    "cpa": (2685,),  # Champion's Path
+    "viv": (2701,),  # SWSH04: Vivid Voltage
+    "bst": (2765,),  # SWSH05: Battle Styles
+    "cre": (2807,),  # SWSH06: Chilling Reign
+    "evs": (2848,),  # SWSH07: Evolving Skies
+    "shf": (2754, 2781),  # Shining Fates + Shining Fates: Shiny Vault (SV###)
+    "fst": (2906,),  # SWSH08: Fusion Strike
+    "brs": (2948,),  # SWSH09: Brilliant Stars
+    "astr": (3040,),  # SWSH10: Astral Radiance
+    "lorg": (3118,),  # SWSH11: Lost Origin
+    "sit": (3170,),  # SWSH12: Silver Tempest
+    "crz": (17688,),  # SWSH: Crown Zenith
+    "pkmgo": (3064,),  # Pokemon GO
+    # Sun & Moon
+    "sum": (1863,),  # SM Base Set
+    "gri": (1919,),  # SM - Guardians Rising
+    "bus": (1957,),  # SM - Burning Shadows
+    "slg": (2054,),  # Shining Legends
+    "cinv": (2071,),  # SM - Crimson Invasion
+    "upr": (2178,),  # SM - Ultra Prism
+    "fli": (2209,),  # SM - Forbidden Light
+    "ces": (2278,),  # SM - Celestial Storm
+    "drm": (2295,),  # Dragon Majesty
+    "lot": (2328,),  # SM - Lost Thunder
+    "teu": (2377,),  # SM - Team Up
+    "unb": (2420,),  # SM - Unbroken Bonds
+    "unm": (2464,),  # SM - Unified Minds
+    "hif": (2480, 2594),  # Hidden Fates + Hidden Fates: Shiny Vault (SV##)
+    "cec": (2534,),  # SM - Cosmic Eclipse
+    "det": (2409,),  # Detective Pikachu
+    # XY
+    "xybsp": (1451,),  # XY Promos (abbr PR compartilhada → só por id)
+    "kss": (1522,),  # Kalos Starter Set
+    "flf": (1464,),  # XY - Flashfire
+    "ffi": (1481,),  # XY - Furious Fists
+    "phf": (1494,),  # XY - Phantom Forces
+    "prc": (1509,),  # XY - Primal Clash
+    "dcr": (1525,),  # Double Crisis
+    "ros": (1534,),  # XY - Roaring Skies
+    "aor": (1576,),  # XY - Ancient Origins
+    "bkt": (1661,),  # XY - BREAKthrough
+    "bkp": (1701,),  # XY - BREAKpoint (abbr BKP compartilhada c/ Burger King Promos)
+    "gen": (1728, 1729),  # Generations + Generations: Radiant Collection
+    "fco": (1780,),  # XY - Fates Collide
+    "sts": (1815,),  # XY - Steam Siege
+    "evo": (1842,),  # XY - Evolutions
+    # Black & White
+    "blw": (1400,),  # Black and White
+    "epo": (1424,),  # Emerging Powers
+    "nvi": (1385,),  # Noble Victories
+    "nxd": (1412,),  # Next Destinies
+    "dex": (1386,),  # Dark Explorers
+    "drx": (1394,),  # Dragons Exalted
+    "drv": (1426,),  # Dragon Vault
+    "bcr": (1408,),  # Boundaries Crossed
+    "pls": (1413,),  # Plasma Storm
+    "plf": (1382,),  # Plasma Freeze
+    "plb": (1370,),  # Plasma Blast
+    "ltr": (1409, 1465),  # Legendary Treasures + Legendary Treasures: Radiant Collection
+    # HeartGold & SoulSilver / Diamond & Pearl / Platinum
+    "hgs": (1402,),  # HeartGold SoulSilver
+    "ul": (1399,),  # Unleashed
+    "und": (1403,),  # Undaunted
+    "tri": (1381,),  # Triumphant
+    "clo": (1415,),  # Call of Legends (abbr CL compartilhada)
+    "pdp": (1421,),  # Diamond and Pearl Promos (abbr PR compartilhada)
+    "dp": (1430,),  # Diamond and Pearl
+    "mt": (1368,),  # Mysterious Treasures
+    "sw": (1380,),  # Secret Wonders
+    "ge": (1405,),  # Great Encounters
+    "md": (1390,),  # Majestic Dawn
+    "la": (1417,),  # Legends Awakened
+    "sft": (1369,),  # Stormfront
+    "pl": (1406,),  # Platinum
+    "rr": (1367,),  # Rising Rivals (abbr RR compartilhada c/ EX Team Rocket Returns)
+    "sv": (1384,),  # Supreme Victors
+    "ar": (1391,),  # Arceus
+    # EX / e-Card
+    "rs": (1393,),  # EX Ruby and Sapphire
+    "ss": (1392,),  # EX Sandstorm
+    "dr": (1376,),  # EX Dragon
+    "exma": (1377,),  # EX Team Magma vs Team Aqua
+    "hl": (1416,),  # EX Hidden Legends
+    "rg": (1419,),  # EX FireRed & LeafGreen
+    "trr": (1428,),  # EX Team Rocket Returns
+    "dx": (1404,),  # EX Deoxys
+    "em": (1410,),  # EX Emerald
+    "uf": (1398,),  # EX Unseen Forces
+    "ds": (1429,),  # EX Delta Species
+    "lm": (1378,),  # EX Legend Maker
+    "hp": (1379,),  # EX Holon Phantoms
+    "cg": (1395,),  # EX Crystal Guardians
+    "df": (1411,),  # EX Dragon Frontiers
+    "pk": (1383,),  # EX Power Keepers
+    "ex": (1375,),  # Expedition
+    "aq": (1397,),  # Aquapolis
+    "skg": (1372,),  # Skyridge
+    # WOTC
+    "bs": (604,),  # Base Set
+    "ju": (635,),  # Jungle
+    "fo": (630,),  # Fossil
+    "b2": (605,),  # Base Set 2
+    "tr": (1373,),  # Team Rocket
+    "g1": (1441,),  # Gym Heroes
+    "g2": (1440,),  # Gym Challenge
+    "n1": (1396,),  # Neo Genesis
+    "n2": (1434,),  # Neo Discovery
+    "n3": (1389,),  # Neo Revelation
+    "n4": (1444,),  # Neo Destiny
+    "lc": (1374,),  # Legendary Collection
+    "si": (648,),  # Southern Islands
+    "wiz": (1418,),  # WoTC Promo (abbr PR compartilhada → só por id)
+    "nbsp": (1423,),  # Nintendo Promos (abbr PR compartilhada → só por id)
+    "bog": (1455,),  # Best of Promos (abbr PR compartilhada → só por id)
+}
+
+# v2.28: sets do universo que ficam SEM referência tcgcsv DE PROPÓSITO (motivo
+# obrigatório). A resolução devolve [] pra eles — nem abbr, nem nome.
+TCGCSV_EXCLUDED_CT_SETS: dict[str, str] = {
+    "c25": (
+        "Celebrations: o TCGplayer divide em CLB (1-25) e CCC (Classic "
+        "Collection, numeração original ex. 4/102) — os números colidem e o "
+        "listing CT não diz de qual subset é; mapear seria chutar a carta."
+    ),
 }
 
 # Frete base por tier de seller (EUR — CT é europeu por origem).
@@ -1950,14 +2118,20 @@ def resolve_tcgcsv_group_id(
     (a pokemontcg.io segue como única fonte; sem preço inventado)."""
     if not groups:
         return None
-    # 1) abreviação exata (determinística)
+    # 1) abreviação exata (determinística). v2.28: a abbr também precisa casar
+    # UM group só — GEN/RR/BKP/CL/PR são compartilhadas no /groups e o loop
+    # antigo devolvia o primeiro silenciosamente.
     for setcode in ptcg_setcodes:
         abbr = PTCG_SETCODE_TO_TCGCSV_ABBR.get(setcode)
         if not abbr:
             continue
-        for g in groups:
-            if str(g.get("abbreviation") or "").upper() == abbr.upper():
-                return g.get("groupId")
+        hits = [
+            g.get("groupId") for g in groups
+            if str(g.get("abbreviation") or "").upper() == abbr.upper()
+        ]
+        uniq_abbr = list(dict.fromkeys(h for h in hits if h is not None))
+        if len(uniq_abbr) == 1:
+            return uniq_abbr[0]
     # 2) fallback por nome — exige match ÚNICO
     name_l = (set_name or "").strip().lower()
     if not name_l:
@@ -1968,6 +2142,38 @@ def resolve_tcgcsv_group_id(
     ]
     uniq = list(dict.fromkeys(m for m in matches if m is not None))
     return uniq[0] if len(uniq) == 1 else None
+
+
+def resolve_tcgcsv_group_ids(
+    ct_set_code: str, ptcg_setcodes: list[str], set_name: str, groups: list
+) -> list[int]:
+    """v2.28: código CT → lista de groupIds tcgcsv a pré-carregar.
+
+    Ordem (nenhuma chuta):
+      1. CT_SET_TO_TCGCSV_GROUP_IDS (ids explícitos verificados). Tudo-ou-nada:
+         se algum id do set não está no /groups atual, o mapa explícito é
+         ignorado (um set multi-group carregado pela metade perderia o guard de
+         colisão de número) e a resolução segue pros passos abaixo.
+      2. TCGCSV_EXCLUDED_CT_SETS → [] (sem referência de propósito).
+      3. Resolvedor legado single-group (abbr única → nome único).
+    Retorna [] se nada resolver → set sai sem referência, nunca inventada."""
+    if not groups:
+        return []
+    code = (ct_set_code or "").lower()
+    explicit = CT_SET_TO_TCGCSV_GROUP_IDS.get(code)
+    if explicit:
+        present = {g.get("groupId") for g in groups}
+        missing = [gid for gid in explicit if gid not in present]
+        if not missing:
+            return list(explicit)
+        log.warning(
+            f"  tcgcsv: groupId(s) {missing} de {code} ausentes do /groups — "
+            f"mapa explícito ignorado, tentando abbr/nome único"
+        )
+    if code in TCGCSV_EXCLUDED_CT_SETS:
+        return []
+    gid = resolve_tcgcsv_group_id(ptcg_setcodes, set_name, groups)
+    return [gid] if gid else []
 
 
 class TcgCsvFallbackProvider(PricingProvider):
@@ -2045,8 +2251,10 @@ class TcgCsvFallbackProvider(PricingProvider):
         if not self._groups:
             self._set_index[ct_set_code] = {}
             return False
-        group_id = resolve_tcgcsv_group_id(ptcg_setcodes, set_name, self._groups)
-        if not group_id:
+        group_ids = resolve_tcgcsv_group_ids(
+            ct_set_code, ptcg_setcodes, set_name, self._groups
+        )
+        if not group_ids:
             log.debug(
                 f"tcgcsv: sem groupId ÚNICO p/ {ct_set_code} "
                 f"(ptcg={ptcg_setcodes}, name={set_name!r}) — fallback pulado"
@@ -2054,12 +2262,49 @@ class TcgCsvFallbackProvider(PricingProvider):
             self._set_index[ct_set_code] = {}
             return False
 
-        products = self._get_json(f"{group_id}/products")
-        prices = self._get_json(f"{group_id}/prices")
-        if not products or not prices:
-            self._set_index[ct_set_code] = {}
-            return False
+        # v2.28: set pode abranger >1 group (gen = Generations + Radiant
+        # Collection). Indexa cada group; se QUALQUER um falhar, aborta o set
+        # (índice parcial perderia o guard de colisão abaixo).
+        per_group: list[tuple[dict, dict]] = []
+        for group_id in group_ids:
+            products = self._get_json(f"{group_id}/products")
+            prices = self._get_json(f"{group_id}/prices")
+            if not products or not prices:
+                self._set_index[ct_set_code] = {}
+                return False
+            per_group.append(self._index_group(products, prices))
 
+        from collections import Counter
+        key_count = Counter(k for idx, _ in per_group for k in idx)
+        collisions = {k for k, n in key_count.items() if n > 1}
+        if collisions:
+            log.warning(
+                f"  tcgcsv {ct_set_code}: {len(collisions)} número(s) presentes "
+                f"em >1 group {group_ids} — descartados (ambíguos, sem preço)"
+            )
+        index: dict[str, dict] = {}
+        pid_map: dict[str, dict] = {}
+        for idx, pids in per_group:
+            for key, variants in idx.items():
+                if key in collisions:
+                    continue
+                index[key] = variants
+                pid_map[key] = pids[key]
+        self._set_index[ct_set_code] = index
+        self._pid_index[ct_set_code] = pid_map
+        if index:
+            # v2.26: a mesma classe atende fallback (v2.23) e primário
+            # (--provider tcgcsv) — mensagem neutra quanto ao papel.
+            log.info(
+                f"  💾 tcgcsv {ct_set_code} (group "
+                f"{'+'.join(str(g) for g in group_ids)}): {len(index)} "
+                f"cards indexados"
+            )
+        return bool(index)
+
+    @staticmethod
+    def _index_group(products: dict, prices: dict) -> tuple[dict, dict]:
+        """Índice de UM group tcgcsv: (numerador→variantes, numerador→variante→pid)."""
         # productId → numerador do collector number (extendedData "Number")
         num_by_pid: dict[int, str] = {}
         for p in products.get("results") or []:
@@ -2105,16 +2350,7 @@ class TcgCsvFallbackProvider(PricingProvider):
                 # MESMA escolha last-wins do _set_index → o productId guardado é o
                 # do MESMO card cujo preço será usado. Só identidade p/ link.
                 pid_map[key] = {v: pid for v in variants}
-        self._set_index[ct_set_code] = index
-        self._pid_index[ct_set_code] = pid_map
-        if index:
-            # v2.26: a mesma classe atende fallback (v2.23) e primário
-            # (--provider tcgcsv) — mensagem neutra quanto ao papel.
-            log.info(
-                f"  💾 tcgcsv {ct_set_code} (group {group_id}): {len(index)} "
-                f"cards indexados"
-            )
-        return bool(index)
+        return index, pid_map
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,

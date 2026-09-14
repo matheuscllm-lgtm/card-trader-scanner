@@ -4,6 +4,41 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-09-12 — v2.28: mapa explícito CT → groupId tcgcsv (fim dos sets "sem referência" no `--provider tcgcsv`)
+
+**Por quê:** scan G1+G4 de 2026-09-12 com a pokemontcg.io em 500/502 rodou com
+`--provider tcgcsv` e 4 sets saíram SEM preço de referência: `svi` (Scarlet &
+Violet), `kss` (XY Kalos Starter Set), `gen` (Generations) e `evo` (Evolutions).
+Causa: o CT só tinha abreviação tcgcsv (`PTCG_SETCODE_TO_TCGCSV_ABBR`) pra ~21
+dos ~130 sets do universo; o resto dependia do fallback por NOME, ambíguo
+justamente nesses casos ("Evolutions" ⊂ "Prismatic Evolutions"; "Scarlet &
+Violet" ⊂ vários groups SV; CT "XY Kalos Starter Set" ≠ tcgcsv "Kalos Starter
+Set"; Generations = 2 groups com a MESMA abbr GEN). O MYP não sofria porque tem o
+mapa de abbr ampliado (v5.16, 106 entradas) + complemento pokemontcg.io no modo
+`auto`.
+
+**O que mudou:**
+
+- `CT_SET_TO_TCGCSV_GROUP_IDS`: código CT → groupId(s) tcgcsv explícitos pros
+  132 códigos do universo do `/scan` + menu do skill (verificados contra o
+  snapshot real de `/groups`, nome do group em comentário). Caminho primário de
+  `resolve_tcgcsv_group_ids`; tudo-ou-nada (id ausente do dump → cai no legado).
+- `TCGCSV_EXCLUDED_CT_SETS`: `c25` (Celebrations) fica sem referência DE
+  PROPÓSITO — CLB e Classic Collection têm números que colidem.
+- `resolve_tcgcsv_group_id`: o passo por abreviação agora também é
+  unique-only (GEN/RR/BKP/CL/PR são compartilhadas; antes pegava o primeiro).
+- `prefill_set` suporta set multi-group (`gen`/`ltr` + Radiant Collection RC##;
+  `hif`/`shf` + Shiny Vault SV## — as listings caras que antes davam miss em
+  série): indexa cada group e DESCARTA número presente em >1 group (nunca
+  escolhe um dos preços). Qualquer group falhando aborta o set.
+- `tcgcsv_productid.py` (join DH) usa a mesma resolução explícita, só pra set
+  de 1 group (a chave dele é só-dígitos; multi-group → sem productId).
+- 12 testes novos em `tests/test_tcgcsv_group_map.py` + fixture
+  `tests/fixtures/tcgcsv_groups_pokemon.json` (snapshot /groups).
+
+**Prova ao vivo (2026-09-12, `--provider tcgcsv --sets svi kss gen evo`):**
+kss 39, gen 115 (1728+1729), evo 113, svi 258 cards indexados — antes: 0.
+
 ## 2026-08-28 — v2.27: `--pc-refs N` — coluna Ref PC (mediana de vendas reais do PriceCharting) na entrega
 
 **Por quê:** no scan vintage de 2026-08-27 as maiores "margens" eram miragem da
