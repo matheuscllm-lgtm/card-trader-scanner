@@ -41,6 +41,7 @@ Invariantes que valem para TODOS os scanners:
 - **Nunca recomendar compra** — o scanner reporta margem, flags e fontes; a decisão de capital é do operador.
 - **Entrega = tabela markdown no chat** (nunca XLSX/CSV por padrão), gerada pela ferramenta do repo — nunca montada à mão —, mostrando TODAS as linhas (aprovadas + rejeitadas). Coluna `Carta` = nome + número; coluna `Links` combinada = `[oferta](url) · [TCG/referência](url)`.
 - ⚠️ **Convenção de threshold:** percentual inteiro (`30`) = MYP, Liga, eBay; fração (`0.30`) = CardTrader, COMC, Selados.
+- **Sem check-ins automáticos de PR** (operador, 2026-09-12): depois de abrir um PR, a sessão reporta o link no chat e **para** — sem `subscribe_pr_activity`, sem check-in agendado (`send_later`/Routine/cron), sem poll de CI/review. Assinatura de PR criada pelo harness deve ser cancelada. Exceção única: pedido explícito do operador ("acompanha esse PR").
 
 Erros recorrentes (3 famílias — detalhe no manual):
 
