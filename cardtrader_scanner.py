@@ -639,6 +639,34 @@ CT_SET_TO_TCGCSV_GROUP_IDS: dict[str, tuple[int, ...]] = {
 
 # v2.28: sets do universo que ficam SEM referência tcgcsv DE PROPÓSITO (motivo
 # obrigatório). A resolução devolve [] pra eles — nem abbr, nem nome.
+# v2.29: códigos CT de sets JAPONESES que colidem com setcodes pokemontcg.io
+# (verificado na API CT em 2026-10-03). O scanner usava o código CT como setcode
+# pokemontcg.io por identidade → `sv8` (JP Super Electric Breaker) virava Surging
+# Sparks e Palossand ex JP 057 era precificada como Pikachu ex 057/191. Estes
+# códigos NUNCA resolvem por identidade (pokemontcg.io nem tcgcsv): sem mapa
+# explícito → sem referência, nunca a carta de outro set.
+CT_JP_SETCODE_COLLISIONS: dict[str, str] = {
+    "sv3": "Ruler of the Black Flame (JP) ≠ Obsidian Flames",
+    "sv6": "Mask of Change (JP) ≠ Twilight Masquerade",
+    "sv7": "Stellar Miracle (JP) ≠ Stellar Crown",
+    "sv8": "Super Electric Breaker (JP) ≠ Surging Sparks",
+    "sv9": "Battle Partners (JP) ≠ Journey Together",
+    "sv10": "The Glory of Team Rocket (JP) ≠ Destined Rivals",
+}
+
+
+def ptcg_expected_sets(ct_set_code: str) -> set[str]:
+    """setcodes pokemontcg.io aceitos pra um código CT: o próprio código (exceto
+    colisão JP) + aliases de SET_ALIAS_TO_PTCG."""
+    code = (ct_set_code or "").lower()
+    out: set[str] = set()
+    if code and code not in CT_JP_SETCODE_COLLISIONS:
+        out.add(code)
+    for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
+        out.add(alias.lower())
+    return out
+
+
 TCGCSV_EXCLUDED_CT_SETS: dict[str, str] = {
     "c25": (
         "Celebrations: o TCGplayer divide em CLB (1-25) e CCC (Classic "
@@ -1878,9 +1906,10 @@ class PokemonTcgIoProvider(PricingProvider):
         # SET_ALIAS_TO_PTCG. Sem alias → só o code CT (comportamento Layer 1
         # puro). Com alias → varia: pra `ju` aceita {`ju`, `base2`}.
         ct_code = (set_code or "").lower()
-        expected_sets: set[str] = {ct_code} if ct_code else set()
-        for alias in self.SET_ALIAS_TO_PTCG.get(ct_code, []):
-            expected_sets.add(alias.lower())
+        # v2.29: sem identidade pra código CT de set JP que colide (sv8 ≠ SSP).
+        expected_sets: set[str] = ptcg_expected_sets(ct_code)
+        if not expected_sets:
+            return None
 
         # Cada tupla: (query, strict_set_check).
         # Tentamos uma query por set candidato (CT code + cada alias).
@@ -2199,7 +2228,7 @@ def resolve_tcgcsv_group_ids(
             f"  tcgcsv: groupId(s) {missing} de {code} ausentes do /groups — "
             f"mapa explícito ignorado, tentando abbr/nome único"
         )
-    if code in TCGCSV_EXCLUDED_CT_SETS:
+    if code in TCGCSV_EXCLUDED_CT_SETS or code in CT_JP_SETCODE_COLLISIONS:
         return []
     gid = resolve_tcgcsv_group_id(ptcg_setcodes, set_name, groups)
     return [gid] if gid else []
@@ -3626,7 +3655,9 @@ class Scanner:
         Reusa o mapa SET_ALIAS_TO_PTCG do PokemonTcgIoProvider (CT code +
         aliases). É o 1º salto da ponte CT→tcgcsv (o 2º é abbr tcgcsv)."""
         code = (ct_set_code or "").lower()
-        out = [code] if code else []
+        # v2.29: código CT de set JP que colide com setcode pokemontcg.io não
+        # entra por identidade (ver CT_JP_SETCODE_COLLISIONS).
+        out = [code] if code and code not in CT_JP_SETCODE_COLLISIONS else []
         for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
             if alias.lower() not in out:
                 out.append(alias.lower())
