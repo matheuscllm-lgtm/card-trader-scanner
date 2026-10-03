@@ -4,6 +4,47 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-10-03 — v2.29: `--language` no scanner + `--ratio-column`/`--min-ratio` no postprocess (scan de ofertas em chinês)
+
+**Por quê:** pedido do operador (2026-10-02): listar cartas Pokémon RAW em
+**chinês** à venda no CardTrader que estejam **≥ 4× mais baratas** que a mesma
+carta inglesa no TCGplayer. O scanner só varria inglês — o idioma era a
+constante `LANGUAGE_FILTER = "en"`, sem flag.
+
+**Sonda da API (2026-10-03, antes de codar):** a oferta CT traz o idioma em
+`properties_hash.pokemon_language`; valores reais em `mew` (151): en 16.775 /
+it 18.197 / de / fr / es / pt / **zh-CN 5** / None 122. `?language=zh-CN` filtra
+no servidor (6 ofertas; `zh`, `cn`, `chinese` também casam — a API é
+case-insensitive; `zh-TW` = 0). Em `svi` e `paf` = 0 ofertas chinesas. **O grosso
+do chinês no CT vive em expansões PRÓPRIAS** (`z-chp`, `cn-zh-p`, `cs35`,
+`svp-c`, `30thc`, `m-p-cs`, `s-p`, `sm-p`, `sl`…), cuja numeração NÃO casa com
+os sets ingleses — fora do escopo deste scan (sem referência EN casável por
+set+número).
+
+**O que mudou:**
+
+- `cardtrader_scanner.py`: `--language <código>` (default `en`, comportamento
+  histórico intacto). Valor cru vai pra API; no cliente a comparação é
+  lowercased (`Listing.language` chega `.lower()`). Aplicado nas **3**
+  chamadas: `_passes_filters`, `list_listings_by_expansion` e a validação
+  per-blueprint (`--validate-top`) — sem a terceira, o "preço real" viria da
+  oferta inglesa. `Stats` ganha `language_filter`. Idioma ≠ en loga aviso: o
+  número é **razão de preço EN/<idioma>**, não margem de revenda.
+- `cardtrader_postprocess.py`: `--ratio-column` insere "Razão EN/<IDIOMA>"
+  (TCG US$ ÷ CT US$) logo após "Margem %" — rótulo derivado da coluna Idioma
+  (único idioma ≠ EN) ou genérico "Razão TCG/CT"; rodapé honesto ("não é
+  margem de revenda"). `--min-ratio X` corta a entrega a linhas com razão ≥ X
+  (corte declarado no título; **0 linha → mensagem explícita, nunca a tabela
+  near-miss**). Margem, classificação, buckets e os 2 links por linha intactos.
+- `tests/test_language_flag.py`: 13 testes (default en, CLI, filtro
+  case-insensitive, idioma nas 3 chamadas, Stats, header/valores/rodapé da
+  coluna, corte, 0-linha honesto, flags da CLI). Suíte: 335 → **348**.
+
+**Smoke real (2026-10-03, `mew --language zh-CN --provider tcgcsv`):** 4 ofertas
+zh-CN ≥ US$10 precificadas (Chansey/Dodrio/Beedrill/Pinsir, US$25–30 vs ref EN
+US$0,16–0,37 → razão 0,0×); `--min-ratio 4` devolveu a mensagem de 0 linha.
+Pipeline ponta a ponta provado.
+
 ## 2026-09-12 — v2.28: mapa explícito CT → groupId tcgcsv (fim dos sets "sem referência" no `--provider tcgcsv`)
 
 **Por quê:** scan G1+G4 de 2026-09-12 com a pokemontcg.io em 500/502 rodou com

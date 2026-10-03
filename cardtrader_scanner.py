@@ -48,7 +48,7 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
       | 2026-07-03 (v2.25) | 2026-08-22 (v2.26) | 2026-08-28 (v2.27)
-Versão: v2.28
+Versão: v2.29
     (v2.27 vive no cardtrader_postprocess.py + pricecharting_ref.py — flag
      --pc-refs, mediana de vendas reais do PriceCharting na entrega; este
      scanner não mudou nessa versão.)
