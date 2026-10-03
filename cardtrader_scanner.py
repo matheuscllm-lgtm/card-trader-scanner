@@ -2936,8 +2936,17 @@ class Scanner:
                  max_consecutive_misses: int = 0,
                  keep_all_priced: bool = True,
                  tcgcsv: Optional["TcgCsvFallbackProvider"] = None,
-                 tcgcsv_fallback: bool = True):
+                 tcgcsv_fallback: bool = True,
+                 language: str = LANGUAGE_FILTER):
         self.ct = ct
+        # v2.29: idioma das OFERTAS CT (`properties_hash.pokemon_language`).
+        # Default "en" = comportamento histórico. Valor cru vai pro servidor
+        # (`?language=zh-CN`, aceito case-insensitive pela API); no cliente a
+        # comparação é lowercased porque `Listing.language` chega .lower().
+        # A REFERÊNCIA de preço continua sendo a carta INGLESA no TCGplayer —
+        # com idioma ≠ en o número é razão de preço EN/<idioma>, não margem de
+        # revenda (ver `--ratio-column` no postprocess).
+        self.language = language
         self.pricing = pricing
         self.cache = cache
         # v2.23: fonte de FALLBACK tcgcsv. Só consultada quando a pokemontcg.io
@@ -3111,7 +3120,10 @@ class Scanner:
     def _passes_filters(self, l: Listing) -> bool:
         if l.condition != CONDITION_FILTER:
             return False
-        if LANGUAGE_FILTER and l.language != LANGUAGE_FILTER:
+        # v2.29: idioma configurável (--language); stubs antigos sem o atributo
+        # caem no default histórico "en".
+        lang = getattr(self, "language", LANGUAGE_FILTER)
+        if lang and l.language != lang.lower():
             return False
         if self.exclude_graded and l.graded:
             return False
@@ -3249,11 +3261,15 @@ class Scanner:
                                     timeout_s=effective_timeout_s):
             return
 
-        # Puxa todas listings EN da expansão de uma vez (muito + eficiente que
-        # 1 chamada por blueprint — economiza de 400+ calls para 1).
+        # Puxa todas listings do idioma configurado (default EN) da expansão de
+        # uma vez (muito + eficiente que 1 chamada por blueprint — economiza de
+        # 400+ calls para 1). v2.29: idioma vem de --language; registrado em
+        # Stats pra auditoria do XLSX.
+        lang = getattr(self, "language", LANGUAGE_FILTER)
+        self.stats["language_filter"] = lang
         try:
             raw_listings = self.ct.list_listings_by_expansion(
-                exp_id, language=LANGUAGE_FILTER, deadline_ts=deadline_ts
+                exp_id, language=lang, deadline_ts=deadline_ts
             )
         except TimeoutError as e:
             log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
@@ -3747,7 +3763,9 @@ class Scanner:
         bp_listings: dict[int, Optional[list[dict]]] = {}
         for bp_id in unique_bp_ids:
             try:
-                listings = self.ct.list_listings_by_blueprint(bp_id, language=LANGUAGE_FILTER)
+                listings = self.ct.list_listings_by_blueprint(
+                    bp_id, language=getattr(self, "language", LANGUAGE_FILTER)
+                )
                 if isinstance(listings, dict):
                     listings = [l for sub in listings.values() for l in sub]
                 bp_listings[bp_id] = listings
@@ -4087,6 +4105,14 @@ def parse_args():
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
                    help=f"Preço mínimo por carta em USD (default: {MIN_PRICE_USD})")
+    p.add_argument("--language", type=str, default=LANGUAGE_FILTER,
+                   help=("v2.29: idioma das OFERTAS no CT (properties_hash."
+                         "pokemon_language). Default 'en' (comportamento "
+                         "histórico). Valores reais vistos na API: en, it, de, "
+                         "fr, es, pt, zh-CN. ⚠️ A referência TCGplayer continua "
+                         "sendo a carta INGLESA: com idioma ≠ en a 'margem' é "
+                         "razão de preço EN/<idioma>, não margem de revenda — "
+                         "entregue com `cardtrader_postprocess.py --ratio-column`."))
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
     p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
@@ -4482,7 +4508,14 @@ def main():
         keep_all_priced=not args.opportunities_only,
         tcgcsv=tcgcsv_provider,
         tcgcsv_fallback=tcgcsv_fallback_on,
+        language=args.language,
     )
+    if args.language.lower() != LANGUAGE_FILTER:
+        log.warning(
+            f"🌐 --language {args.language}: ofertas CT em '{args.language}', "
+            f"referência TCGplayer da carta INGLESA → o número é RAZÃO de preço "
+            f"EN/{args.language.upper()}, não margem de revenda."
+        )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.
     # XLSX final continua no --output (default SCRIPT_DIR / Drive). Só o JSONL

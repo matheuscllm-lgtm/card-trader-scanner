@@ -1076,12 +1076,47 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
     return resolved, attempted
 
 
+def _ratio_header_label(deals: pd.DataFrame) -> str:
+    """Nome da coluna de razão: 'Razão EN/<IDIOMA>' quando TODAS as linhas são
+    de um único idioma ≠ EN (scan --language zh-CN → 'Razão EN/ZH-CN'); senão
+    o genérico 'Razão TCG/CT'. Nunca inventa idioma: sem coluna → genérico."""
+    if "language" in deals.columns:
+        langs = {str(v).strip().upper() for v in deals["language"].dropna()
+                 if str(v).strip() and str(v).strip().lower() != "nan"}
+        if len(langs) == 1:
+            (lang,) = tuple(langs)
+            if lang != "EN":
+                return f"Razão EN/{lang}"
+    return "Razão TCG/CT"
+
+
+def _price_ratio(tcg_usd, ct_usd):
+    """TCG US$ ÷ CT US$ (razão de PREÇO). None se faltar lado ou CT ≤ 0 —
+    nunca inventa."""
+    if tcg_usd is None or ct_usd is None:
+        return None
+    try:
+        ct = float(ct_usd)
+        tcg = float(tcg_usd)
+    except (TypeError, ValueError):
+        return None
+    if ct <= 0 or pd.isna(ct) or pd.isna(tcg):
+        return None
+    return tcg / ct
+
+
+def _fmt_ratio(v) -> str:
+    return "—" if v is None else f"{v:.1f}×"
+
+
 def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
     fx_usd_brl: float | None = None,
     top_n: int | None = None,
     show_dh: bool = False,
+    show_ratio: bool = False,
+    min_ratio: float | None = None,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
 
@@ -1110,6 +1145,36 @@ def build_delivery_markdown(
         deals = work.copy()
     if "net_margin" in deals.columns:
         deals = deals.sort_values("net_margin", ascending=False)
+
+    def _ct_usd(row):
+        # live_usd direto se o raw trouxer; senão converte BRL via FX.
+        for k in ("live_usd", "ct_price_usd"):
+            if k in row and pd.notna(row.get(k)):
+                return float(row[k])
+        live_brl = row.get("live_brl")
+        if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
+            return float(live_brl) / float(fx_usd_brl)
+        return None
+
+    def _tcg_usd(row):
+        v = row.get("reference_price_usd")
+        try:
+            return float(v) if pd.notna(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    # v2.29: razão de PREÇO TCG US$ ÷ CT US$ (--ratio-column / --min-ratio).
+    # É uma coluna/corte ADICIONAL: margem, classificação e buckets canônicos
+    # ficam intactos. Uso típico: scan `--language zh-CN` — a referência é a
+    # carta INGLESA, logo o número é "quantas vezes a oferta chinesa é mais
+    # barata que a inglesa", NÃO margem de revenda.
+    ratio_label = _ratio_header_label(deals) if show_ratio else None
+    ratio_cut_applied = False
+    if min_ratio is not None:
+        ratios = [_price_ratio(_tcg_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
+        keep = [rt is not None and rt >= float(min_ratio) for rt in ratios]
+        deals = deals[pd.Series(keep, index=deals.index)] if len(deals) else deals
+        ratio_cut_applied = True
     deals = deals.head(top_n) if top_n else deals
     deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
 
@@ -1117,6 +1182,14 @@ def build_delivery_markdown(
         f"### CardTrader — entrega (top {len(deals)} por margem · "
         f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
     )
+    if ratio_cut_applied:
+        title += f" · corte razão ≥ {float(min_ratio):.1f}×"
+    if ratio_cut_applied and deals.empty:
+        return title + (
+            f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× — nenhuma oferta "
+            "precificada é tão mais barata que a referência inglesa. Linhas abaixo "
+            "do corte NÃO são mostradas como resultado.)_"
+        )
     if deals.empty:
         # Sob o contrato de entrega v2.22, o scanner persiste TODO listing
         # precificado no XLSX (mesmo abaixo do threshold). Logo, df vazio aqui
@@ -1144,6 +1217,8 @@ def build_delivery_markdown(
         pc_at = headers.index("TCG US$") + 1
         headers.insert(pc_at, "Margem PC %")
         headers.insert(pc_at, "Ref PC US$")
+    if show_ratio:
+        headers.insert(2, ratio_label)  # após "#" (0) e "Margem %" (1)
     if show_dh:
         headers.insert(2, "DH")  # após "#" (0) e "Margem %" (1)
     header = "| " + " | ".join(headers) + " |"
@@ -1156,24 +1231,10 @@ def build_delivery_markdown(
         )
     lines += ["", header, sep]
 
-    def _ct_usd(row):
-        # live_usd direto se o raw trouxer; senão converte BRL via FX.
-        for k in ("live_usd", "ct_price_usd"):
-            if k in row and pd.notna(row.get(k)):
-                return float(row[k])
-        live_brl = row.get("live_brl")
-        if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
-            return float(live_brl) / float(fx_usd_brl)
-        return None
-
     for rank, (_, row) in enumerate(deals.iterrows(), 1):
         ct_usd = _ct_usd(row)
-        tcg_usd = row.get("reference_price_usd")
-        try:
-            tcg_usd = float(tcg_usd) if pd.notna(tcg_usd) else None
-        except (TypeError, ValueError):
-            tcg_usd = None
-        dif = (tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
+        tcg_usd = _tcg_usd(row)
+        dif =(tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
         # Flag por linha: near-miss → "abaixo do limiar"; REVISAR (zona cinza /
         # suspeito de margem inflada) → "validar manual"; COMPRA → célula limpa.
         # Mesma classificação do XLSX.
@@ -1217,9 +1278,18 @@ def build_delivery_markdown(
             pc_cell_at = _DELIVERY_HEADERS.index("TCG US$") + 1
             cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
             cells.insert(pc_cell_at, reference_price(_fmt_usd(pc_med) or "—", row.get("pc_url")))
+        if show_ratio:
+            cells.insert(2, _fmt_ratio(_price_ratio(tcg_usd, ct_usd)))
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
+    if show_ratio:
+        lines.append(
+            f"\n_{ratio_label} = TCG US$ (referência da carta INGLESA, NM) ÷ "
+            "CT US$ (oferta no idioma escaneado). É razão de PREÇO entre dois "
+            "mercados — não é margem de revenda: carta em outro idioma não vende "
+            "pelo preço TCGplayer da inglesa. '—' = sem um dos lados._"
+        )
     if show_dh:
         lines.append(
             "\n_DH = 2ª opinião Double Holo 0-100 (50=neutro), não entra na "
@@ -1257,7 +1327,8 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                  fx_usd_brl: float | None = None, top_md: int | None = None,
                  dh_signals: dict | None = None, pid_resolver=None,
-                 pc_refs: int = 0) -> str:
+                 pc_refs: int = 0, show_ratio: bool = False,
+                 min_ratio: float | None = None) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
     # Referência PriceCharting (--pc-refs N): anexa a mediana de vendas reais às
     # N linhas de maior margem da entrega. I/O de rede (2 requests/linha, com
@@ -1351,7 +1422,8 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     # Formato aprovado 2026-06-09. A entrega ao operador é a TABELA no chat;
     # o .md sidecar é só conveniência (mesmo conteúdo). XLSX segue cru/colunar.
     md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md,
-                                 show_dh=dh_signals is not None)
+                                 show_dh=dh_signals is not None,
+                                 show_ratio=show_ratio, min_ratio=min_ratio)
     md_path = output_path.with_suffix(".md")
     try:
         md_path.write_text(md + "\n", encoding="utf-8")
@@ -1391,6 +1463,16 @@ def main():
                         "de maior margem da entrega + 'Margem PC %%' + link [PC]. "
                         "Sinal-only (margem/decisão canônicas intactas). Faz rede "
                         "(2 req/linha, cache 24h em outputs/pc_cache). 0 = off.")
+    p.add_argument("--ratio-column", action="store_true",
+                   help=("v2.29: adiciona a coluna 'Razão EN/<IDIOMA>' (TCG US$ ÷ "
+                         "CT US$) logo após 'Margem %%'. Para scans com "
+                         "`--language ≠ en`: a referência é a carta INGLESA, então "
+                         "o número é razão de PREÇO entre mercados, não margem de "
+                         "revenda. Margem/decisão/buckets canônicos intactos."))
+    p.add_argument("--min-ratio", type=float, default=None, metavar="X",
+                   help=("v2.29: só entrega linhas com razão TCG/CT ≥ X (ex.: 4 = "
+                         "oferta ≤ 25%% da referência). Corte explícito no título; "
+                         "0 linhas → mensagem honesta, nunca a tabela near-miss."))
     p.add_argument("--no-pid-resolve", action="store_true",
                    help=("Desliga a resolução OFFLINE de productId via tcgcsv "
                          "(Fix(2)) usada p/ casar DH nas linhas via pokemontcg.io. "
@@ -1444,7 +1526,9 @@ def main():
                       f"só linhas com link tcgplayer.com/product casam.")
     write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md,
                  dh_signals=dh_signals, pid_resolver=pid_resolver,
-                 pc_refs=args.pc_refs)
+                 pc_refs=args.pc_refs,
+                 show_ratio=bool(args.ratio_column or args.min_ratio is not None),
+                 min_ratio=args.min_ratio)
 
 if __name__ == "__main__":
     main()
