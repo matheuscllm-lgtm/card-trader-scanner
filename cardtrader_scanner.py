@@ -384,7 +384,25 @@ CT_POKEMON_GAME_ID = 5
 # Defaults do scanner (sobrescritos por CLI)
 MARGIN_THRESHOLD = 0.30          # 30% margem mínima (requisito do usuário)
 MIN_PRICE_USD = 10.0             # filtro extra do usuário
-LANGUAGE_FILTER = "en"           # apenas inglês
+LANGUAGE_FILTER = "en"           # apenas inglês (default; --language muda)
+# v2.29: a API aceita apelidos no `?language=` (zh/cn/chinese casam zh-CN), mas
+# a OFERTA traz o código canônico (`pokemon_language: "zh-CN"`). Sem normalizar,
+# `--language zh` passaria no servidor e filtraria TUDO no cliente, em silêncio.
+LANGUAGE_ALIASES = {
+    "zh": "zh-CN", "cn": "zh-CN", "zh-cn": "zh-CN", "chinese": "zh-CN",
+    "zh-tw": "zh-TW", "english": "en", "italian": "it", "german": "de",
+    "french": "fr", "spanish": "es", "portuguese": "pt", "japanese": "jp",
+}
+
+
+def normalize_language(code: Optional[str]) -> str:
+    """Código de idioma como a API devolve na oferta ("en", "zh-CN"...).
+    Apelido conhecido → canônico; desconhecido → lowercased (a API é
+    case-insensitive e `Listing.language` chega .lower())."""
+    low = (code or "").strip().lower()
+    return LANGUAGE_ALIASES.get(low, low)
+
+
 CONDITION_FILTER = "Near Mint"   # apenas NM
 EXCLUDE_GRADED = True            # exclui PSA/BGS/CGC
 # v2.20: versão da LÓGICA de pricing/variante embutida na chave do price_cache.
@@ -657,6 +675,17 @@ CONFIG_FILE = SCRIPT_DIR / "config.yaml"
 # (run 25838570927 de 2026-05-14) foi um set unico travado 24m53s sem progresso.
 # Solucao: wall-clock timeout per-set + persistir sets travados em skip-list.
 SKIP_LIST_FILE = SCRIPT_DIR / "scanner_skip_list.json"
+
+
+def skip_list_path(state_dir: Path, language: str = LANGUAGE_FILTER) -> Path:
+    """v2.29: skip-list POR IDIOMA. Um run `--language zh-CN` que estoura
+    timeout/no_coverage gravaria o set na skip-list global e os runs ingleses
+    canônicos passariam a pulá-lo em silêncio. Idioma default mantém o nome
+    histórico; os demais ganham sufixo (`scanner_skip_list.zh-cn.json`)."""
+    lang = normalize_language(language)
+    if lang == LANGUAGE_FILTER:
+        return Path(state_dir) / "scanner_skip_list.json"
+    return Path(state_dir) / f"scanner_skip_list.{lang.lower()}.json"
 DEFAULT_PER_SET_TIMEOUT_MIN = 8  # conservador: pior caso medido foi 7min/set
 
 # v2.14 (2026-06-15): overrides de timeout por SET (vintage churn fix).
@@ -2924,6 +2953,10 @@ class CheckpointWriter:
 
 
 class Scanner:
+    # v2.29: default de classe = inglês. Explícito (não `getattr` nos call-sites)
+    # e ainda tolera stubs `Scanner.__new__` dos testes antigos.
+    language: str = LANGUAGE_FILTER
+
     def __init__(self, ct: CardTraderClient, pricing: PricingProvider, cache: Cache,
                  threshold: float = MARGIN_THRESHOLD,
                  min_price_usd: float = MIN_PRICE_USD,
@@ -2940,13 +2973,12 @@ class Scanner:
                  language: str = LANGUAGE_FILTER):
         self.ct = ct
         # v2.29: idioma das OFERTAS CT (`properties_hash.pokemon_language`).
-        # Default "en" = comportamento histórico. Valor cru vai pro servidor
-        # (`?language=zh-CN`, aceito case-insensitive pela API); no cliente a
-        # comparação é lowercased porque `Listing.language` chega .lower().
-        # A REFERÊNCIA de preço continua sendo a carta INGLESA no TCGplayer —
-        # com idioma ≠ en o número é razão de preço EN/<idioma>, não margem de
-        # revenda (ver `--ratio-column` no postprocess).
-        self.language = language
+        # Default "en" = comportamento histórico. Normalizado (apelidos →
+        # canônico) e enviado à API; no cliente a comparação é lowercased porque
+        # `Listing.language` chega .lower(). A REFERÊNCIA de preço continua
+        # sendo a carta INGLESA no TCGplayer — com idioma ≠ en o número é razão
+        # de preço EN/<idioma>, não margem de revenda (`--ratio-column`).
+        self.language = normalize_language(language)
         self.pricing = pricing
         self.cache = cache
         # v2.23: fonte de FALLBACK tcgcsv. Só consultada quando a pokemontcg.io
@@ -3000,6 +3032,10 @@ class Scanner:
         self.usd_brl = get_usd_to_brl(cache)
         self.eur_brl = get_eur_to_brl(cache)
         self.stats = {
+            # v2.29: auditoria — em que idioma o scan rodou. Registrado AQUI
+            # (não só em scan_expansion) pra constar na aba Stats mesmo quando
+            # todo set é pulado/estoura antes de listar ofertas.
+            "language_filter": self.language,
             "expansions_scanned": 0,
             "listings_fetched": 0,
             "listings_after_filters": 0,
@@ -3120,10 +3156,8 @@ class Scanner:
     def _passes_filters(self, l: Listing) -> bool:
         if l.condition != CONDITION_FILTER:
             return False
-        # v2.29: idioma configurável (--language); stubs antigos sem o atributo
-        # caem no default histórico "en".
-        lang = getattr(self, "language", LANGUAGE_FILTER)
-        if lang and l.language != lang.lower():
+        # v2.29: idioma configurável (--language); `Listing.language` vem .lower().
+        if self.language and l.language != self.language.lower():
             return False
         if self.exclude_graded and l.graded:
             return False
@@ -3263,10 +3297,8 @@ class Scanner:
 
         # Puxa todas listings do idioma configurado (default EN) da expansão de
         # uma vez (muito + eficiente que 1 chamada por blueprint — economiza de
-        # 400+ calls para 1). v2.29: idioma vem de --language; registrado em
-        # Stats pra auditoria do XLSX.
-        lang = getattr(self, "language", LANGUAGE_FILTER)
-        self.stats["language_filter"] = lang
+        # 400+ calls para 1). v2.29: idioma vem de --language.
+        lang = self.language
         try:
             raw_listings = self.ct.list_listings_by_expansion(
                 exp_id, language=lang, deadline_ts=deadline_ts
@@ -3290,15 +3322,27 @@ class Scanner:
         # moedas diferentes — comparar cents direto seria errado (1 cent BRL
         # ≠ 1 cent EUR).
         best_by_uid: dict[str, Listing] = {}
+        langs_seen: dict[str, int] = {}
         for raw in raw_listings:
             l = self._parse_listing(raw, bp_index)
             if not l:
                 continue
+            langs_seen[l.language or "(vazio)"] = langs_seen.get(l.language or "(vazio)", 0) + 1
             if not self._passes_filters(l):
                 continue
             existing = best_by_uid.get(l.uid)
             if not existing or l.price_brl < existing.price_brl:
                 best_by_uid[l.uid] = l
+
+        # v2.29: diagnóstico do "verde mas vazio" por idioma — o servidor
+        # devolveu ofertas mas NENHUMA bateu o idioma configurado (apelido não
+        # mapeado, código novo da API...). Avisar com o que foi visto.
+        if raw_listings and lang and lang.lower() not in langs_seen and langs_seen:
+            log.warning(
+                f"  ⚠️  Nenhuma oferta no idioma '{lang}' — idiomas observados nas "
+                f"{len(raw_listings)} ofertas devolvidas: {langs_seen}. Confira o "
+                f"código em --language (apelidos conhecidos: {sorted(LANGUAGE_ALIASES)})."
+            )
 
         self.stats["listings_after_filters"] += len(best_by_uid)
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
@@ -3763,9 +3807,7 @@ class Scanner:
         bp_listings: dict[int, Optional[list[dict]]] = {}
         for bp_id in unique_bp_ids:
             try:
-                listings = self.ct.list_listings_by_blueprint(
-                    bp_id, language=getattr(self, "language", LANGUAGE_FILTER)
-                )
+                listings = self.ct.list_listings_by_blueprint(bp_id, language=self.language)
                 if isinstance(listings, dict):
                     listings = [l for sub in listings.values() for l in sub]
                 bp_listings[bp_id] = listings
@@ -4349,8 +4391,8 @@ def main():
     state_dir = resolve_state_dir(args.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     CACHE_DB = state_dir / "cache.db"
-    SKIP_LIST_FILE = state_dir / "scanner_skip_list.json"
-    log.info(f"State dir: {state_dir}")
+    SKIP_LIST_FILE = skip_list_path(state_dir, args.language)
+    log.info(f"State dir: {state_dir} | skip-list: {SKIP_LIST_FILE.name}")
 
     # v2.14 (robustez): run-guard contra instâncias concorrentes no mesmo
     # state-dir. Dois scanners no mesmo cache.db/skip-list disputam lock e

@@ -1134,6 +1134,7 @@ def build_delivery_markdown(
     work = df.copy()
     decisions = work.apply(lambda r: classify_decision(r, cfg), axis=1)
     work["decisao"] = [d[0] for d in decisions]
+    work["motivo"] = [d[1] for d in decisions]
     deals = work[work["decisao"].isin(["COMPRA", "REVISAR"])].copy()
     # Fallback near-miss: sem COMPRA/REVISAR, a entrega NÃO vira um beco
     # "nenhum deal" (que historicamente levava a montar tabela à mão, fora do
@@ -1168,13 +1169,27 @@ def build_delivery_markdown(
     # ficam intactos. Uso típico: scan `--language zh-CN` — a referência é a
     # carta INGLESA, logo o número é "quantas vezes a oferta chinesa é mais
     # barata que a inglesa", NÃO margem de revenda.
-    ratio_label = _ratio_header_label(deals) if show_ratio else None
     ratio_cut_applied = False
+    n_ratio_none = 0
+    n_ratio_below = 0
     if min_ratio is not None:
-        ratios = [_price_ratio(_tcg_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
-        keep = [rt is not None and rt >= float(min_ratio) for rt in ratios]
+        # Revisão #71: o corte corre sobre TODAS as linhas precificadas — não só
+        # COMPRA/REVISAR. Pra um screen de RAZÃO, uma comum 6× mais barata (que a
+        # regra mecânica marcaria NÃO por ser BULK) é exatamente o que se pediu;
+        # a decisão aparece na coluna Flag, nunca esconde a linha.
+        deals = work.copy()
+        if "net_margin" in deals.columns:
+            deals = deals.sort_values("net_margin", ascending=False)
+        near_miss = False
+        deals["_ratio"] = [_price_ratio(_tcg_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
+        n_ratio_none = int(sum(1 for v in deals["_ratio"] if v is None))
+        keep = [v is not None and v >= float(min_ratio) for v in deals["_ratio"]]
+        n_ratio_below = int(len(deals) - sum(keep) - n_ratio_none)
         deals = deals[pd.Series(keep, index=deals.index)] if len(deals) else deals
         ratio_cut_applied = True
+    elif show_ratio:
+        deals["_ratio"] = [_price_ratio(_tcg_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
+    ratio_label = _ratio_header_label(deals) if show_ratio else None
     deals = deals.head(top_n) if top_n else deals
     deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
 
@@ -1183,13 +1198,19 @@ def build_delivery_markdown(
         f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
     )
     if ratio_cut_applied:
-        title += f" · corte razão ≥ {float(min_ratio):.1f}×"
+        title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
     if ratio_cut_applied and deals.empty:
-        return title + (
-            f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× — nenhuma oferta "
-            "precificada é tão mais barata que a referência inglesa. Linhas abaixo "
-            "do corte NÃO são mostradas como resultado.)_"
-        )
+        # 'sem dado' ≠ 'abaixo do corte': dizer os dois números, nunca culpar a
+        # razão quando ela nem pôde ser calculada (sem câmbio/CT US$).
+        parts = [f"{n_ratio_below} abaixo do corte"]
+        if n_ratio_none:
+            parts.append(f"{n_ratio_none} sem CT US$ (sem câmbio/preço — razão não calculável)")
+        msg = (f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× entre "
+               f"{n_ratio_below + n_ratio_none} precificada(s): " + "; ".join(parts) + ". ")
+        if n_ratio_below and not n_ratio_none:
+            msg += "Nenhuma oferta precificada é tão mais barata que a referência inglesa. "
+        msg += "Linhas abaixo do corte NÃO são mostradas como resultado.)_"
+        return title + msg
     if deals.empty:
         # Sob o contrato de entrega v2.22, o scanner persiste TODO listing
         # precificado no XLSX (mesmo abaixo do threshold). Logo, df vazio aqui
@@ -1240,6 +1261,11 @@ def build_delivery_markdown(
         # Mesma classificação do XLSX.
         if near_miss:
             flag = "abaixo do limiar"
+        elif str(row.get("decisao")) == "NAO":
+            # Só alcançável com --min-ratio (corte sobre TODAS as precificadas):
+            # a linha passou na razão mas a regra mecânica a rejeitaria — dizer
+            # por quê, em vez de escondê-la.
+            flag = f"NÃO: {row.get('motivo') or 'rejeitada pela regra mecânica'}"
         else:
             flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
         # PC: mediana das vendas reais + margem sobre ela (mesma base revenda do
@@ -1279,7 +1305,8 @@ def build_delivery_markdown(
             cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
             cells.insert(pc_cell_at, reference_price(_fmt_usd(pc_med) or "—", row.get("pc_url")))
         if show_ratio:
-            cells.insert(2, _fmt_ratio(_price_ratio(tcg_usd, ct_usd)))
+            # Razão calculada UMA vez (coluna `_ratio`) — mesmo número do corte.
+            cells.insert(2, _fmt_ratio(row.get("_ratio")))
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")

@@ -324,6 +324,14 @@ nunca em arquivo versionado.
 >    *"abaixo do limiar"* (fallback near-miss). Logo **não existe** o caso "veio
 >    vazio, então eu reformato" — esse era o erro recorrente. Se a entrega que
 >    você vai colar **não saiu do `.md` da ferramenta**, pare e gere por ela.
+>    **Única exceção (v2.29, `--min-ratio X`):** o operador pediu um screen de
+>    *razão de preço* com corte explícito; aí a ferramenta corre o corte sobre
+>    TODAS as linhas precificadas (inclusive as que a regra mecânica marcaria
+>    NÃO — a Flag diz o motivo) e, se **nenhuma** bate o corte, imprime a
+>    mensagem de 0 linha com as contagens (abaixo do corte / sem CT US$) em vez
+>    da tabela near-miss. Linhas abaixo do corte **não** aparecem como resultado
+>    — mostrar "quase 4×" como se fosse 4× seria mentir. Cole a mensagem
+>    verbatim também.
 
 **Para explorar abaixo do threshold padrão** (ver o que está "perto"), rebaixe os
 limiares **na própria ferramenta** — nunca leia o XLSX e monte à mão:

@@ -40,6 +40,22 @@ set+número).
   case-insensitive, idioma nas 3 chamadas, Stats, header/valores/rodapé da
   coluna, corte, 0-linha honesto, flags da CLI). Suíte: 335 → **348**.
 
+**Revisão do PR #71 (code-review em contexto limpo, 9 achados — todos tratados):**
+`--min-ratio` passou a cortar sobre TODAS as linhas precificadas (não só
+COMPRA/REVISAR; linha NÃO aparece com `Flag = NÃO: <motivo>`), e a mensagem de
+0 linha separa "abaixo do corte" de "sem CT US$" (razão não calculável);
+`normalize_language()` + `LANGUAGE_ALIASES` (zh/cn/chinese → zh-CN — antes
+`--language zh` passava no servidor e filtrava TUDO no cliente, em silêncio) +
+aviso no log com os idiomas observados quando nenhuma oferta bate o idioma;
+**skip-list por idioma** (`skip_list_path`: run zh-CN grava
+`scanner_skip_list.zh-cn.json`, nunca envenena os runs ingleses);
+`Stats.language_filter` registrado no `__init__` (consta mesmo com todo set
+pulado); `Scanner.language` como atributo de classe (fim do `getattr` nos
+call-sites); razão calculada uma vez (`_ratio`); teste do 0-linha endurecido;
+exceção ao fallback near-miss documentada na regra de entrega do CLAUDE.md.
+Também corrigido log pré-existente "Scan completo — N oportunidades" que
+contava near-miss. Suíte: **353** (13 novos − 1 superado + 6 da revisão).
+
 **Smoke real (2026-10-03, `mew --language zh-CN --provider tcgcsv`):** 4 ofertas
 zh-CN ≥ US$10 precificadas (Chansey/Dodrio/Beedrill/Pinsir, US$25–30 vs ref EN
 US$0,16–0,37 → razão 0,0×); `--min-ratio 4` devolveu a mensagem de 0 linha.

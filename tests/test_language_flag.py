@@ -135,15 +135,8 @@ def test_validate_top_requests_per_blueprint_in_configured_language():
     assert kwargs.get("language") == "zh-CN"
 
 
-def test_language_filter_recorded_in_stats():
-    """Auditoria: a aba Stats do XLSX deve dizer em que idioma o scan rodou."""
-    s = _stub(language="zh-CN")
-    s.ct = MagicMock()
-    s.ct.list_blueprints.return_value = []
-    s.ct.list_listings_by_expansion.return_value = []
-    s.pricing = MagicMock()
-    list(s.scan_expansion({"id": 3403, "code": "mew", "name": "151"}))
-    assert s.stats.get("language_filter") == "zh-CN"
+# (Stats.language_filter: coberto por test_real_scanner_init_normalizes_language_and_records_stats —
+#  revisão #71 moveu o registro pro __init__, pra constar mesmo sem set listado.)
 
 
 # ───────────── (c) postprocess: coluna de RAZÃO + --min-ratio ─────────────
@@ -224,6 +217,101 @@ def test_min_ratio_with_nothing_left_is_honest_not_near_miss():
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_ratio=True, min_ratio=10.0)
     assert "Pikachu" not in md and "Mew ex" not in md
     assert "10.0×" in md
+    # Revisão #71: o nome do teste tem de ser verdade — sem banner/tabela near-miss,
+    # com a mensagem explícita de 0 linha.
+    assert "Nenhum deal acima do limiar" not in md
+    assert "| # |" not in md
+    assert "0 linha com razão" in md
+
+
+# ── Revisão do PR #71 (code-review em contexto limpo) ──────────────────────
+def _raw_df_with_nao_row():
+    """4ª linha: comum (chase BULK → classify_decision = NAO) a 6× mais barata.
+    Pra um screen de RAZÃO ela é exatamente o que o operador pediu — não pode
+    ser escondida pela decisão COMPRA/REVISAR."""
+    df = _raw_df()
+    extra = pd.DataFrame({
+        "Card Name": ["Bulk Common"], "Nº": [99], "Set": ["151 (mew)"],
+        "Rarity": ["Common"], "Condição": ["NM"], "Idioma": ["ZH-CN"], "Qtd": [5],
+        "LIVE R$ (real)": [10.0],            # CT US$ 2.00
+        "TCG Market (BRL)": [60.0], "TCG Market (USD)": [12.00],   # razão 6.0×
+        "Net Margin % REAL": [0.8333], "Lucro R$ REAL": [50.0],
+        "Validation Status": ["VALIDATED_REAL"],
+        "Link CardTrader": ["https://www.cardtrader.com/cards/4"],
+        "Link TCG": ["https://www.tcgplayer.com/product/4"],
+    })
+    return pd.concat([df, extra], ignore_index=True)
+
+
+def test_min_ratio_cuts_over_all_priced_rows_including_nao():
+    """`--min-ratio` corre sobre TODAS as linhas precificadas, não só
+    COMPRA/REVISAR: a comum 6× entra, com Flag honesta de que a regra
+    mecânica a rejeitaria (NÃO), e os 2 links intactos."""
+    cfg = pp.DecisionConfig(min_net_margin=0.25, revisar_min_net=0.20, min_lucro_liq=0.0)
+    df = pp.enrich_df(_raw_df_with_nao_row(), hub_fee_rate=0.0)
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_ratio=True, min_ratio=4.0)
+    rows = [l for l in md.splitlines() if l.startswith("| ") and "Bulk Common" in l]
+    assert rows, md
+    assert "| 6.0× |" in rows[0]
+    assert "NÃO" in rows[0]                         # flag mostra a decisão mecânica
+    assert "[oferta](https://www.cardtrader.com/cards/4)" in rows[0]
+    assert "[TCG](https://www.tcgplayer.com/product/4)" in rows[0]
+    assert "Mew ex" not in md                       # 2.5× continua fora
+
+
+def test_min_ratio_reports_rows_without_ct_usd_separately():
+    """Sem câmbio/live_usd a razão não existe: isso é 'sem dado', não 'abaixo
+    do corte' — a mensagem tem de dizer isso em vez de culpar a razão."""
+    df, cfg = _enriched()
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=None, show_ratio=True, min_ratio=4.0)
+    assert "sem CT US$" in md
+    assert "3" in md                                # as 3 linhas sem razão são contadas
+    assert "nenhuma oferta precificada é tão mais barata" not in md.lower()
+
+
+def test_normalize_language_aliases():
+    """A API aceita apelidos (zh/cn/chinese) mas a oferta traz 'zh-CN'; sem
+    normalizar, `--language zh` filtraria TUDO em silêncio."""
+    for alias in ("zh", "cn", "chinese", "ZH-CN", "zh-cn"):
+        assert sc.normalize_language(alias) == "zh-CN", alias
+    assert sc.normalize_language("en") == "en"
+    assert sc.normalize_language("EN") == "en"
+    assert sc.normalize_language(" it ") == "it"
+
+
+def test_real_scanner_init_normalizes_language_and_records_stats():
+    """Scanner(...) REAL (não stub): guarda o idioma normalizado e já registra
+    `language_filter` em Stats — mesmo que nenhum set chegue a listar ofertas."""
+    with patch.object(sc, "get_usd_to_brl", return_value=5.0), \
+         patch.object(sc, "get_eur_to_brl", return_value=6.0):
+        s = sc.Scanner(ct=MagicMock(), pricing=MagicMock(), cache=MagicMock(), language="zh")
+        d = sc.Scanner(ct=MagicMock(), pricing=MagicMock(), cache=MagicMock())
+    assert s.language == "zh-CN"
+    assert s.stats["language_filter"] == "zh-CN"
+    assert d.language == "en"
+    assert d.stats["language_filter"] == "en"
+
+
+def test_skip_list_path_is_keyed_by_non_default_language(tmp_path):
+    """Run zh-CN não pode envenenar a skip-list dos runs ingleses."""
+    assert sc.skip_list_path(tmp_path, "en") == tmp_path / "scanner_skip_list.json"
+    assert sc.skip_list_path(tmp_path, "zh-CN") == tmp_path / "scanner_skip_list.zh-cn.json"
+
+
+def test_scan_expansion_warns_when_fetched_listings_have_other_language(caplog):
+    """Servidor devolveu ofertas mas nenhuma passou pelo idioma → avisar com os
+    idiomas observados (diagnóstico do 'verde mas vazio')."""
+    import logging
+    s = _stub(language="zh-CN")
+    s.ct = MagicMock()
+    s.ct.list_blueprints.return_value = []
+    s.ct.list_listings_by_expansion.return_value = [{"id": 1, "blueprint_id": 999}]
+    s._parse_listing = MagicMock(return_value=_listing("en"))
+    s.pricing = MagicMock()
+    with caplog.at_level(logging.WARNING):
+        list(s.scan_expansion({"id": 3403, "code": "mew", "name": "151"}))
+    assert "idioma" in caplog.text.lower()
+    assert "'en'" in caplog.text or "en" in caplog.text
 
 
 def test_postprocess_cli_has_ratio_flags():
