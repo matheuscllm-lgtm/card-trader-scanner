@@ -234,6 +234,15 @@ Opções úteis:
   preço** EN/<idioma>, não margem de revenda — entregue com
   `cardtrader_postprocess.py --ratio-column [--min-ratio 4]` (coluna "Razão
   EN/ZH-CN" + corte explícito; 0 linha → mensagem honesta, nunca near-miss).
+  **Referência principal nesse modo = eBay** (`--ref-source ebay`: mediana das
+  vendas eBay concluídas da carta inglesa raw, via tabela pública do
+  PriceCharting; TCG vira fallback rotulado). O PriceCharting dá 403 a cliente
+  HTTP comum em alguns IPs — passe `--pc-firecrawl N` (pago, 1 crédito/página,
+  ~2 páginas por linha) ou a coluna sai "eBay indisponível". Comando canônico:
+  `cardtrader_postprocess.py -i <raw> -o <rel> --ref-source ebay --min-ratio 4
+  --pc-firecrawl <2×linhas>`. ⚠️ No CT, `sv3/sv6/sv7/sv8/sv9/sv10` são sets
+  **japoneses** (não Obsidian Flames…Destined Rivals): ficam sem referência de
+  propósito (`CT_JP_SETCODE_COLLISIONS`).
   Limite conhecido: o grosso do chinês no CT vive em expansões PRÓPRIAS
   (`cs35`, `svp-c`, `z-chp`, `s-p`, `sl`…) cuja numeração não casa com os sets
   ingleses — fora do escopo deste scanner.

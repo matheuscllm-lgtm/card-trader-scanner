@@ -19,10 +19,12 @@ não compartilham código — este arquivo adapta o padrão, não importa de lá
 from __future__ import annotations
 
 import gzip
+import html
 import os
 import re
 import statistics
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -40,6 +42,43 @@ DEFAULT_CACHE_DIR = os.path.join("outputs", "pc_cache")
 MEDIAN_WINDOW = 10          # mediana das 10 vendas mais recentes
 
 _last_request_at = [0.0]
+
+
+_firecrawl_budget = [0]   # créditos Firecrawl liberados NESTE run (0 = rota paga desligada)
+_firecrawl_used = [0]
+FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape"
+FIRECRAWL_RETRY_WAIT_S = 3.0
+
+
+def set_firecrawl_budget(n: int) -> None:
+    """Libera até `n` páginas via Firecrawl quando o PriceCharting bloquear (403/429)."""
+    _firecrawl_budget[0] = max(0, int(n or 0))
+    _firecrawl_used[0] = 0
+
+
+def firecrawl_used() -> int:
+    return _firecrawl_used[0]
+
+
+def _firecrawl_scrape(url: str) -> str:
+    """rawHtml da página via Firecrawl (chave em FIRECRAWL_API_KEY; nunca logada)."""
+    import json
+    key = (os.environ.get("FIRECRAWL_API_KEY") or "").strip().lstrip("﻿")
+    if not key:
+        raise RuntimeError("FIRECRAWL_API_KEY ausente — rota Firecrawl indisponível")
+    payload = json.dumps({"url": url, "formats": ["rawHtml"], "onlyMainContent": False,
+                          "maxAge": 0}).encode("utf-8")
+    req = urllib.request.Request(FIRECRAWL_SCRAPE_URL, data=payload, method="POST",
+                                 headers={"Authorization": f"Bearer {key}",
+                                          "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        out = json.loads(r.read().decode("utf-8"))
+    data = out.get("data") or {}
+    status = (data.get("metadata") or {}).get("statusCode")
+    html_body = data.get("rawHtml") or ""
+    if not out.get("success", True) or not html_body or (status and int(status) >= 400):
+        raise RuntimeError(f"Firecrawl falhou p/ {url} (status {status})")
+    return html_body
 
 
 def fetch_page(url: str, cache_dir: str | None = None) -> str:
@@ -62,11 +101,33 @@ def fetch_page(url: str, cache_dir: str | None = None) -> str:
             data = r.read()
             if r.headers.get("Content-Encoding") == "gzip":
                 data = gzip.decompress(data)
+        body = data.decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        # v2.29: PriceCharting passou a devolver 403 pra cliente HTTP comum
+        # neste IP (2026-10-03, também via curl). Rota paga OPT-IN e COM TETO:
+        # Firecrawl (1 crédito/página). Sem orçamento → o erro sobe (o
+        # consumidor rotula "indisponível", nunca "sem venda").
+        if e.code not in (403, 429) or _firecrawl_budget[0] <= 0:
+            raise
+        body, last_err = None, None
+        for attempt in range(2):            # 1 nova tentativa (escada de desbloqueio)
+            if _firecrawl_budget[0] <= 0:
+                break
+            if attempt:
+                time.sleep(FIRECRAWL_RETRY_WAIT_S)
+            _firecrawl_budget[0] -= 1
+            _firecrawl_used[0] += 1
+            try:
+                body = _firecrawl_scrape(url)
+                break
+            except Exception as fe:  # noqa: BLE001
+                last_err = fe
+        if body is None:
+            raise RuntimeError(f"PriceCharting 403 e Firecrawl falhou: {last_err}") from e
     finally:
         # Também em FALHA: senão, durante throttling, cada retry sai sem gap
         # (a espera era calculada do último SUCESSO) e martela o site.
         _last_request_at[0] = time.time()
-    body = data.decode("utf-8", errors="replace")
     # Escrita atômica: processo morto no meio do write deixava um cache torto
     # que seria re-servido por 24h ("—" falso, indistinguível de no-match).
     tmp_path = cache_path + ".tmp"
@@ -215,7 +276,23 @@ def console_matches(path: str, set_label) -> bool:
     # Bidirecional (review 2026-08-28): além de conter todos os tokens do set,
     # o console não pode ter tokens EXTRAS ('pokemon-japanese-aquapolis' NÃO
     # casa 'Aquapolis' — a mediana da tiragem japonesa corromperia o sinal).
-    return bool(set_tokens) and console_tokens == set_tokens
+    if not set_tokens:
+        return False
+    if console_tokens == set_tokens:
+        return True
+    # v2.29: o PC prefixa sets da era SV com "scarlet-&-violet-" ("Scarlet &
+    # Violet 151") e o CT chama só "151". Remove SÓ o prefixo de era e exige
+    # igualdade exata do resto — token de idioma (japanese/chinese/korean)
+    # continua sobrando e reprova; base set "Scarlet & Violet" segue exato.
+    for prefix in _PC_ERA_PREFIXES:
+        if prefix <= console_tokens and not (prefix <= set_tokens):
+            rest = console_tokens - prefix
+            if rest and rest == set_tokens:
+                return True
+    return False
+
+
+_PC_ERA_PREFIXES = (frozenset({"scarlet", "violet"}),)
 
 
 def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:
@@ -229,8 +306,10 @@ def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:
     q = urllib.parse.quote(query)
     url = f"{BASE_URL}/search-products?q={q}&type=prices"
     body = fetch_page(url, cache_dir=cache_dir)
-    paths = re.findall(
-        r'href="(?:https?://www\.pricecharting\.com)?(/game/[^"#?]+)"', body)
+    # v2.29: aspas simples OU duplas, e `&amp;` desescapado (HTML via Firecrawl
+    # vem `pokemon-scarlet-&amp;-violet-151` — o regex antigo não casava).
+    paths = [html.unescape(p) for p in re.findall(
+        r"""href=["'](?:https?://www\.pricecharting\.com)?(/game/[^"'#?]+)["']""", body)]
     seen, out = set(), []
     for p in paths:
         if p not in seen:
@@ -252,6 +331,23 @@ def resolve_pc_ref(card_name, number, set_label,
     caso real 2026-08-29: Breloom EX Deoxys reverse (ref TCG $180) saía com a
     mediana da página holo BASE ($15), comparando variantes diferentes.
     """
+    path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant)
+    if not path:
+        return None
+    try:
+        page = fetch_page(BASE_URL + path, cache_dir=cache_dir)
+    except Exception:  # noqa: BLE001 — rede/parse é best-effort; falha → "—"
+        return None
+    median, n_sales = median_recent_sold(parse_sold_listings(page))
+    if median is None:
+        return None
+    return {"median": median, "n_sales": n_sales, "url": BASE_URL + path}
+
+
+def _resolve_pc_path(card_name, number, set_label, cache_dir=None, variant=None,
+                     raise_errors: bool = False):
+    """Busca a página PC da carta com as guardas (slug nome+número, console =
+    set, reverse ↔ reverse). Nenhuma casa / erro → None."""
     set_name = _set_name_from_label(set_label)
     base_name = clean_card_name(card_name)
     num = norm_number(number)
@@ -272,13 +368,114 @@ def resolve_pc_ref(card_name, number, set_label,
         else:
             matches = [p for p in matches
                        if "reverse" not in p.rsplit("/", 1)[-1].lower()]
-        path = min(matches, key=lambda p: len(p.rsplit("/", 1)[-1])) if matches else None
+        return min(matches, key=lambda p: len(p.rsplit("/", 1)[-1])) if matches else None
+    except Exception:  # noqa: BLE001 — rede/parse é best-effort; falha → None
+        if raise_errors:
+            raise
+        return None
+
+
+# ─── v2.29: referência eBay (vendas concluídas) — fonte PRINCIPAL da razão ───
+# Pedido do operador (2026-10-03): no screen "carta em outro idioma ≥ N× mais
+# barata que a inglesa", a referência da carta INGLESA vem do eBay. A Browse API
+# oficial só mostra anúncios ATIVOS; as vendas concluídas `[eBay]` estão na
+# página pública da carta no PriceCharting (mesma fonte do ebay-arbitrage-scanner,
+# `src/pc_sales.py` — adaptado aqui, projetos da frota não importam entre si).
+EBAY_MIN_SALES = 3            # < 3 vendas comparáveis → None (nunca inventa)
+EBAY_MAX_AGE_DAYS = 365
+EBAY_MEDIAN_WINDOW = 10
+
+_EBAY_ROW_RE = re.compile(r'<tr id="ebay-(\d+)">(.*?)</tr>', re.S)
+_ROW_DATE_RE = re.compile(r'<td class="date">(\d{4}-\d{2}-\d{2})</td>')
+_ROW_PRICE_RE = re.compile(r'class="js-price"[^>]*>\s*\$([\d,]+\.\d{2})')
+_ROW_TITLE_RE = re.compile(r'<td class="title">(.*?)</td>', re.S)
+_TITLE_NOISE_RE = re.compile(
+    r"Time Warp shows photos of completed sales\..*?to see photos\.\s*(?:OK\b)?"
+    r"|\[(?:eBay|TCGPlayer)\]", re.I | re.S)
+# A referência é a carta INGLESA raw: venda de outro idioma, gradeada ou lote
+# nunca é comparável (regras do ebay-arbitrage-scanner, pc_sales.py).
+_FOREIGN_LANG_RE = re.compile(
+    r"\b(japanese|japan|jpn|chinese|china|korean|korea|german|french|italian|"
+    r"spanish|portuguese|thai|indonesian)\b", re.I)
+_GRADED_RE = re.compile(
+    r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|ACE|MNT|GMA|HGA|AGS|KSA|RCG|CSG)\s*-?\s*(10|[1-9](?:\.5)?)(?![\d.])"
+    r"|\bgraded\b|\bslab\b", re.I)
+_LOT_RE = re.compile(
+    r"\b(lots?|bundle|playset|booster|sealed|collection|choose|pick|set\s+of|"
+    r"x\s*\d{1,}|\d{1,}\s*x)\b|\bpacks?\b(?![\s-]*fresh)", re.I)
+
+
+def parse_ebay_sales(body: str) -> list[dict]:
+    """Vendas `[eBay]` da tabela UNGRADED (`completed-auctions-used`):
+    `{date, price, title, source:'ebay', sale_id}`. TCGPlayer e abas graded fora."""
+    m = re.search(r'<div class="completed-auctions-used"[^>]*>(.*?)</table>', body, re.S)
+    if not m:
+        return []
+    out, seen = [], set()
+    for sale_id, row in _EBAY_ROW_RE.findall(m.group(1)):
+        if sale_id in seen:
+            continue
+        d, p = _ROW_DATE_RE.search(row), _ROW_PRICE_RE.search(row)
+        if not d or not p:
+            continue
+        try:
+            price = float(p.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        t = _ROW_TITLE_RE.search(row)
+        title = html.unescape(re.sub(r"<[^>]+>", " ", t.group(1) if t else row))
+        title = re.sub(r"\s+", " ", _TITLE_NOISE_RE.sub(" ", title)).strip()
+        seen.add(sale_id)
+        out.append({"date": d.group(1), "price": price, "title": title,
+                    "source": "ebay", "sale_id": sale_id})
+    return out
+
+
+def ebay_comparable(sales: list[dict]) -> list[dict]:
+    """Só vendas comparáveis à carta INGLESA raw (sem idioma estrangeiro,
+    sem nota de gradeadora, sem lote/pack)."""
+    return [s for s in sales
+            if s.get("source") == "ebay"
+            and not _FOREIGN_LANG_RE.search(s.get("title") or "")
+            and not _GRADED_RE.search(s.get("title") or "")
+            and not _LOT_RE.search(s.get("title") or "")]
+
+
+def ebay_median_reference(sales: list[dict], today=None) -> dict | None:
+    """Mediana das até 10 vendas mais recentes em 365 dias; exige ≥3. Senão None."""
+    import datetime as _dt
+    today = today or _dt.date.today()
+    cutoff = (today - _dt.timedelta(days=EBAY_MAX_AGE_DAYS)).isoformat()
+    recent = sorted((s for s in sales if s["date"] >= cutoff),
+                    key=lambda s: s["date"], reverse=True)[:EBAY_MEDIAN_WINDOW]
+    if len(recent) < EBAY_MIN_SALES:
+        return None
+    return {"median": statistics.median(s["price"] for s in recent),
+            "n_sales": len(recent),
+            "oldest": recent[-1]["date"], "newest": recent[0]["date"]}
+
+
+def resolve_ebay_ref(card_name, number, set_label,
+                     cache_dir: str | None = None, variant=None) -> dict | None:
+    """Nome+número+set (+variante) → {'median','n_sales','oldest','newest','url'}
+    das vendas eBay comparáveis da carta INGLESA, ou None. Mesma guarda de
+    página do `resolve_pc_ref` (slug nome+número, console = set, reverse ↔ reverse)."""
+    # v2.29: ERRO de fonte (403, rede, Firecrawl sem orçamento) volta como
+    # {'error': ...} — o consumidor rotula "eBay indisponível", distinto de
+    # "sem venda eBay" (None). Confundir os dois esconde fonte quebrada.
+    try:
+        path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant,
+                                raise_errors=True)
         if not path:
-            return None
+            return {"miss": "sem página PriceCharting casada"}
         page = fetch_page(BASE_URL + path, cache_dir=cache_dir)
-    except Exception:  # noqa: BLE001 — rede/parse é best-effort; falha → "—"
-        return None
-    median, n_sales = median_recent_sold(parse_sold_listings(page))
-    if median is None:
-        return None
-    return {"median": median, "n_sales": n_sales, "url": BASE_URL + path}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"[:120]}
+    comps = ebay_comparable(parse_ebay_sales(page))
+    ref = ebay_median_reference(comps)
+    if not ref or not ref["median"] or ref["median"] <= 0:
+        # Motivo explícito (≠ erro de fonte, ≠ página não achada).
+        return {"miss": f"<3 vendas eBay comparáveis em 365d ({len(comps)} no total)",
+                "url": BASE_URL + path}
+    ref["url"] = BASE_URL + path
+    return ref

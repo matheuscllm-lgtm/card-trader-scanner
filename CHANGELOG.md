@@ -56,6 +56,30 @@ exceção ao fallback near-miss documentada na regra de entrega do CLAUDE.md.
 Também corrigido log pré-existente "Scan completo — N oportunidades" que
 contava near-miss. Suíte: **353** (13 novos − 1 superado + 6 da revisão).
 
+**Rodada eBay (pedido do operador, 2026-10-03: "eBay deve ser a fonte principal"):**
+- `cardtrader_postprocess.py --ref-source ebay`: a razão passa a usar **Ref eBay
+  US$** = mediana das até 10 vendas eBay concluídas da carta INGLESA raw (365
+  dias, ≥3 vendas; títulos com outro idioma, nota de gradeadora ou lote fora),
+  lidas da tabela pública do PriceCharting (`pricecharting_ref.resolve_ebay_ref`,
+  mesma fonte do ebay-arbitrage-scanner; a Browse API oficial só tem anúncios
+  ativos). Coluna "Ref eBay US$" clicável + link `[eBay]`; TCG fica como coluna
+  secundária e **fallback rotulado** com o motivo (`eBay indisponível: <erro>` /
+  `sem página PriceCharting casada` / `<3 vendas eBay comparáveis`). Cache novo
+  por coleta (`outputs/ebay_ref_cache/<timestamp>`).
+- PriceCharting devolve **403** a cliente HTTP comum neste IP (2026-10-03, também
+  via curl). `--pc-firecrawl N` libera até N páginas via Firecrawl (pago, 1
+  crédito/página, 1 nova tentativa em falha); default 0 = nunca paga.
+- Busca do PC: regex aceita aspas simples e `&amp;`; guarda de set aceita o
+  prefixo de era "scarlet-&-violet-" (PC "Scarlet & Violet 151" × CT "151") sem
+  afrouxar idioma (console japonês/chinês segue reprovado).
+- **Bug de carta errada corrigido:** no CT `sv3/sv6/sv7/sv8/sv9/sv10` são sets
+  JAPONESES; o scanner os tratava como setcodes pokemontcg.io (sv8 → Surging
+  Sparks) e precificou Palossand ex JP 057 como Pikachu ex 057/191 (razão 3,6×
+  falsa entregue no 1º diagnóstico). `CT_JP_SETCODE_COLLISIONS` +
+  `ptcg_expected_sets` — sem identidade, sem referência.
+- Prova: 6 ofertas zh-CN do `mew` com ref eBay real (n=10 cada); maior razão
+  2,9× (Machamp 68); 0 ≥ 4×. Firecrawl: 12 créditos. Suíte: **373**.
+
 **Smoke real (2026-10-03, `mew --language zh-CN --provider tcgcsv`):** 4 ofertas
 zh-CN ≥ US$10 precificadas (Chansey/Dodrio/Beedrill/Pinsir, US$25–30 vs ref EN
 US$0,16–0,37 → razão 0,0×); `--min-ratio 4` devolveu a mensagem de 0 linha.
