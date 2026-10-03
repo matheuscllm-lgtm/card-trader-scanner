@@ -3283,7 +3283,7 @@ class Scanner:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
             return
         self.stats["listings_fetched"] += len(raw_listings)
-        log.info(f"  {len(raw_listings)} listings EN encontrados")
+        log.info(f"  {len(raw_listings)} listings {lang.upper()} encontrados")
 
         # Dedup por (blueprint + seller + condição): mantém o menor preço.
         # Comparação é em BRL (não em cents) porque listings podem vir em
@@ -3301,7 +3301,7 @@ class Scanner:
                 best_by_uid[l.uid] = l
 
         self.stats["listings_after_filters"] += len(best_by_uid)
-        log.info(f"  {len(best_by_uid)} listings após filtros (NM, EN, não-graded, ≥${self.min_price_usd})")
+        log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
 
         # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
         # market_price_usd devolve None e o set inteiro viraria miss (40 misses
