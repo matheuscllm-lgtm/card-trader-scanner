@@ -4552,7 +4552,12 @@ def main():
     if checkpoint.enabled:
         checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
         checkpoint.close()
-    log.info(f"Scan completo em {dt:.1f}s — {len(opps)} oportunidades ≥ {args.threshold:.0%}")
+    # v2.29 (revisão): `opps` aqui ainda inclui os near-miss persistidos (v2.22,
+    # keep_all_priced) — contar só o que está ≥ threshold, senão o log diz
+    # "11 oportunidades ≥ 75%" e logo abaixo "0 oportunidades ≥ 75%".
+    n_real_opps = sum(1 for o in opps if not getattr(o, "below_threshold", False))
+    log.info(f"Scan completo em {dt:.1f}s — {n_real_opps} oportunidades ≥ {args.threshold:.0%} "
+             f"({len(opps) - n_real_opps} precificadas abaixo do threshold, persistidas como near-miss)")
     if args.hub_fee > 0:
         log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
     else:
