@@ -350,3 +350,13 @@ def test_min_ref_usd_default_is_ten_in_cli():
     src = inspect.getsource(pp)
     assert '"--min-ref-usd"' in src
     assert "default=10.0" in src.split('"--min-ref-usd"')[1][:200]
+
+
+def test_min_ref_usd_rows_without_reference_are_counted_not_vanished():
+    """Revisão: linha sem referência não é 'abaixo do piso' nem some — cai em
+    'sem dado' e entra no total."""
+    df, cfg = _enriched()
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=None, show_ratio=True,
+                                    min_ratio=4.0, min_ref_usd=10.0)
+    assert "entre 3 precificada(s)" in md
+    assert "sem CT US$" in md

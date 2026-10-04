@@ -1260,7 +1260,8 @@ def build_delivery_markdown(
         # por isso o run de idioma coleta com --min-price-usd 0 e o piso vive aqui.
         if min_ref_usd is not None and len(deals):
             refs = [_ref_usd(r) for _, r in deals.iterrows()]
-            ok_ref = [v is not None and v >= float(min_ref_usd) for v in refs]
+            # Sem referência ≠ abaixo do piso: passa e cai em n_ratio_none.
+            ok_ref = [v is None or v >= float(min_ref_usd) for v in refs]
             n_ref_below = int(sum(1 for v in refs if v is not None and v < float(min_ref_usd)))
             deals = deals[pd.Series(ok_ref, index=deals.index)]
         deals["_ratio"] = [_price_ratio(_ref_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
@@ -1296,7 +1297,7 @@ def build_delivery_markdown(
             parts.append(f"{n_ratio_none} sem CT US$ (sem câmbio/preço — razão não calculável)")
         msg = (f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× entre "
                f"{n_ratio_below + n_ratio_none + n_ref_below} precificada(s): " + "; ".join(parts) + ". ")
-        if n_ratio_below and not n_ratio_none:
+        if n_ratio_below and not n_ratio_none and not n_ref_below:
             msg += "Nenhuma oferta precificada é tão mais barata que a referência inglesa. "
         msg += "Linhas abaixo do corte NÃO são mostradas como resultado.)_"
         return title + msg
