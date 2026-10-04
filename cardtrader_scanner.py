@@ -48,7 +48,7 @@ Data: 2026-04-20 (v1.0) | 2026-04-29 (v2.1) | 2026-05-12 (v2.2 + v2.3)
       | 2026-06-20 (v2.17/v2.18) | 2026-06-21 (v2.19/v2.20/v2.21)
       | 2026-06-22 (v2.22) | 2026-06-23 (v2.23) | 2026-06-26 (v2.24)
       | 2026-07-03 (v2.25) | 2026-08-22 (v2.26) | 2026-08-28 (v2.27)
-Versão: v2.28
+Versão: v2.29
     (v2.27 vive no cardtrader_postprocess.py + pricecharting_ref.py — flag
      --pc-refs, mediana de vendas reais do PriceCharting na entrega; este
      scanner não mudou nessa versão.)
@@ -384,7 +384,25 @@ CT_POKEMON_GAME_ID = 5
 # Defaults do scanner (sobrescritos por CLI)
 MARGIN_THRESHOLD = 0.30          # 30% margem mínima (requisito do usuário)
 MIN_PRICE_USD = 10.0             # filtro extra do usuário
-LANGUAGE_FILTER = "en"           # apenas inglês
+LANGUAGE_FILTER = "en"           # apenas inglês (default; --language muda)
+# v2.29: a API aceita apelidos no `?language=` (zh/cn/chinese casam zh-CN), mas
+# a OFERTA traz o código canônico (`pokemon_language: "zh-CN"`). Sem normalizar,
+# `--language zh` passaria no servidor e filtraria TUDO no cliente, em silêncio.
+LANGUAGE_ALIASES = {
+    "zh": "zh-CN", "cn": "zh-CN", "zh-cn": "zh-CN", "chinese": "zh-CN",
+    "zh-tw": "zh-TW", "english": "en", "italian": "it", "german": "de",
+    "french": "fr", "spanish": "es", "portuguese": "pt", "japanese": "jp",
+}
+
+
+def normalize_language(code: Optional[str]) -> str:
+    """Código de idioma como a API devolve na oferta ("en", "zh-CN"...).
+    Apelido conhecido → canônico; desconhecido → lowercased (a API é
+    case-insensitive e `Listing.language` chega .lower())."""
+    low = (code or "").strip().lower()
+    return LANGUAGE_ALIASES.get(low, low)
+
+
 CONDITION_FILTER = "Near Mint"   # apenas NM
 EXCLUDE_GRADED = True            # exclui PSA/BGS/CGC
 # v2.20: versão da LÓGICA de pricing/variante embutida na chave do price_cache.
@@ -621,6 +639,34 @@ CT_SET_TO_TCGCSV_GROUP_IDS: dict[str, tuple[int, ...]] = {
 
 # v2.28: sets do universo que ficam SEM referência tcgcsv DE PROPÓSITO (motivo
 # obrigatório). A resolução devolve [] pra eles — nem abbr, nem nome.
+# v2.29: códigos CT de sets JAPONESES que colidem com setcodes pokemontcg.io
+# (verificado na API CT em 2026-10-03). O scanner usava o código CT como setcode
+# pokemontcg.io por identidade → `sv8` (JP Super Electric Breaker) virava Surging
+# Sparks e Palossand ex JP 057 era precificada como Pikachu ex 057/191. Estes
+# códigos NUNCA resolvem por identidade (pokemontcg.io nem tcgcsv): sem mapa
+# explícito → sem referência, nunca a carta de outro set.
+CT_JP_SETCODE_COLLISIONS: dict[str, str] = {
+    "sv3": "Ruler of the Black Flame (JP) ≠ Obsidian Flames",
+    "sv6": "Mask of Change (JP) ≠ Twilight Masquerade",
+    "sv7": "Stellar Miracle (JP) ≠ Stellar Crown",
+    "sv8": "Super Electric Breaker (JP) ≠ Surging Sparks",
+    "sv9": "Battle Partners (JP) ≠ Journey Together",
+    "sv10": "The Glory of Team Rocket (JP) ≠ Destined Rivals",
+}
+
+
+def ptcg_expected_sets(ct_set_code: str) -> set[str]:
+    """setcodes pokemontcg.io aceitos pra um código CT: o próprio código (exceto
+    colisão JP) + aliases de SET_ALIAS_TO_PTCG."""
+    code = (ct_set_code or "").lower()
+    out: set[str] = set()
+    if code and code not in CT_JP_SETCODE_COLLISIONS:
+        out.add(code)
+    for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
+        out.add(alias.lower())
+    return out
+
+
 TCGCSV_EXCLUDED_CT_SETS: dict[str, str] = {
     "c25": (
         "Celebrations: o TCGplayer divide em CLB (1-25) e CCC (Classic "
@@ -657,6 +703,17 @@ CONFIG_FILE = SCRIPT_DIR / "config.yaml"
 # (run 25838570927 de 2026-05-14) foi um set unico travado 24m53s sem progresso.
 # Solucao: wall-clock timeout per-set + persistir sets travados em skip-list.
 SKIP_LIST_FILE = SCRIPT_DIR / "scanner_skip_list.json"
+
+
+def skip_list_path(state_dir: Path, language: str = LANGUAGE_FILTER) -> Path:
+    """v2.29: skip-list POR IDIOMA. Um run `--language zh-CN` que estoura
+    timeout/no_coverage gravaria o set na skip-list global e os runs ingleses
+    canônicos passariam a pulá-lo em silêncio. Idioma default mantém o nome
+    histórico; os demais ganham sufixo (`scanner_skip_list.zh-cn.json`)."""
+    lang = normalize_language(language)
+    if lang == LANGUAGE_FILTER:
+        return Path(state_dir) / "scanner_skip_list.json"
+    return Path(state_dir) / f"scanner_skip_list.{lang.lower()}.json"
 DEFAULT_PER_SET_TIMEOUT_MIN = 8  # conservador: pior caso medido foi 7min/set
 
 # v2.14 (2026-06-15): overrides de timeout por SET (vintage churn fix).
@@ -1849,9 +1906,10 @@ class PokemonTcgIoProvider(PricingProvider):
         # SET_ALIAS_TO_PTCG. Sem alias → só o code CT (comportamento Layer 1
         # puro). Com alias → varia: pra `ju` aceita {`ju`, `base2`}.
         ct_code = (set_code or "").lower()
-        expected_sets: set[str] = {ct_code} if ct_code else set()
-        for alias in self.SET_ALIAS_TO_PTCG.get(ct_code, []):
-            expected_sets.add(alias.lower())
+        # v2.29: sem identidade pra código CT de set JP que colide (sv8 ≠ SSP).
+        expected_sets: set[str] = ptcg_expected_sets(ct_code)
+        if not expected_sets:
+            return None
 
         # Cada tupla: (query, strict_set_check).
         # Tentamos uma query por set candidato (CT code + cada alias).
@@ -2170,7 +2228,7 @@ def resolve_tcgcsv_group_ids(
             f"  tcgcsv: groupId(s) {missing} de {code} ausentes do /groups — "
             f"mapa explícito ignorado, tentando abbr/nome único"
         )
-    if code in TCGCSV_EXCLUDED_CT_SETS:
+    if code in TCGCSV_EXCLUDED_CT_SETS or code in CT_JP_SETCODE_COLLISIONS:
         return []
     gid = resolve_tcgcsv_group_id(ptcg_setcodes, set_name, groups)
     return [gid] if gid else []
@@ -2924,6 +2982,10 @@ class CheckpointWriter:
 
 
 class Scanner:
+    # v2.29: default de classe = inglês. Explícito (não `getattr` nos call-sites)
+    # e ainda tolera stubs `Scanner.__new__` dos testes antigos.
+    language: str = LANGUAGE_FILTER
+
     def __init__(self, ct: CardTraderClient, pricing: PricingProvider, cache: Cache,
                  threshold: float = MARGIN_THRESHOLD,
                  min_price_usd: float = MIN_PRICE_USD,
@@ -2936,8 +2998,16 @@ class Scanner:
                  max_consecutive_misses: int = 0,
                  keep_all_priced: bool = True,
                  tcgcsv: Optional["TcgCsvFallbackProvider"] = None,
-                 tcgcsv_fallback: bool = True):
+                 tcgcsv_fallback: bool = True,
+                 language: str = LANGUAGE_FILTER):
         self.ct = ct
+        # v2.29: idioma das OFERTAS CT (`properties_hash.pokemon_language`).
+        # Default "en" = comportamento histórico. Normalizado (apelidos →
+        # canônico) e enviado à API; no cliente a comparação é lowercased porque
+        # `Listing.language` chega .lower(). A REFERÊNCIA de preço continua
+        # sendo a carta INGLESA no TCGplayer — com idioma ≠ en o número é razão
+        # de preço EN/<idioma>, não margem de revenda (`--ratio-column`).
+        self.language = normalize_language(language)
         self.pricing = pricing
         self.cache = cache
         # v2.23: fonte de FALLBACK tcgcsv. Só consultada quando a pokemontcg.io
@@ -2991,6 +3061,10 @@ class Scanner:
         self.usd_brl = get_usd_to_brl(cache)
         self.eur_brl = get_eur_to_brl(cache)
         self.stats = {
+            # v2.29: auditoria — em que idioma o scan rodou. Registrado AQUI
+            # (não só em scan_expansion) pra constar na aba Stats mesmo quando
+            # todo set é pulado/estoura antes de listar ofertas.
+            "language_filter": self.language,
             "expansions_scanned": 0,
             "listings_fetched": 0,
             "listings_after_filters": 0,
@@ -3111,7 +3185,8 @@ class Scanner:
     def _passes_filters(self, l: Listing) -> bool:
         if l.condition != CONDITION_FILTER:
             return False
-        if LANGUAGE_FILTER and l.language != LANGUAGE_FILTER:
+        # v2.29: idioma configurável (--language); `Listing.language` vem .lower().
+        if self.language and l.language != self.language.lower():
             return False
         if self.exclude_graded and l.graded:
             return False
@@ -3249,11 +3324,13 @@ class Scanner:
                                     timeout_s=effective_timeout_s):
             return
 
-        # Puxa todas listings EN da expansão de uma vez (muito + eficiente que
-        # 1 chamada por blueprint — economiza de 400+ calls para 1).
+        # Puxa todas listings do idioma configurado (default EN) da expansão de
+        # uma vez (muito + eficiente que 1 chamada por blueprint — economiza de
+        # 400+ calls para 1). v2.29: idioma vem de --language.
+        lang = self.language
         try:
             raw_listings = self.ct.list_listings_by_expansion(
-                exp_id, language=LANGUAGE_FILTER, deadline_ts=deadline_ts
+                exp_id, language=lang, deadline_ts=deadline_ts
             )
         except TimeoutError as e:
             log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
@@ -3267,25 +3344,37 @@ class Scanner:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
             return
         self.stats["listings_fetched"] += len(raw_listings)
-        log.info(f"  {len(raw_listings)} listings EN encontrados")
+        log.info(f"  {len(raw_listings)} listings {lang.upper()} encontrados")
 
         # Dedup por (blueprint + seller + condição): mantém o menor preço.
         # Comparação é em BRL (não em cents) porque listings podem vir em
         # moedas diferentes — comparar cents direto seria errado (1 cent BRL
         # ≠ 1 cent EUR).
         best_by_uid: dict[str, Listing] = {}
+        langs_seen: dict[str, int] = {}
         for raw in raw_listings:
             l = self._parse_listing(raw, bp_index)
             if not l:
                 continue
+            langs_seen[l.language or "(vazio)"] = langs_seen.get(l.language or "(vazio)", 0) + 1
             if not self._passes_filters(l):
                 continue
             existing = best_by_uid.get(l.uid)
             if not existing or l.price_brl < existing.price_brl:
                 best_by_uid[l.uid] = l
 
+        # v2.29: diagnóstico do "verde mas vazio" por idioma — o servidor
+        # devolveu ofertas mas NENHUMA bateu o idioma configurado (apelido não
+        # mapeado, código novo da API...). Avisar com o que foi visto.
+        if raw_listings and lang and lang.lower() not in langs_seen and langs_seen:
+            log.warning(
+                f"  ⚠️  Nenhuma oferta no idioma '{lang}' — idiomas observados nas "
+                f"{len(raw_listings)} ofertas devolvidas: {langs_seen}. Confira o "
+                f"código em --language (apelidos conhecidos: {sorted(LANGUAGE_ALIASES)})."
+            )
+
         self.stats["listings_after_filters"] += len(best_by_uid)
-        log.info(f"  {len(best_by_uid)} listings após filtros (NM, EN, não-graded, ≥${self.min_price_usd})")
+        log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
 
         # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
         # market_price_usd devolve None e o set inteiro viraria miss (40 misses
@@ -3566,7 +3655,9 @@ class Scanner:
         Reusa o mapa SET_ALIAS_TO_PTCG do PokemonTcgIoProvider (CT code +
         aliases). É o 1º salto da ponte CT→tcgcsv (o 2º é abbr tcgcsv)."""
         code = (ct_set_code or "").lower()
-        out = [code] if code else []
+        # v2.29: código CT de set JP que colide com setcode pokemontcg.io não
+        # entra por identidade (ver CT_JP_SETCODE_COLLISIONS).
+        out = [code] if code and code not in CT_JP_SETCODE_COLLISIONS else []
         for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
             if alias.lower() not in out:
                 out.append(alias.lower())
@@ -3747,7 +3838,7 @@ class Scanner:
         bp_listings: dict[int, Optional[list[dict]]] = {}
         for bp_id in unique_bp_ids:
             try:
-                listings = self.ct.list_listings_by_blueprint(bp_id, language=LANGUAGE_FILTER)
+                listings = self.ct.list_listings_by_blueprint(bp_id, language=self.language)
                 if isinstance(listings, dict):
                     listings = [l for sub in listings.values() for l in sub]
                 bp_listings[bp_id] = listings
@@ -4087,6 +4178,14 @@ def parse_args():
                    help=f"Margem mínima bruta (default: {MARGIN_THRESHOLD})")
     p.add_argument("--min-price-usd", type=float, default=MIN_PRICE_USD,
                    help=f"Preço mínimo por carta em USD (default: {MIN_PRICE_USD})")
+    p.add_argument("--language", type=str, default=LANGUAGE_FILTER,
+                   help=("v2.29: idioma das OFERTAS no CT (properties_hash."
+                         "pokemon_language). Default 'en' (comportamento "
+                         "histórico). Valores reais vistos na API: en, it, de, "
+                         "fr, es, pt, zh-CN. ⚠️ A referência TCGplayer continua "
+                         "sendo a carta INGLESA: com idioma ≠ en a 'margem' é "
+                         "razão de preço EN/<idioma>, não margem de revenda — "
+                         "entregue com `cardtrader_postprocess.py --ratio-column`."))
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
     p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
@@ -4323,8 +4422,8 @@ def main():
     state_dir = resolve_state_dir(args.state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     CACHE_DB = state_dir / "cache.db"
-    SKIP_LIST_FILE = state_dir / "scanner_skip_list.json"
-    log.info(f"State dir: {state_dir}")
+    SKIP_LIST_FILE = skip_list_path(state_dir, args.language)
+    log.info(f"State dir: {state_dir} | skip-list: {SKIP_LIST_FILE.name}")
 
     # v2.14 (robustez): run-guard contra instâncias concorrentes no mesmo
     # state-dir. Dois scanners no mesmo cache.db/skip-list disputam lock e
@@ -4482,7 +4581,14 @@ def main():
         keep_all_priced=not args.opportunities_only,
         tcgcsv=tcgcsv_provider,
         tcgcsv_fallback=tcgcsv_fallback_on,
+        language=args.language,
     )
+    if args.language.lower() != LANGUAGE_FILTER:
+        log.warning(
+            f"🌐 --language {args.language}: ofertas CT em '{args.language}', "
+            f"referência TCGplayer da carta INGLESA → o número é RAZÃO de preço "
+            f"EN/{args.language.upper()}, não margem de revenda."
+        )
 
     # v2.6: resolve output_path ANTES de scan() pra calcular checkpoint sidecar.
     # XLSX final continua no --output (default SCRIPT_DIR / Drive). Só o JSONL
@@ -4519,7 +4625,12 @@ def main():
     if checkpoint.enabled:
         checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
         checkpoint.close()
-    log.info(f"Scan completo em {dt:.1f}s — {len(opps)} oportunidades ≥ {args.threshold:.0%}")
+    # v2.29 (revisão): `opps` aqui ainda inclui os near-miss persistidos (v2.22,
+    # keep_all_priced) — contar só o que está ≥ threshold, senão o log diz
+    # "11 oportunidades ≥ 75%" e logo abaixo "0 oportunidades ≥ 75%".
+    n_real_opps = sum(1 for o in opps if not getattr(o, "below_threshold", False))
+    log.info(f"Scan completo em {dt:.1f}s — {n_real_opps} oportunidades ≥ {args.threshold:.0%} "
+             f"({len(opps) - n_real_opps} precificadas abaixo do threshold, persistidas como near-miss)")
     if args.hub_fee > 0:
         log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
     else:

@@ -228,6 +228,27 @@ Opções úteis:
   falso positivo pra você filtrar).
 - Rastreios longos: rode **em segundo plano** (sem travar o terminal). Nunca
   deixe rodando "preso" numa janela que você pode fechar sem querer.
+- `--language zh-CN` (v2.29) = varre ofertas em **outro idioma** (default `en`
+  intacto; valores reais na API: en/it/de/fr/es/pt/zh-CN). ⚠️ A referência
+  TCGplayer continua sendo a carta **inglesa**, então o número vira **razão de
+  preço** EN/<idioma>, não margem de revenda — entregue com
+  `cardtrader_postprocess.py --ratio-column [--min-ratio 4]` (coluna "Razão
+  EN/ZH-CN" + corte explícito; 0 linha → mensagem honesta, nunca near-miss).
+  **Referência principal nesse modo = eBay** (`--ref-source ebay`: mediana das
+  vendas eBay concluídas da carta inglesa raw, via tabela pública do
+  PriceCharting; TCG vira fallback rotulado). O PriceCharting dá 403 a cliente
+  HTTP comum em alguns IPs — passe `--pc-firecrawl N` (pago, 1 crédito/página,
+  ~2 páginas por linha) ou a coluna sai "eBay indisponível". Comando canônico:
+  `cardtrader_postprocess.py -i <raw> -o <rel> --ref-source ebay --min-ratio 4
+  --pc-firecrawl <2×linhas>`. **Piso US$10 fica na referência inglesa**
+  (`--min-ref-usd`, default 10, decisão do operador 2026-10-03): colete o scan
+  de idioma com `--min-price-usd 0`, senão o piso cai na oferta chinesa e
+  esconde as baratas. ⚠️ No CT, `sv3/sv6/sv7/sv8/sv9/sv10` são sets
+  **japoneses** (não Obsidian Flames…Destined Rivals): ficam sem referência de
+  propósito (`CT_JP_SETCODE_COLLISIONS`).
+  Limite conhecido: o grosso do chinês no CT vive em expansões PRÓPRIAS
+  (`cs35`, `svp-c`, `z-chp`, `s-p`, `sl`…) cuja numeração não casa com os sets
+  ingleses — fora do escopo deste scanner.
 - Outras flags existem (`--provider`, `--include-graded`, `--dry-run`,
   `--no-cache`, `--max-expansions`, `--shipping-brl`, `--ignore-skip-list`,
   `--clear-skip-list`, `--chase-only`, `--opportunities-only`,
@@ -315,6 +336,14 @@ nunca em arquivo versionado.
 >    *"abaixo do limiar"* (fallback near-miss). Logo **não existe** o caso "veio
 >    vazio, então eu reformato" — esse era o erro recorrente. Se a entrega que
 >    você vai colar **não saiu do `.md` da ferramenta**, pare e gere por ela.
+>    **Única exceção (v2.29, `--min-ratio X`):** o operador pediu um screen de
+>    *razão de preço* com corte explícito; aí a ferramenta corre o corte sobre
+>    TODAS as linhas precificadas (inclusive as que a regra mecânica marcaria
+>    NÃO — a Flag diz o motivo) e, se **nenhuma** bate o corte, imprime a
+>    mensagem de 0 linha com as contagens (abaixo do corte / sem CT US$) em vez
+>    da tabela near-miss. Linhas abaixo do corte **não** aparecem como resultado
+>    — mostrar "quase 4×" como se fosse 4× seria mentir. Cole a mensagem
+>    verbatim também.
 
 **Para explorar abaixo do threshold padrão** (ver o que está "perto"), rebaixe os
 limiares **na própria ferramenta** — nunca leia o XLSX e monte à mão:
@@ -681,10 +710,19 @@ cardtrader_postprocess_legacy_v1.5.py   versão antiga preservada por referênci
 
 ## Estado, pendências e histórico de versões
 
-**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.27**
-(bookkeeping fechado em 2026-08-28). Uma linha por versão (o detalhe narrativo
+**Versão declarada no cabeçalho do `cardtrader_scanner.py`: v2.29**
+(bookkeeping fechado em 2026-10-03). Uma linha por versão (o detalhe narrativo
 completo vive no `CHANGELOG.md`):
 
+- **v2.29** (2026-10-03): `--language <código>` no scanner (idioma das ofertas
+  CT; default `en` intacto; aplicado no filtro, na listagem por expansão e na
+  validação per-blueprint; registrado em Stats) + `--ratio-column`/`--min-ratio`
+  no postprocess (coluna "Razão EN/<IDIOMA>" = TCG US$ ÷ CT US$, corte
+  declarado, 0 linha → mensagem honesta). Motivação: scan de cartas em chinês
+  ≥ 4× mais baratas que a inglesa. 13 testes novos (348).
+- **v2.28** (2026-09-12, #68): mapa explícito CT → groupId tcgcsv
+  (`CT_SET_TO_TCGCSV_GROUP_IDS`, 132 códigos) — fim dos sets "sem referência"
+  no `--provider tcgcsv`.
 - **v2.27** (2026-08-28, #63): `--pc-refs N` no postprocess — colunas
   `Ref PC US$`/`Margem PC %` (mediana das vendas REAIS do PriceCharting) +
   link `[PC]` + flag `PC diverge` nas N linhas de maior margem da entrega;

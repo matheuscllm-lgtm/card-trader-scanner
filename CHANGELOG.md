@@ -4,6 +4,89 @@ Mudanças cumulativas do `cardtrader_scanner.py` + `cardtrader_postprocess.py`.
 Sob git desde 2026-05-13 (`matheuscllm-lgtm/card-trader-scanner`); CHANGELOG
 mantido como narrativa adicional além dos commits.
 
+## 2026-10-03 — v2.29: `--language` no scanner + `--ratio-column`/`--min-ratio` no postprocess (scan de ofertas em chinês)
+
+- `cardtrader_postprocess.py --min-ref-usd` (default 10): no corte `--min-ratio`, o piso de US$10 vale para a **referência inglesa** (eBay/TCG), não para a oferta. O scan de idioma deve coletar com `--min-price-usd 0`.
+
+**Por quê:** pedido do operador (2026-10-02): listar cartas Pokémon RAW em
+**chinês** à venda no CardTrader que estejam **≥ 4× mais baratas** que a mesma
+carta inglesa no TCGplayer. O scanner só varria inglês — o idioma era a
+constante `LANGUAGE_FILTER = "en"`, sem flag.
+
+**Sonda da API (2026-10-03, antes de codar):** a oferta CT traz o idioma em
+`properties_hash.pokemon_language`; valores reais em `mew` (151): en 16.775 /
+it 18.197 / de / fr / es / pt / **zh-CN 5** / None 122. `?language=zh-CN` filtra
+no servidor (6 ofertas; `zh`, `cn`, `chinese` também casam — a API é
+case-insensitive; `zh-TW` = 0). Em `svi` e `paf` = 0 ofertas chinesas. **O grosso
+do chinês no CT vive em expansões PRÓPRIAS** (`z-chp`, `cn-zh-p`, `cs35`,
+`svp-c`, `30thc`, `m-p-cs`, `s-p`, `sm-p`, `sl`…), cuja numeração NÃO casa com
+os sets ingleses — fora do escopo deste scan (sem referência EN casável por
+set+número).
+
+**O que mudou:**
+
+- `cardtrader_scanner.py`: `--language <código>` (default `en`, comportamento
+  histórico intacto). Valor cru vai pra API; no cliente a comparação é
+  lowercased (`Listing.language` chega `.lower()`). Aplicado nas **3**
+  chamadas: `_passes_filters`, `list_listings_by_expansion` e a validação
+  per-blueprint (`--validate-top`) — sem a terceira, o "preço real" viria da
+  oferta inglesa. `Stats` ganha `language_filter`. Idioma ≠ en loga aviso: o
+  número é **razão de preço EN/<idioma>**, não margem de revenda.
+- `cardtrader_postprocess.py`: `--ratio-column` insere "Razão EN/<IDIOMA>"
+  (TCG US$ ÷ CT US$) logo após "Margem %" — rótulo derivado da coluna Idioma
+  (único idioma ≠ EN) ou genérico "Razão TCG/CT"; rodapé honesto ("não é
+  margem de revenda"). `--min-ratio X` corta a entrega a linhas com razão ≥ X
+  (corte declarado no título; **0 linha → mensagem explícita, nunca a tabela
+  near-miss**). Margem, classificação, buckets e os 2 links por linha intactos.
+- `tests/test_language_flag.py`: 13 testes (default en, CLI, filtro
+  case-insensitive, idioma nas 3 chamadas, Stats, header/valores/rodapé da
+  coluna, corte, 0-linha honesto, flags da CLI). Suíte: 335 → **348**.
+
+**Revisão do PR #71 (code-review em contexto limpo, 9 achados — todos tratados):**
+`--min-ratio` passou a cortar sobre TODAS as linhas precificadas (não só
+COMPRA/REVISAR; linha NÃO aparece com `Flag = NÃO: <motivo>`), e a mensagem de
+0 linha separa "abaixo do corte" de "sem CT US$" (razão não calculável);
+`normalize_language()` + `LANGUAGE_ALIASES` (zh/cn/chinese → zh-CN — antes
+`--language zh` passava no servidor e filtrava TUDO no cliente, em silêncio) +
+aviso no log com os idiomas observados quando nenhuma oferta bate o idioma;
+**skip-list por idioma** (`skip_list_path`: run zh-CN grava
+`scanner_skip_list.zh-cn.json`, nunca envenena os runs ingleses);
+`Stats.language_filter` registrado no `__init__` (consta mesmo com todo set
+pulado); `Scanner.language` como atributo de classe (fim do `getattr` nos
+call-sites); razão calculada uma vez (`_ratio`); teste do 0-linha endurecido;
+exceção ao fallback near-miss documentada na regra de entrega do CLAUDE.md.
+Também corrigido log pré-existente "Scan completo — N oportunidades" que
+contava near-miss. Suíte: **353** (13 novos − 1 superado + 6 da revisão).
+
+**Rodada eBay (pedido do operador, 2026-10-03: "eBay deve ser a fonte principal"):**
+- `cardtrader_postprocess.py --ref-source ebay`: a razão passa a usar **Ref eBay
+  US$** = mediana das até 10 vendas eBay concluídas da carta INGLESA raw (365
+  dias, ≥3 vendas; títulos com outro idioma, nota de gradeadora ou lote fora),
+  lidas da tabela pública do PriceCharting (`pricecharting_ref.resolve_ebay_ref`,
+  mesma fonte do ebay-arbitrage-scanner; a Browse API oficial só tem anúncios
+  ativos). Coluna "Ref eBay US$" clicável + link `[eBay]`; TCG fica como coluna
+  secundária e **fallback rotulado** com o motivo (`eBay indisponível: <erro>` /
+  `sem página PriceCharting casada` / `<3 vendas eBay comparáveis`). Cache novo
+  por coleta (`outputs/ebay_ref_cache/<timestamp>`).
+- PriceCharting devolve **403** a cliente HTTP comum neste IP (2026-10-03, também
+  via curl). `--pc-firecrawl N` libera até N páginas via Firecrawl (pago, 1
+  crédito/página, 1 nova tentativa em falha); default 0 = nunca paga.
+- Busca do PC: regex aceita aspas simples e `&amp;`; guarda de set aceita o
+  prefixo de era "scarlet-&-violet-" (PC "Scarlet & Violet 151" × CT "151") sem
+  afrouxar idioma (console japonês/chinês segue reprovado).
+- **Bug de carta errada corrigido:** no CT `sv3/sv6/sv7/sv8/sv9/sv10` são sets
+  JAPONESES; o scanner os tratava como setcodes pokemontcg.io (sv8 → Surging
+  Sparks) e precificou Palossand ex JP 057 como Pikachu ex 057/191 (razão 3,6×
+  falsa entregue no 1º diagnóstico). `CT_JP_SETCODE_COLLISIONS` +
+  `ptcg_expected_sets` — sem identidade, sem referência.
+- Prova: 6 ofertas zh-CN do `mew` com ref eBay real (n=10 cada); maior razão
+  2,9× (Machamp 68); 0 ≥ 4×. Firecrawl: 12 créditos. Suíte: **373**.
+
+**Smoke real (2026-10-03, `mew --language zh-CN --provider tcgcsv`):** 4 ofertas
+zh-CN ≥ US$10 precificadas (Chansey/Dodrio/Beedrill/Pinsir, US$25–30 vs ref EN
+US$0,16–0,37 → razão 0,0×); `--min-ratio 4` devolveu a mensagem de 0 linha.
+Pipeline ponta a ponta provado.
+
 ## 2026-09-12 — v2.28: mapa explícito CT → groupId tcgcsv (fim dos sets "sem referência" no `--provider tcgcsv`)
 
 **Por quê:** scan G1+G4 de 2026-09-12 com a pokemontcg.io em 500/502 rodou com

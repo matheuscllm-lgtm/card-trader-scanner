@@ -56,6 +56,7 @@ from __future__ import annotations
 from chat_format import reference_price
 import argparse, os, re, sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
@@ -906,7 +907,7 @@ def _fmt_pct(v) -> str:
         return ""
 
 
-def _md_links_cell(link_ct, link_tcg, link_pc=None) -> str:
+def _md_links_cell(link_ct, link_tcg, link_pc=None, link_ebay=None) -> str:
     """'[oferta](url_ct) · [TCG](url_tcg)[ · [PC](url_pc)]' — só inclui o que existir.
 
     `link_pc` (opcional, metodologia 2026-08-28): link da página PriceCharting
@@ -929,6 +930,10 @@ def _md_links_cell(link_ct, link_tcg, link_pc=None) -> str:
     pc = "" if link_pc is None else str(link_pc).strip()
     if pc.startswith("http"):
         parts.append(f"[PC]({quote(pc, safe='%/?&=:+,*')})")
+    eb = "" if link_ebay is None or (isinstance(link_ebay, float) and pd.isna(link_ebay)) else str(link_ebay).strip()
+    if eb.startswith("http"):
+        # v2.29: página com as vendas eBay concluídas que sustentam a Ref eBay.
+        parts.append(f"[eBay]({quote(eb, safe='%/?&=:+,*')})")
     return " · ".join(parts)
 
 
@@ -1076,12 +1081,96 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
     return resolved, attempted
 
 
+def attach_ebay_refs(df: pd.DataFrame, resolver=None, cache_dir: str | None = None,
+                     return_errors: bool = False):
+    """v2.29: anexa `ebay_median_usd`/`ebay_n_sales`/`ebay_url`/`ebay_span` a
+    TODAS as linhas precificadas (o corte --min-ratio corre sobre todas).
+    Fonte: vendas concluídas eBay da carta INGLESA (pricecharting_ref.
+    resolve_ebay_ref). Cada linha = 2 requests HTTP (busca + página, cache do
+    dia). Sem venda comparável → NaN ("—" + fallback TCG rotulado na entrega).
+    Retorna (resolvidas, tentadas). `resolver` injetável p/ teste offline."""
+    if resolver is None:
+        import pricecharting_ref
+        resolver = pricecharting_ref.resolve_ebay_ref
+    df["ebay_median_usd"] = pd.NA
+    df["ebay_n_sales"] = pd.NA
+    df["ebay_url"] = None
+    df["ebay_span"] = None
+    df["ebay_error"] = None
+    df["ebay_miss"] = None
+    resolved = attempted = errors = 0
+    for idx, row in df.iterrows():
+        attempted += 1
+        try:
+            ref = resolver(row.get("card_name"), row.get("card_number"),
+                           row.get("set_code"), cache_dir=cache_dir,
+                           variant=row.get("variant"))
+        except Exception as e:  # noqa: BLE001 — falha da fonte, rotulada
+            ref = {"error": f"{type(e).__name__}: {e}"[:120]}
+        if ref and ref.get("error"):
+            df.at[idx, "ebay_error"] = str(ref["error"])
+            errors += 1
+            continue
+        if ref and ref.get("miss"):
+            df.at[idx, "ebay_miss"] = str(ref["miss"])
+            if ref.get("url"):
+                df.at[idx, "ebay_url"] = ref.get("url")   # página existe: link auditável
+            continue
+        if ref and ref.get("median") is not None and float(ref["median"]) > 0:
+            df.at[idx, "ebay_median_usd"] = float(ref["median"])
+            df.at[idx, "ebay_n_sales"] = ref.get("n_sales")
+            df.at[idx, "ebay_url"] = ref.get("url")
+            if ref.get("oldest") and ref.get("newest"):
+                df.at[idx, "ebay_span"] = f"{ref['oldest']}→{ref['newest']}"
+            resolved += 1
+    if return_errors:
+        return resolved, attempted, errors
+    return resolved, attempted
+
+
+def _ratio_header_label(deals: pd.DataFrame) -> str:
+    """Nome da coluna de razão: 'Razão EN/<IDIOMA>' quando TODAS as linhas são
+    de um único idioma ≠ EN (scan --language zh-CN → 'Razão EN/ZH-CN'); senão
+    o genérico 'Razão TCG/CT'. Nunca inventa idioma: sem coluna → genérico."""
+    if "language" in deals.columns:
+        langs = {str(v).strip().upper() for v in deals["language"].dropna()
+                 if str(v).strip() and str(v).strip().lower() != "nan"}
+        if len(langs) == 1:
+            (lang,) = tuple(langs)
+            if lang != "EN":
+                return f"Razão EN/{lang}"
+    return "Razão TCG/CT"
+
+
+def _price_ratio(tcg_usd, ct_usd):
+    """TCG US$ ÷ CT US$ (razão de PREÇO). None se faltar lado ou CT ≤ 0 —
+    nunca inventa."""
+    if tcg_usd is None or ct_usd is None:
+        return None
+    try:
+        ct = float(ct_usd)
+        tcg = float(tcg_usd)
+    except (TypeError, ValueError):
+        return None
+    if ct <= 0 or pd.isna(ct) or pd.isna(tcg):
+        return None
+    return tcg / ct
+
+
+def _fmt_ratio(v) -> str:
+    return "—" if v is None else f"{v:.1f}×"
+
+
 def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
     fx_usd_brl: float | None = None,
     top_n: int | None = None,
     show_dh: bool = False,
+    show_ratio: bool = False,
+    min_ratio: float | None = None,
+    ref_source: str = "tcg",
+    min_ref_usd: float | None = None,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
 
@@ -1099,6 +1188,7 @@ def build_delivery_markdown(
     work = df.copy()
     decisions = work.apply(lambda r: classify_decision(r, cfg), axis=1)
     work["decisao"] = [d[0] for d in decisions]
+    work["motivo"] = [d[1] for d in decisions]
     deals = work[work["decisao"].isin(["COMPRA", "REVISAR"])].copy()
     # Fallback near-miss: sem COMPRA/REVISAR, a entrega NÃO vira um beco
     # "nenhum deal" (que historicamente levava a montar tabela à mão, fora do
@@ -1110,6 +1200,82 @@ def build_delivery_markdown(
         deals = work.copy()
     if "net_margin" in deals.columns:
         deals = deals.sort_values("net_margin", ascending=False)
+
+    def _ct_usd(row):
+        # live_usd direto se o raw trouxer; senão converte BRL via FX.
+        for k in ("live_usd", "ct_price_usd"):
+            if k in row and pd.notna(row.get(k)):
+                return float(row[k])
+        live_brl = row.get("live_brl")
+        if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
+            return float(live_brl) / float(fx_usd_brl)
+        return None
+
+    def _tcg_usd(row):
+        v = row.get("reference_price_usd")
+        try:
+            return float(v) if pd.notna(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    use_ebay = (ref_source == "ebay")
+
+    def _ebay_usd(row):
+        v = row.get("ebay_median_usd")
+        try:
+            return float(v) if v is not None and pd.notna(v) and float(v) > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _ref_usd(row):
+        """Referência da RAZÃO: eBay (principal, --ref-source ebay) → TCG
+        (fallback rotulado na Flag). Default tcg = comportamento anterior."""
+        if use_ebay:
+            e = _ebay_usd(row)
+            if e is not None:
+                return e
+        return _tcg_usd(row)
+
+    # v2.29: razão de PREÇO TCG US$ ÷ CT US$ (--ratio-column / --min-ratio).
+    # É uma coluna/corte ADICIONAL: margem, classificação e buckets canônicos
+    # ficam intactos. Uso típico: scan `--language zh-CN` — a referência é a
+    # carta INGLESA, logo o número é "quantas vezes a oferta chinesa é mais
+    # barata que a inglesa", NÃO margem de revenda.
+    ratio_cut_applied = False
+    n_ratio_none = 0
+    n_ratio_below = 0
+    n_ref_below = 0
+    if min_ratio is not None:
+        # Revisão #71: o corte corre sobre TODAS as linhas precificadas — não só
+        # COMPRA/REVISAR. Pra um screen de RAZÃO, uma comum 6× mais barata (que a
+        # regra mecânica marcaria NÃO por ser BULK) é exatamente o que se pediu;
+        # a decisão aparece na coluna Flag, nunca esconde a linha.
+        deals = work.copy()
+        if "net_margin" in deals.columns:
+            deals = deals.sort_values("net_margin", ascending=False)
+        near_miss = False
+        # Piso na REFERÊNCIA (operador, 2026-10-03): a carta inglesa precisa
+        # valer ≥ min_ref_usd. O piso do scanner (--min-price-usd) é na oferta;
+        # num screen de razão ele esconderia chinesas baratas de cartas boas,
+        # por isso o run de idioma coleta com --min-price-usd 0 e o piso vive aqui.
+        if min_ref_usd is not None and len(deals):
+            refs = [_ref_usd(r) for _, r in deals.iterrows()]
+            # Sem referência ≠ abaixo do piso: passa e cai em n_ratio_none.
+            ok_ref = [v is None or v >= float(min_ref_usd) for v in refs]
+            n_ref_below = int(sum(1 for v in refs if v is not None and v < float(min_ref_usd)))
+            deals = deals[pd.Series(ok_ref, index=deals.index)]
+        deals["_ratio"] = [_price_ratio(_ref_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
+        n_ratio_none = int(sum(1 for v in deals["_ratio"] if v is None))
+        keep = [v is not None and v >= float(min_ratio) for v in deals["_ratio"]]
+        n_ratio_below = int(len(deals) - sum(keep) - n_ratio_none)
+        deals = deals[pd.Series(keep, index=deals.index)] if len(deals) else deals
+        ratio_cut_applied = True
+    elif show_ratio:
+        deals["_ratio"] = [_price_ratio(_ref_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
+    ratio_label = _ratio_header_label(deals) if show_ratio else None
+    if ratio_label and use_ebay:
+        ratio_label = ratio_label.replace("Razão EN/", "Razão eBay-EN/").replace(
+            "Razão TCG/CT", "Razão eBay/CT")
     deals = deals.head(top_n) if top_n else deals
     deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
 
@@ -1117,6 +1283,24 @@ def build_delivery_markdown(
         f"### CardTrader — entrega (top {len(deals)} por margem · "
         f"margem BRUTA, threshold {cfg.min_net_margin:.0%})"
     )
+    if ratio_cut_applied:
+        title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
+        if min_ref_usd is not None:
+            title += f" · piso ref ≥ US${float(min_ref_usd):g}"
+    if ratio_cut_applied and deals.empty:
+        # 'sem dado' ≠ 'abaixo do corte': dizer os dois números, nunca culpar a
+        # razão quando ela nem pôde ser calculada (sem câmbio/CT US$).
+        parts = [f"{n_ratio_below} abaixo do corte"] if (n_ratio_below or not n_ref_below) else []
+        if n_ref_below:
+            parts.append(f"{n_ref_below} abaixo do piso ref US${float(min_ref_usd):g}")
+        if n_ratio_none:
+            parts.append(f"{n_ratio_none} sem CT US$ (sem câmbio/preço — razão não calculável)")
+        msg = (f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× entre "
+               f"{n_ratio_below + n_ratio_none + n_ref_below} precificada(s): " + "; ".join(parts) + ". ")
+        if n_ratio_below and not n_ratio_none and not n_ref_below:
+            msg += "Nenhuma oferta precificada é tão mais barata que a referência inglesa. "
+        msg += "Linhas abaixo do corte NÃO são mostradas como resultado.)_"
+        return title + msg
     if deals.empty:
         # Sob o contrato de entrega v2.22, o scanner persiste TODO listing
         # precificado no XLSX (mesmo abaixo do threshold). Logo, df vazio aqui
@@ -1140,10 +1324,15 @@ def build_delivery_markdown(
     # índices), sem remover/reordenar as existentes — contrato intacto.
     show_pc = "pc_median_usd" in deals.columns
     headers = list(_DELIVERY_HEADERS)
+    show_ebay = use_ebay and "ebay_median_usd" in deals.columns
+    if show_ebay:
+        headers.insert(headers.index("TCG US$") + 1, "Ref eBay US$")
     if show_pc:
         pc_at = headers.index("TCG US$") + 1
         headers.insert(pc_at, "Margem PC %")
         headers.insert(pc_at, "Ref PC US$")
+    if show_ratio:
+        headers.insert(2, ratio_label)  # após "#" (0) e "Margem %" (1)
     if show_dh:
         headers.insert(2, "DH")  # após "#" (0) e "Margem %" (1)
     header = "| " + " | ".join(headers) + " |"
@@ -1156,29 +1345,20 @@ def build_delivery_markdown(
         )
     lines += ["", header, sep]
 
-    def _ct_usd(row):
-        # live_usd direto se o raw trouxer; senão converte BRL via FX.
-        for k in ("live_usd", "ct_price_usd"):
-            if k in row and pd.notna(row.get(k)):
-                return float(row[k])
-        live_brl = row.get("live_brl")
-        if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
-            return float(live_brl) / float(fx_usd_brl)
-        return None
-
     for rank, (_, row) in enumerate(deals.iterrows(), 1):
         ct_usd = _ct_usd(row)
-        tcg_usd = row.get("reference_price_usd")
-        try:
-            tcg_usd = float(tcg_usd) if pd.notna(tcg_usd) else None
-        except (TypeError, ValueError):
-            tcg_usd = None
-        dif = (tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
+        tcg_usd = _tcg_usd(row)
+        dif =(tcg_usd - ct_usd) if (ct_usd is not None and tcg_usd is not None) else None
         # Flag por linha: near-miss → "abaixo do limiar"; REVISAR (zona cinza /
         # suspeito de margem inflada) → "validar manual"; COMPRA → célula limpa.
         # Mesma classificação do XLSX.
         if near_miss:
             flag = "abaixo do limiar"
+        elif str(row.get("decisao")) == "NAO":
+            # Só alcançável com --min-ratio (corte sobre TODAS as precificadas):
+            # a linha passou na razão mas a regra mecânica a rejeitaria — dizer
+            # por quê, em vez de escondê-la.
+            flag = f"NÃO: {row.get('motivo') or 'rejeitada pela regra mecânica'}"
         else:
             flag = "validar manual" if str(row.get("decisao")) == "REVISAR" else ""
         # PC: mediana das vendas reais + margem sobre ela (mesma base revenda do
@@ -1194,6 +1374,21 @@ def build_delivery_markdown(
         if (show_pc and pc_med and tcg_usd is not None
                 and abs(tcg_usd - pc_med) / pc_med > PC_DIVERGENCE_RATIO):
             flag = (flag + " · PC diverge").strip(" ·")
+        ebay_med = _ebay_usd(row) if show_ebay else None
+        if show_ratio and use_ebay and ebay_med is None:
+            # Razão veio do TCG — rotular, nunca apresentar como se fosse eBay.
+            # Erro de FONTE ≠ "sem venda": dizer qual dos dois.
+            err = row.get("ebay_error")
+            if err is not None and not (isinstance(err, float) and pd.isna(err)) and str(err).strip():
+                why = f"eBay indisponível: {str(err)[:60]}"
+            else:
+                miss = row.get("ebay_miss")
+                why = (str(miss) if miss is not None and not (isinstance(miss, float) and pd.isna(miss))
+                       and str(miss).strip() else "sem venda eBay")
+            flag = (flag + f" · fallback TCG ({why})").strip(" ·")
+        elif show_ebay and ebay_med is not None and pd.notna(row.get("ebay_n_sales")):
+            flag = (flag + f" · eBay n={int(row.get('ebay_n_sales'))}"
+                    + (f" ({row.get('ebay_span')})" if row.get("ebay_span") else "")).strip(" ·")
         cells = [
             str(rank),
             _fmt_pct(row.get("net_margin")),
@@ -1207,8 +1402,14 @@ def build_delivery_markdown(
             _md_escape(row.get("quantity")),
             flag,
             _md_links_cell(row.get("link_ct"), row.get("link_tcg"),
-                           row.get("pc_url") if show_pc else None),
+                           row.get("pc_url") if show_pc else None,
+                           row.get("ebay_url") if show_ebay else None),
         ]
+        if show_ebay:
+            # Mesmo índice-fonte do header (inserido ANTES das colunas PC).
+            cells.insert(_DELIVERY_HEADERS.index("TCG US$") + 1,
+                         reference_price(_fmt_usd(ebay_med), row.get("ebay_url"))
+                         if ebay_med is not None else "—")
         if show_pc:
             # Mesmo índice-fonte do insert dos headers (índice em
             # _DELIVERY_HEADERS, ANTES do insert DH) — nunca hardcodar os dois
@@ -1217,9 +1418,29 @@ def build_delivery_markdown(
             pc_cell_at = _DELIVERY_HEADERS.index("TCG US$") + 1
             cells.insert(pc_cell_at, _fmt_pct(pc_margin) or "—")
             cells.insert(pc_cell_at, reference_price(_fmt_usd(pc_med) or "—", row.get("pc_url")))
+        if show_ratio:
+            # Razão calculada UMA vez (coluna `_ratio`) — mesmo número do corte.
+            cells.insert(2, _fmt_ratio(row.get("_ratio")))
         if show_dh:
             cells.insert(2, _fmt_dh(row.get("dh_score")))
         lines.append("| " + " | ".join(cells) + " |")
+    if show_ratio and use_ebay:
+        lines.append(
+            f"\n_{ratio_label} = Ref eBay US$ (mediana das até 10 vendas eBay "
+            "concluídas mais recentes da carta INGLESA raw, 365 dias, ≥3 vendas; "
+            "títulos em outro idioma, gradeados e lotes excluídos; fonte: tabela "
+            "pública do PriceCharting, link [eBay]) ÷ CT US$ (oferta no idioma "
+            "escaneado). Sem venda eBay comparável → razão via TCG US$, rotulada "
+            "'fallback TCG'. É razão de PREÇO entre dois mercados — não é margem "
+            "de revenda. '—' = sem um dos lados._"
+        )
+    elif show_ratio:
+        lines.append(
+            f"\n_{ratio_label} = TCG US$ (referência da carta INGLESA, NM) ÷ "
+            "CT US$ (oferta no idioma escaneado). É razão de PREÇO entre dois "
+            "mercados — não é margem de revenda: carta em outro idioma não vende "
+            "pelo preço TCGplayer da inglesa. '—' = sem um dos lados._"
+        )
     if show_dh:
         lines.append(
             "\n_DH = 2ª opinião Double Holo 0-100 (50=neutro), não entra na "
@@ -1257,11 +1478,26 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
 def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                  fx_usd_brl: float | None = None, top_md: int | None = None,
                  dh_signals: dict | None = None, pid_resolver=None,
-                 pc_refs: int = 0) -> str:
+                 pc_refs: int = 0, show_ratio: bool = False,
+                 min_ratio: float | None = None, ref_source: str = "tcg",
+                 pc_firecrawl: int = 0, min_ref_usd: float | None = None) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
     # Referência PriceCharting (--pc-refs N): anexa a mediana de vendas reais às
     # N linhas de maior margem da entrega. I/O de rede (2 requests/linha, com
     # cache 24h) — por isso opt-in e capado. 0 = desligado (saída idêntica).
+    if ref_source == "ebay":
+        # v2.29: eBay = referência PRINCIPAL da razão (vendas concluídas da
+        # carta inglesa). Rede: 2 req/linha, 2 s entre requests. Cache NOVO por
+        # coleta (DELIVERY_CHAT.md: nunca reaproveitar preço de outro run).
+        import pricecharting_ref
+        pricecharting_ref.set_firecrawl_budget(pc_firecrawl)
+        run_cache = os.path.join("outputs", "ebay_ref_cache",
+                                 datetime.now().strftime("%Y%m%d_%H%M%S"))
+        res, att, errs = attach_ebay_refs(df, cache_dir=run_cache, return_errors=True)
+        print(f"[ebay-ref] vendas eBay comparáveis: {res}/{att} linha(s) resolvidas; "
+              f"{errs} com ERRO de fonte (rotuladas 'eBay indisponível'); "
+              f"{att - res - errs} sem venda comparável. Firecrawl: "
+              f"{pricecharting_ref.firecrawl_used()} crédito(s) de {pc_firecrawl} liberados.")
     if pc_refs > 0:
         resolved, attempted = attach_pc_refs(df, cfg, top_md=top_md, limit=pc_refs)
         print(f"[PC] mediana PriceCharting resolvida em {resolved}/{attempted} "
@@ -1351,7 +1587,9 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     # Formato aprovado 2026-06-09. A entrega ao operador é a TABELA no chat;
     # o .md sidecar é só conveniência (mesmo conteúdo). XLSX segue cru/colunar.
     md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md,
-                                 show_dh=dh_signals is not None)
+                                 show_dh=dh_signals is not None,
+                                 show_ratio=show_ratio, min_ratio=min_ratio,
+                                 ref_source=ref_source, min_ref_usd=min_ref_usd)
     md_path = output_path.with_suffix(".md")
     try:
         md_path.write_text(md + "\n", encoding="utf-8")
@@ -1391,6 +1629,32 @@ def main():
                         "de maior margem da entrega + 'Margem PC %%' + link [PC]. "
                         "Sinal-only (margem/decisão canônicas intactas). Faz rede "
                         "(2 req/linha, cache 24h em outputs/pc_cache). 0 = off.")
+    p.add_argument("--ratio-column", action="store_true",
+                   help=("v2.29: adiciona a coluna 'Razão EN/<IDIOMA>' (TCG US$ ÷ "
+                         "CT US$) logo após 'Margem %%'. Para scans com "
+                         "`--language ≠ en`: a referência é a carta INGLESA, então "
+                         "o número é razão de PREÇO entre mercados, não margem de "
+                         "revenda. Margem/decisão/buckets canônicos intactos."))
+    p.add_argument("--min-ratio", type=float, default=None, metavar="X",
+                   help=("v2.29: só entrega linhas com razão TCG/CT ≥ X (ex.: 4 = "
+                         "oferta ≤ 25%% da referência). Corte explícito no título; "
+                         "0 linhas → mensagem honesta, nunca a tabela near-miss."))
+    p.add_argument("--min-ref-usd", type=float, default=10.0, metavar="USD",
+                   help=("v2.29: piso da REFERÊNCIA inglesa (eBay/TCG) no corte "
+                         "--min-ratio (default 10). Só vale com --min-ratio; colete "
+                         "o scan de idioma com --min-price-usd 0 para não aplicar o "
+                         "piso também à oferta. 0 = sem piso."))
+    p.add_argument("--ref-source", choices=["tcg", "ebay"], default="tcg",
+                   help=("v2.29: referência da coluna/corte de RAZÃO. 'ebay' = "
+                         "mediana das vendas eBay concluídas da carta INGLESA raw "
+                         "(PriceCharting público; ≥3 vendas/365d; sem outro idioma/"
+                         "gradeada/lote) como fonte PRINCIPAL, TCG como fallback "
+                         "rotulado. Liga a coluna de razão. Rede: 2 req/linha."))
+    p.add_argument("--pc-firecrawl", type=int, default=0, metavar="N",
+                   help=("v2.29: PriceCharting bloqueia (403) cliente HTTP comum em "
+                         "alguns IPs. Libera até N páginas via Firecrawl (PAGO, 1 "
+                         "crédito/página, FIRECRAWL_API_KEY) quando isso ocorrer. "
+                         "Default 0 = nunca paga; erro vira 'eBay indisponível'."))
     p.add_argument("--no-pid-resolve", action="store_true",
                    help=("Desliga a resolução OFFLINE de productId via tcgcsv "
                          "(Fix(2)) usada p/ casar DH nas linhas via pokemontcg.io. "
@@ -1444,7 +1708,12 @@ def main():
                       f"só linhas com link tcgplayer.com/product casam.")
     write_report(df, cfg, Path(args.output), fx_usd_brl=fx, top_md=args.top_md,
                  dh_signals=dh_signals, pid_resolver=pid_resolver,
-                 pc_refs=args.pc_refs)
+                 pc_refs=args.pc_refs,
+                 show_ratio=bool(args.ratio_column or args.min_ratio is not None
+                                 or args.ref_source == "ebay"),
+                 min_ratio=args.min_ratio, ref_source=args.ref_source,
+                 pc_firecrawl=args.pc_firecrawl,
+                 min_ref_usd=(args.min_ref_usd or None))
 
 if __name__ == "__main__":
     main()
