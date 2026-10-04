@@ -324,3 +324,29 @@ def test_postprocess_cli_has_ratio_flags():
     kwargs = wr.call_args.kwargs
     assert kwargs.get("show_ratio") is True
     assert kwargs.get("min_ratio") == 4.0
+
+
+# ── Piso US$10 na REFERÊNCIA (operador, 2026-10-03) ─────────────────────────
+def test_min_ref_usd_floor_applies_to_reference_not_offer():
+    """No screen de razão o piso vale para a carta INGLESA (referência), não
+    para a oferta chinesa: Pikachu ref US$12 sai com piso 20; Charizard ref 50 fica."""
+    df, cfg = _enriched()
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_ratio=True,
+                                    min_ratio=4.0, min_ref_usd=20.0)
+    assert "Charizard ex" in md
+    assert "Pikachu" not in md                      # 6× mas ref US$12 < US$20
+    assert "ref ≥ US$20" in md                      # título declara o piso
+
+
+def test_min_ref_usd_counts_floor_drops_in_zero_row_message():
+    df, cfg = _enriched()
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_ratio=True,
+                                    min_ratio=4.0, min_ref_usd=500.0)
+    assert "0 linha com razão" in md
+    assert "abaixo do piso" in md
+
+
+def test_min_ref_usd_default_is_ten_in_cli():
+    src = inspect.getsource(pp)
+    assert '"--min-ref-usd"' in src
+    assert "default=10.0" in src.split('"--min-ref-usd"')[1][:200]

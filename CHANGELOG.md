@@ -6,6 +6,8 @@ mantido como narrativa adicional além dos commits.
 
 ## 2026-10-03 — v2.29: `--language` no scanner + `--ratio-column`/`--min-ratio` no postprocess (scan de ofertas em chinês)
 
+- `cardtrader_postprocess.py --min-ref-usd` (default 10): no corte `--min-ratio`, o piso de US$10 vale para a **referência inglesa** (eBay/TCG), não para a oferta. O scan de idioma deve coletar com `--min-price-usd 0`.
+
 **Por quê:** pedido do operador (2026-10-02): listar cartas Pokémon RAW em
 **chinês** à venda no CardTrader que estejam **≥ 4× mais baratas** que a mesma
 carta inglesa no TCGplayer. O scanner só varria inglês — o idioma era a

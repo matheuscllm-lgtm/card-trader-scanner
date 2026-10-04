@@ -1170,6 +1170,7 @@ def build_delivery_markdown(
     show_ratio: bool = False,
     min_ratio: float | None = None,
     ref_source: str = "tcg",
+    min_ref_usd: float | None = None,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
 
@@ -1243,6 +1244,7 @@ def build_delivery_markdown(
     ratio_cut_applied = False
     n_ratio_none = 0
     n_ratio_below = 0
+    n_ref_below = 0
     if min_ratio is not None:
         # Revisão #71: o corte corre sobre TODAS as linhas precificadas — não só
         # COMPRA/REVISAR. Pra um screen de RAZÃO, uma comum 6× mais barata (que a
@@ -1252,6 +1254,15 @@ def build_delivery_markdown(
         if "net_margin" in deals.columns:
             deals = deals.sort_values("net_margin", ascending=False)
         near_miss = False
+        # Piso na REFERÊNCIA (operador, 2026-10-03): a carta inglesa precisa
+        # valer ≥ min_ref_usd. O piso do scanner (--min-price-usd) é na oferta;
+        # num screen de razão ele esconderia chinesas baratas de cartas boas,
+        # por isso o run de idioma coleta com --min-price-usd 0 e o piso vive aqui.
+        if min_ref_usd is not None and len(deals):
+            refs = [_ref_usd(r) for _, r in deals.iterrows()]
+            ok_ref = [v is not None and v >= float(min_ref_usd) for v in refs]
+            n_ref_below = int(sum(1 for v in refs if v is not None and v < float(min_ref_usd)))
+            deals = deals[pd.Series(ok_ref, index=deals.index)]
         deals["_ratio"] = [_price_ratio(_ref_usd(r), _ct_usd(r)) for _, r in deals.iterrows()]
         n_ratio_none = int(sum(1 for v in deals["_ratio"] if v is None))
         keep = [v is not None and v >= float(min_ratio) for v in deals["_ratio"]]
@@ -1273,14 +1284,18 @@ def build_delivery_markdown(
     )
     if ratio_cut_applied:
         title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
+        if min_ref_usd is not None:
+            title += f" · piso ref ≥ US${float(min_ref_usd):g}"
     if ratio_cut_applied and deals.empty:
         # 'sem dado' ≠ 'abaixo do corte': dizer os dois números, nunca culpar a
         # razão quando ela nem pôde ser calculada (sem câmbio/CT US$).
-        parts = [f"{n_ratio_below} abaixo do corte"]
+        parts = [f"{n_ratio_below} abaixo do corte"] if (n_ratio_below or not n_ref_below) else []
+        if n_ref_below:
+            parts.append(f"{n_ref_below} abaixo do piso ref US${float(min_ref_usd):g}")
         if n_ratio_none:
             parts.append(f"{n_ratio_none} sem CT US$ (sem câmbio/preço — razão não calculável)")
         msg = (f"\n\n_(0 linha com razão ≥ {float(min_ratio):.1f}× entre "
-               f"{n_ratio_below + n_ratio_none} precificada(s): " + "; ".join(parts) + ". ")
+               f"{n_ratio_below + n_ratio_none + n_ref_below} precificada(s): " + "; ".join(parts) + ". ")
         if n_ratio_below and not n_ratio_none:
             msg += "Nenhuma oferta precificada é tão mais barata que a referência inglesa. "
         msg += "Linhas abaixo do corte NÃO são mostradas como resultado.)_"
@@ -1464,7 +1479,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                  dh_signals: dict | None = None, pid_resolver=None,
                  pc_refs: int = 0, show_ratio: bool = False,
                  min_ratio: float | None = None, ref_source: str = "tcg",
-                 pc_firecrawl: int = 0) -> str:
+                 pc_firecrawl: int = 0, min_ref_usd: float | None = None) -> str:
     df = enrich_df(df, hub_fee_rate=cfg.hub_fee_rate)
     # Referência PriceCharting (--pc-refs N): anexa a mediana de vendas reais às
     # N linhas de maior margem da entrega. I/O de rede (2 requests/linha, com
@@ -1573,7 +1588,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     md = build_delivery_markdown(df, cfg, fx_usd_brl=fx_usd_brl, top_n=top_md,
                                  show_dh=dh_signals is not None,
                                  show_ratio=show_ratio, min_ratio=min_ratio,
-                                 ref_source=ref_source)
+                                 ref_source=ref_source, min_ref_usd=min_ref_usd)
     md_path = output_path.with_suffix(".md")
     try:
         md_path.write_text(md + "\n", encoding="utf-8")
@@ -1623,6 +1638,11 @@ def main():
                    help=("v2.29: só entrega linhas com razão TCG/CT ≥ X (ex.: 4 = "
                          "oferta ≤ 25%% da referência). Corte explícito no título; "
                          "0 linhas → mensagem honesta, nunca a tabela near-miss."))
+    p.add_argument("--min-ref-usd", type=float, default=10.0, metavar="USD",
+                   help=("v2.29: piso da REFERÊNCIA inglesa (eBay/TCG) no corte "
+                         "--min-ratio (default 10). Só vale com --min-ratio; colete "
+                         "o scan de idioma com --min-price-usd 0 para não aplicar o "
+                         "piso também à oferta. 0 = sem piso."))
     p.add_argument("--ref-source", choices=["tcg", "ebay"], default="tcg",
                    help=("v2.29: referência da coluna/corte de RAZÃO. 'ebay' = "
                          "mediana das vendas eBay concluídas da carta INGLESA raw "
@@ -1691,7 +1711,8 @@ def main():
                  show_ratio=bool(args.ratio_column or args.min_ratio is not None
                                  or args.ref_source == "ebay"),
                  min_ratio=args.min_ratio, ref_source=args.ref_source,
-                 pc_firecrawl=args.pc_firecrawl)
+                 pc_firecrawl=args.pc_firecrawl,
+                 min_ref_usd=(args.min_ref_usd or None))
 
 if __name__ == "__main__":
     main()

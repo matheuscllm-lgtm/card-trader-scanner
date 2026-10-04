@@ -240,7 +240,10 @@ Opções úteis:
   HTTP comum em alguns IPs — passe `--pc-firecrawl N` (pago, 1 crédito/página,
   ~2 páginas por linha) ou a coluna sai "eBay indisponível". Comando canônico:
   `cardtrader_postprocess.py -i <raw> -o <rel> --ref-source ebay --min-ratio 4
-  --pc-firecrawl <2×linhas>`. ⚠️ No CT, `sv3/sv6/sv7/sv8/sv9/sv10` são sets
+  --pc-firecrawl <2×linhas>`. **Piso US$10 fica na referência inglesa**
+  (`--min-ref-usd`, default 10, decisão do operador 2026-10-03): colete o scan
+  de idioma com `--min-price-usd 0`, senão o piso cai na oferta chinesa e
+  esconde as baratas. ⚠️ No CT, `sv3/sv6/sv7/sv8/sv9/sv10` são sets
   **japoneses** (não Obsidian Flames…Destined Rivals): ficam sem referência de
   propósito (`CT_JP_SETCODE_COLLISIONS`).
   Limite conhecido: o grosso do chinês no CT vive em expansões PRÓPRIAS
